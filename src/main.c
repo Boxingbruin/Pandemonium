@@ -1,0 +1,147 @@
+#include <libdragon.h>
+#include <rspq_profile.h>
+#include <t3d/t3d.h>
+#include <t3d/t3ddebug.h>
+
+#include "globals.h"
+#include "game_time.h"
+#include "joypad_utility.h"
+
+#include "camera_controller.h"
+#include "audio_controller.h"
+
+#include "display_utility.h"
+
+#include "scene.h"
+#include "dev.h"
+
+int main(void) 
+{
+    if(DEV_MODE)
+        dev_tools_init();
+
+    // INIT
+    asset_init_compression(2);
+    // read from cartridge space
+    dfs_init(DFS_DEFAULT_LOCATION);
+    display_close(); // Close the display to reset it
+
+    if(HARDWARE_MODE) // ONLY ENABLE THIS IF WE ARE EXPERIENCING BAD FRAMERATES ON HARDWARE
+    {
+       display_init(RESOLUTION_320x240, DEPTH_16_BPP, 3, GAMMA_NONE, FILTERS_RESAMPLE);
+    }
+    else
+    {
+        display_init(RESOLUTION_320x240, DEPTH_16_BPP, 3, GAMMA_NONE, FILTERS_RESAMPLE_ANTIALIAS);
+    }
+
+    rdpq_init();
+
+    if(DEV_MODE)
+        rspq_profile_start();
+    
+    audio_initialize();
+
+    rdpq_text_register_font(FONT_BUILTIN_DEBUG_MONO, rdpq_font_load_builtin(FONT_BUILTIN_DEBUG_MONO));
+
+    game_time_init();
+    joypad_utility_init();
+
+    t3d_init((T3DInitParams){});
+    T3DViewport viewport = t3d_viewport_create();
+
+    if(DEV_MODE)
+        t3d_debug_print_init();
+
+    scene_init();
+
+    rspq_syncpoint_t syncPoint = 0; // TODO: I have no idea what this does but it's needed for flipbook textures.
+
+    float deltaTimeAccumulator = 0.0f;
+
+    if(DEV_MODE)
+    {
+        offscreenBuffer = surface_alloc(FMT_RGBA16, SCREEN_WIDTH, SCREEN_HEIGHT);
+    }
+
+    for(uint64_t frame = 0;; ++frame)
+    {
+        // Update the time and calculate delta
+        game_time_update();
+
+        joypad_update();
+        if(debugDraw)
+        {
+            rdpq_attach(&offscreenBuffer, display_get_zbuf());
+            rdpq_set_mode_standard();
+        }
+        else
+        {
+            rdpq_attach(display_get(), display_get_zbuf());
+        }
+
+
+        if(syncPoint)rspq_syncpoint_wait(syncPoint); // wait for the RSP to process the previous frame
+        
+        // ===== UPDATE LOOP =====
+        mixer_try_play();
+        camera_update(&viewport);
+
+        scene_update();
+        scene_fixed_update();
+
+        // ===== DRAW LOOP =====
+        scene_draw(&viewport); // Draw scene
+
+        syncPoint = rspq_syncpoint_new();
+        
+        if(DEV_MODE)
+        {
+            // TODO: There is a reason the update comes after the draw but it shouldnt, this needs to be fixed and flipped.
+            dev_draw_update(&viewport); // Draw dev tools if in dev mode
+            dev_update();
+            dev_draw_debug_update(&viewport); // Draw debug lines on CPU
+        }
+        
+        // FPS for Dev
+        if(SHOW_FPS)
+        {
+            rdpq_sync_pipe();
+            rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 250, 225, " %.2f", display_get_fps());
+            //rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 50, 74, "ACC   : %.2f", deltaTimeAccumulator);
+        }
+
+        if(debugDraw)
+        {
+            rdpq_detach();
+            rdpq_attach(display_get(), display_get_zbuf());
+            rdpq_set_mode_standard();
+            rdpq_tex_blit(&offscreenBuffer, 0, 0, NULL);
+            rdpq_detach_show();
+        }
+        else
+        {
+            rdpq_detach_show();
+        }
+
+        // TODO: this dev area is messy.  Clean it up.
+        if(DEV_MODE)
+        {
+            dev_frame_update();
+            dev_controller_update();
+        }
+
+        if(frame >= 30)
+        {
+            if(DEV_MODE)
+                dev_frames_end_update();
+
+            frame = 0;
+        }
+
+    }
+
+    scene_cleanup();  // Call cleanup before exiting
+
+    return 0;
+}
