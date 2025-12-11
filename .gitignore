@@ -5,6 +5,7 @@
 *.d
 build/
 *.dfs
+filesystem/
 
 # Temporary files
 *.tmp
@@ -30,7 +31,7 @@ Thumbs.db
 # Logs
 *.log
 
-# Asset source files (keep converted assets in filesystem/)
+# Asset source files
 assets/**/*.blend
 assets/**/*.blend1
 assets/**/*.psd
