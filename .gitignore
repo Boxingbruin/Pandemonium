@@ -32,8 +32,9 @@ Thumbs.db
 *.log
 
 # Asset source files
-assets/**/*.blend
-assets/**/*.blend1
+# Showing blend files as they can be helpful
+# assets/**/*.blend
+# assets/**/*.blend1
 assets/**/*.psd
 assets/**/*.txt
 assets/**/*.log
