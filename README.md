@@ -4,7 +4,15 @@
 - Theme: Repair
 - We are going for a fully fleshed out boss battle. Similar to a dark souls or Majoras Mask battle. Weaving in the theme of repair into the boss. 
 
-
+## Jam Gam Requirements (simplified version)
+- 1 project submission only
+- Must work on PAL/NTSC system. Optoiinally tested on emulator
+- Max 5 members to a team
+- Any N64 SDK is allowed (libultra/librdragon/etc)
+- Game source must be open source in perpetuity
+- Game code msut mostly be from the team
+- Third party assets allowed but must provide credit
+- Must be playable, no visual or audio demos
 
 ## Licensing
 
