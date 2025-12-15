@@ -7,12 +7,17 @@
 #include <t3d/t3danim.h>
 
 #include "general_utility.h"
+#include "character.h" // For CapsuleCollider definition
 
-typedef struct {
-    T3DVec3 localCapA;
-    T3DVec3 localCapB;
-    float radius;
-} CapsuleCollider;
+// Animation states for boss behavior
+typedef enum {
+    BOSS_ANIM_IDLE = 0,
+    BOSS_ANIM_WALK = 1, 
+    BOSS_ANIM_RUN = 2,
+    BOSS_ANIM_ROLL = 3,
+    BOSS_ANIM_ATTACK = 4,
+    BOSS_ANIM_COUNT = 5
+} BossAnimState;
 
 // Structure for holding boss data
 typedef struct {
@@ -34,6 +39,30 @@ typedef struct {
     rspq_block_t *dpl;
 
     bool visible;
+
+    // Boss combat stats and AI state
+    const char *name;
+    float maxHealth;
+    float health;
+    int phaseIndex; // 1 or 2
+
+    // Movement and AI
+    float velX;
+    float velZ;
+    float currentSpeed;
+    float turnRate;      // radians per second
+    float orbitRadius;   // meters in world units
+
+    // Timers
+    float stateTimer;
+    float attackCooldown;
+
+    // Visual feedback
+    float damageFlashTimer;
+    
+    // Animation state tracking
+    bool isAttacking;
+    float attackAnimTimer;
 } Boss;
 
 extern Boss boss;
@@ -48,5 +77,10 @@ void boss_delete();
 
 void boss_free(void);
 
+// External API to apply damage to the boss
+void boss_apply_damage(float amount);
+
+// Animation control functions
+void boss_trigger_attack_animation(void);
 
 #endif

@@ -1,0 +1,52 @@
+# Build outputs
+*.z64
+*.elf
+*.o
+*.d
+build/
+*.dfs
+filesystem/
+
+# Temporary files
+*.tmp
+*.temp
+*~
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# IDE/Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Logs
+*.log
+
+# Asset source files
+# Showing blend files as they can be helpful
+# assets/**/*.blend
+# assets/**/*.blend1
+assets/**/*.psd
+assets/**/*.txt
+assets/**/*.log
+assets/**/*.zip
+
+# Backup files
+*.bak
+*.orig
+
+# Development tools
+.gdb_history
+
+# N64 specific
+*.sym
+*.map

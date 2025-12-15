@@ -5,12 +5,28 @@
 #include "camera_controller.h"
 #include "game_time.h"
 #include "joypad_utility.h"
+#include "character.h"
 
 CameraState cameraState = CAMERA_NONE;
 CameraState lastCameraState = CAMERA_NONE;
 
 T3DVec3 characterCamPos;
 T3DVec3 characterCamTarget;
+
+// Lock-on state and target point for character camera mode
+bool cameraLockOnActive = false;
+T3DVec3 cameraLockOnTarget = {{0.0f, 0.0f, 0.0f}};
+float cameraLockBlend = 0.0f; // 0: follow character, 1: lock onto target
+
+// Third-person camera variables
+float cameraDistance = 1200.0f;      // Distance behind character (zoomed back)
+float cameraHeight = 1200.0f;        // Height offset above character  
+float cameraAngleX = 0.0f;           // Horizontal rotation around character
+float cameraAngleY = -0.5f;          // Vertical rotation (pitch) - slightly downward
+float cameraMinY = -1.4f;            // Minimum pitch angle (about -80 degrees)
+float cameraMaxY = 1.0f;             // Maximum pitch angle (about 57 degrees)
+float cameraLerpSpeed = 8.0f;        // Camera smoothing speed
+float cameraSensitivity = 2.0f;      // Camera rotation sensitivity
 
 T3DVec3 customCamPos;
 T3DVec3 customCamTarget;
@@ -28,7 +44,7 @@ float camRotY = 0.0f;
 float camAngle = 0.0f;
 float camRoll = 0.0f;
 float FOV = 50.0f;
-float distanceInFrontOfCamera = 40.0f;
+float distanceInFrontOfCamera = 100.0f;
 
 void camera_initialize(T3DVec3 *pos, T3DVec3 *dir, float rotX, float rotY) 
 {
@@ -58,7 +74,57 @@ void camera_initialize(T3DVec3 *pos, T3DVec3 *dir, float rotX, float rotY)
 
 void camera_update(T3DViewport *viewport)
 {
-    if(cameraState == CAMERA_FREECAM)
+    if(cameraState == CAMERA_CHARACTER)
+    {
+        // Handle camera rotation input with C-buttons
+        float rotateX = 0.0f;
+        float rotateY = 0.0f;
+        
+        if(joypad.btn.c_left)
+        {
+            rotateX = -1.0f;
+        }
+        else if(joypad.btn.c_right)
+        {
+            rotateX = 1.0f;
+        }
+        
+        if(joypad.btn.c_down)
+        {
+            rotateY = 1.0f;
+        }
+        else if(joypad.btn.c_up)
+        {
+            rotateY = -1.0f;
+        }
+        
+        // Apply rotation with sensitivity and delta time
+        cameraAngleX += rotateX * cameraSensitivity * deltaTime;
+        cameraAngleY += rotateY * cameraSensitivity * deltaTime;
+        
+        // Clamp vertical rotation
+        if(cameraAngleY < cameraMinY) cameraAngleY = cameraMinY;
+        if(cameraAngleY > cameraMaxY) cameraAngleY = cameraMaxY;
+        
+        // Camera reset with L button
+        if(joypad.btn.l)
+        {
+            camera_reset_third_person();
+        }
+        
+        // Set up camera viewport
+        camPos = characterCamPos;
+        camTarget = characterCamTarget;
+
+        camDir.v[0] = camTarget.v[0] - camPos.v[0];  // X component
+        camDir.v[1] = camTarget.v[1] - camPos.v[1];  // Y component
+        camDir.v[2] = camTarget.v[2] - camPos.v[2];  // Z component
+        t3d_vec3_norm(&camDir);
+
+        t3d_viewport_set_projection(viewport, T3D_DEG_TO_RAD(60), 4.0f, 500.0f);
+        t3d_viewport_look_at(viewport, &camPos, &camTarget, &up);
+    }
+    else if(cameraState == CAMERA_FREECAM)
     {
         float camSpeed = deltaTime;
         float camRotSpeed = deltaTime;
@@ -180,21 +246,6 @@ void camera_update(T3DViewport *viewport)
         t3d_viewport_set_projection(viewport, T3D_DEG_TO_RAD(FOV), 4.0f, 400.0f);
         t3d_viewport_look_at(viewport, &camPos, &camTarget, &rolledUp);
     }
-    else if(cameraState == CAMERA_CHARACTER)
-    {
-        
-        camPos = characterCamPos;
-        camTarget = characterCamTarget;
-
-        camDir.v[0] = camTarget.v[0] - camPos.v[0];  // X component
-        camDir.v[1] = camTarget.v[1] - camPos.v[1];  // Y component
-        camDir.v[2] = camTarget.v[2] - camPos.v[2];  // Z component
-        t3d_vec3_norm(&camDir);
-
-        t3d_viewport_set_projection(viewport, T3D_DEG_TO_RAD(60), 4.0f, 500.0f);
-        t3d_viewport_look_at(viewport, &camPos, &camTarget, &up);
-
-    }
 }
 
 void camera_mode(CameraState state)
@@ -227,4 +278,14 @@ void camera_reset(void)
 
     characterCamPos = camPos;
     characterCamTarget = camTarget;
+
+    cameraLockOnActive = false;
+    cameraLockOnTarget = (T3DVec3){{0.0f, 0.0f, 0.0f}};
+    cameraLockBlend = 0.0f;
+}
+
+void camera_reset_third_person(void)
+{
+    cameraAngleX = 0.0f;
+    cameraAngleY = -0.5f;
 }
