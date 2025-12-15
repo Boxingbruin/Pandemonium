@@ -172,6 +172,12 @@ void debug_draw_cross(T3DViewport *vp, const T3DVec3 *center, float half_length,
     debug_draw_line_vec3(&sp0, &sp1, color);
 }
 
+void debug_draw_dot(T3DViewport *vp, const T3DVec3 *center, float radius, uint16_t color)
+{
+    // Small sphere as a dot
+    debug_draw_sphere(vp, center, radius, color);
+}
+
 void debug_draw_capsule_from_fixed(T3DViewport *vp, const FixedVec3 *a, const FixedVec3 *b, int32_t radius_fixed, uint16_t color)
 {
     T3DVec3 aworld = {{

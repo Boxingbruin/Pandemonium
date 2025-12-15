@@ -6,4 +6,11 @@
 
 extern surface_t offscreenBuffer;
 
+// Display utility initialization and cleanup
+void display_utility_init(void);
+void display_utility_cleanup(void);
+
+// Simple boss health bar API
+void draw_boss_health_bar(const char *name, float ratio, float flash);
+
 #endif

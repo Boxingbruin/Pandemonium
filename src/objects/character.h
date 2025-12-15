@@ -22,8 +22,9 @@ typedef struct {
 
     ScrollParams *scrollParams;
     T3DSkeleton *skeleton;
-    //T3DSkeleton *skeletonBlend;
+    T3DSkeleton *skeletonBlend;
     T3DAnim **animations;
+    T3DAnim **animationsBlend;
     int currentAnimation;
     int animationCount;
 
@@ -41,6 +42,7 @@ extern Character character;
 void character_init(void);
 
 void character_update_position(void);
+void character_update_camera(void);
 
 void character_draw();
 void character_update();
