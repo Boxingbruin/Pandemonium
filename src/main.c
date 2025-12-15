@@ -43,6 +43,10 @@ int main(void)
     audio_initialize();
 
     rdpq_text_register_font(FONT_BUILTIN_DEBUG_MONO, rdpq_font_load_builtin(FONT_BUILTIN_DEBUG_MONO));
+    
+    // Load custom unbalanced font
+    rdpq_font_t *font1 = rdpq_font_load("rom:/fonts/unbalanced.font64");
+    rdpq_text_register_font(FONT_UNBALANCED, font1);
 
     game_time_init();
     joypad_utility_init();
@@ -51,7 +55,10 @@ int main(void)
     T3DViewport viewport = t3d_viewport_create();
 
     if(DEV_MODE)
+    {
         t3d_debug_print_init();
+        dev_models_init();
+    }
 
     scene_init();
 

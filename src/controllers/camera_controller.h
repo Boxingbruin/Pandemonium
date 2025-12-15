@@ -36,6 +36,22 @@ extern T3DVec3 customCamDir;
 extern T3DVec3 characterCamPos;
 extern T3DVec3 characterCamTarget;
 
+// Simple lock-on targeting support
+#include <stdbool.h>
+extern bool cameraLockOnActive;
+extern T3DVec3 cameraLockOnTarget;
+extern float cameraLockBlend;    // 0: follow, 1: lock-on
+
+// Third-person camera variables
+extern float cameraDistance;      // Distance behind character
+extern float cameraHeight;        // Height offset above character  
+extern float cameraAngleX;        // Horizontal rotation around character
+extern float cameraAngleY;        // Vertical rotation (pitch)
+extern float cameraMinY;          // Minimum pitch angle
+extern float cameraMaxY;          // Maximum pitch angle
+extern float cameraLerpSpeed;     // Camera smoothing speed
+extern float cameraSensitivity;   // Camera rotation sensitivity
+
 extern float customCamRoll;
 
 void camera_initialize(T3DVec3 *pos, T3DVec3 *dir, float rotX, float rotY);
@@ -43,6 +59,7 @@ void camera_update(T3DViewport *viewport);
 void camera_switch_state(CameraState state);
 T3DVec3* camera_get_camera_pos(void);
 void camera_reset(void);
+void camera_reset_third_person(void);
 void camera_roll_camera(void);
 void camera_mode(CameraState state);
 #endif

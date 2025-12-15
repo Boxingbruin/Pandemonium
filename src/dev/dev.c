@@ -113,11 +113,12 @@ void dev_handle_camera_state()
 
 void dev_controller_update()
 {
-    if(btn.z)
-    {
-        toggleDevMenu = !toggleDevMenu;
-        inCategoryScreen = false; // Always return to main menu when toggling
-    }
+    // if(btn.z)
+    // {
+    //     toggleDevMenu = !toggleDevMenu;
+    //     inCategoryScreen = false; // Always return to main menu when toggling
+    // }
+    return; // Disabled for now
 
     if(!toggleDevMenu)
     {
@@ -462,7 +463,7 @@ void dev_update()
 
 void dev_draw_update(T3DViewport *viewport)
 {
-    if(controlling != 0)
+    if(controlling != 0 && dplDevArrow != NULL)
     {
 
         t3d_matrix_push_pos(1);
