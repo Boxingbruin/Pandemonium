@@ -675,8 +675,32 @@ void character_update_position(void)
 /* Third-person camera follow with smoothing. Distances scaled to character size. */
 void character_update_camera(void)
 {
+    static bool lastLockOnActive = false;
+
     float scaledDistance = cameraDistance * 0.1f;
     float scaledHeight = cameraHeight * 0.1f;
+
+    // When exiting Z-targeting, adopt the current camera offset as the new manual angle
+    bool unlockingFromLockOn = lastLockOnActive && !cameraLockOnActive && cameraLockBlend > 0.001f;
+    if (unlockingFromLockOn && scaledDistance > 0.0f) {
+        T3DVec3 offsetFromCharacter = {{
+            characterCamPos.v[0] - character.pos[0],
+            characterCamPos.v[1] - character.pos[1],
+            characterCamPos.v[2] - character.pos[2]
+        }};
+
+        float sinY = (offsetFromCharacter.v[1] - scaledHeight) / scaledDistance;
+        if (sinY < -1.0f) sinY = -1.0f;
+        if (sinY > 1.0f) sinY = 1.0f;
+        cameraAngleY = asinf(sinY);
+
+        float cosY = fm_cosf(cameraAngleY);
+        if (cosY < 0.0001f) cosY = 0.0001f; // avoid division by zero
+        cameraAngleX = atan2f(offsetFromCharacter.v[0] / cosY, offsetFromCharacter.v[2] / cosY);
+
+        if (cameraAngleY < cameraMinY) cameraAngleY = cameraMinY;
+        if (cameraAngleY > cameraMaxY) cameraAngleY = cameraMaxY;
+    }
     
     float cosX = fm_cosf(cameraAngleX);
     float sinX = fm_sinf(cameraAngleX);
@@ -764,6 +788,8 @@ void character_update_camera(void)
     } else {
         characterCamTarget = desiredTarget;
     }
+
+    lastLockOnActive = cameraLockOnActive;
 }
 
 // ==== Drawing Functions ====
