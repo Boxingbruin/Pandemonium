@@ -6,6 +6,7 @@
 
 // Dialog controller initialization and cleanup
 void dialog_controller_init(void);
+void dialog_controller_reset(void);
 void dialog_controller_free(void);
 
 // Dialog management

@@ -32,6 +32,24 @@ static const char *dialogText = "meep.";
 static bool showDialog = false;
 static bool endDialog = true;
 
+void dialog_controller_reset(void)
+{
+    maxCharacters = 0;
+    currentWordIndex = 0;
+    currentSpeed = 0.08f;
+    checkedCharacters = 0;
+    visibleCharacters = 0;
+    dialogTimer = 0.0f;
+    dialogActiveTimer = 0.0f;
+    dialogActiveTime = 5.0f;
+    dialogText = "meep.";
+    showDialog = false;
+    endDialog = true;
+    
+    // Clear the visible text buffer
+    visibleText[0] = '\0';
+}
+
 // TODO: TEMP
 sprite_t *dialog4Text;
 surface_t dialog4TextSurf;

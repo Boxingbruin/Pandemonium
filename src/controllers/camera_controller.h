@@ -62,4 +62,5 @@ void camera_reset(void);
 void camera_reset_third_person(void);
 void camera_roll_camera(void);
 void camera_mode(CameraState state);
+void camera_mode_smooth(CameraState state, float duration);
 #endif

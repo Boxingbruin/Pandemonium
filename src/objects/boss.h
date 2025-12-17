@@ -63,15 +63,54 @@ typedef struct {
     // Animation state tracking
     bool isAttacking;
     float attackAnimTimer;
+    
+    // Attack name display
+    float attackNameDisplayTimer;
+    const char* currentAttackName;
+    float hitMessageTimer;       // Debug: show when player hits boss
+    
+    // Attack-specific cooldowns
+    float powerJumpCooldown;
+    float comboCooldown;
+    float chainSwordCooldown;
+    float roarStompCooldown;
+    float trackingSlamCooldown;
+    
+    // Combo state tracking
+    int comboStep;  // 0, 1, 2 (which attack in combo)
+    bool comboInterrupted;
+    float comboVulnerableTimer;
+    
+    // Chain sword state
+    float swordProjectilePos[3];
+    bool swordThrown;
+    bool chainSwordSlamHasHit;
+    float chainSwordTargetPos[3];  // Where sword will land
+    
+    // Tracking slam state
+    float trackingSlamHoldTime;  // Variable hold duration (randomized)
+    float trackingSlamTargetAngle;
+    float trackingSlamStartTime;
+    
+    // Power jump state
+    float powerJumpStartPos[3];
+    float powerJumpTargetPos[3];
+    float powerJumpHeight;
+    bool powerJumpDoSecondSlam;  // Whether to chain second slam
+    
+    // Hit tracking to prevent multiple damage applications per attack
+    bool currentAttackHasHit;    // Track if current attack has already hit
 } Boss;
 
 extern Boss boss;
 
 void boss_init(void);
+void boss_reset(void);
 
 void boss_update_position(void);
 
 void boss_draw();
+void boss_draw_ui();
 void boss_update();
 void boss_delete();
 

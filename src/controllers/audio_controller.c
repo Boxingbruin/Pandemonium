@@ -1,15 +1,45 @@
 #include <libdragon.h>
+#include <string.h>
 
 #include "audio_controller.h"
+#include "save_controller.h"
 #include "globals.h"
 
 static wav64_t currentMusic;
 //static xm64player_t currentMusic;
 static bool musicPlaying = false;
+static char currentMusicPath[256] = "";
+static bool currentMusicLoop = false;
 
 static bool sfx1Playing = false;
 
 static bool player1Playing = false;
+
+// Volume control (0-10 scale)
+static int masterVolume = 8;
+static int musicVolume = 8;
+static int sfxVolume = 8;
+static bool globalMute = false;
+static bool isLoadingSettings = false;
+static bool pauseMuted = false;  // Track if we muted for pause
+
+// Convert 0-10 scale to 0.0-1.0 float
+static float volume_to_float(int volume) {
+    if (volume < 0) volume = 0;
+    if (volume > 10) volume = 10;
+    return (float)volume / 10.0f;
+}
+
+// Apply master volume and mute to a specific volume
+static float apply_volume_settings(int specificVolume) {
+    if (globalMute) return 0.0f;
+    return volume_to_float(masterVolume) * volume_to_float(specificVolume);
+}
+
+// Control auto-saving during settings load
+void audio_set_loading_mode(bool loading) {
+    isLoadingSettings = loading;
+}
 
 void audio_initialize(void) 
 {
@@ -31,9 +61,18 @@ void audio_play_music(const char *path, bool loop)
     if (musicPlaying)
         audio_stop_music();
 
+    // Store current music info for resume functionality
+    strncpy(currentMusicPath, path, sizeof(currentMusicPath) - 1);
+    currentMusicPath[sizeof(currentMusicPath) - 1] = '\0';
+    currentMusicLoop = loop;
+
     // Load the new music file
     wav64_open(&currentMusic, path);
     wav64_set_loop(&currentMusic, loop);
+
+    // Apply volume settings
+    float volume = apply_volume_settings(musicVolume);
+    mixer_ch_set_vol(CHANNEL_MUSIC, volume, volume);
 
     // Play the music on the music channel
     wav64_play(&currentMusic, CHANNEL_MUSIC);
@@ -60,7 +99,9 @@ void audio_play_sfx(wav64_t* sfx, int sfxLayer, float volume)
                 audio_stop_sfx(CHANNEL_SFX1);
             }
 
-            mixer_ch_set_vol(CHANNEL_SFX1, volume, volume);
+            // Apply volume settings (use provided volume as additional multiplier)
+            float finalVolume = apply_volume_settings(sfxVolume) * volume;
+            mixer_ch_set_vol(CHANNEL_SFX1, finalVolume, finalVolume);
             wav64_play(sfx, CHANNEL_SFX1);
             sfx1Playing = true;
             break;
@@ -126,4 +167,130 @@ void audio_controller_free(void)
     audio_stop_music();
     audio_stop_sfx(0);
     audio_stop_player(0);
+}
+
+// Volume control functions
+void audio_set_master_volume(int volume) {
+    if (volume < 0) volume = 0;
+    if (volume > 10) volume = 10;
+    masterVolume = volume;
+    
+    // Update currently playing audio
+    if (musicPlaying) {
+        float musicVol = apply_volume_settings(musicVolume);
+        mixer_ch_set_vol(CHANNEL_MUSIC, musicVol, musicVol);
+    }
+    
+    // Auto-save settings only if not loading
+    if (!isLoadingSettings) {
+        save_controller_save_settings();
+    }
+}
+
+void audio_set_music_volume(int volume) {
+    if (volume < 0) volume = 0;
+    if (volume > 10) volume = 10;
+    musicVolume = volume;
+    
+    // Update currently playing music
+    if (musicPlaying) {
+        float musicVol = apply_volume_settings(musicVolume);
+        mixer_ch_set_vol(CHANNEL_MUSIC, musicVol, musicVol);
+    }
+    
+    // Auto-save settings only if not loading
+    if (!isLoadingSettings) {
+        save_controller_save_settings();
+    }
+}
+
+void audio_set_sfx_volume(int volume) {
+    if (volume < 0) volume = 0;
+    if (volume > 10) volume = 10;
+    sfxVolume = volume;
+    
+    // Auto-save settings only if not loading
+    if (!isLoadingSettings) {
+        save_controller_save_settings();
+    }
+}
+
+int audio_get_master_volume(void) {
+    return masterVolume;
+}
+
+int audio_get_music_volume(void) {
+    return musicVolume;
+}
+
+int audio_get_sfx_volume(void) {
+    return sfxVolume;
+}
+
+void audio_adjust_master_volume(int direction) {
+    audio_set_master_volume(masterVolume + direction);
+}
+
+void audio_adjust_music_volume(int direction) {
+    audio_set_music_volume(musicVolume + direction);
+}
+
+void audio_adjust_sfx_volume(int direction) {
+    audio_set_sfx_volume(sfxVolume + direction);
+}
+
+// Mute functionality
+void audio_set_mute(bool muted) {
+    globalMute = muted;
+    
+    // Update currently playing audio only if not pause-muted
+    if (!pauseMuted) {
+        if (musicPlaying) {
+            float musicVol = apply_volume_settings(musicVolume);
+            mixer_ch_set_vol(CHANNEL_MUSIC, musicVol, musicVol);
+        }
+    }
+    
+    // Auto-save settings only if not loading
+    if (!isLoadingSettings) {
+        save_controller_save_settings();
+    }
+}
+
+void audio_toggle_mute(void) {
+    audio_set_mute(!globalMute);
+}
+
+bool audio_is_muted(void) {
+    return globalMute;
+}
+
+// Music pause/resume functionality using mute
+void audio_pause_music(void) {
+    if (musicPlaying && !pauseMuted) {
+        // Mute all audio channels
+        mixer_ch_set_vol(CHANNEL_MUSIC, 0.0f, 0.0f);
+        mixer_ch_set_vol(CHANNEL_SFX1, 0.0f, 0.0f);
+        mixer_ch_set_vol(CHANNEL_PLAYER1, 0.0f, 0.0f);
+        pauseMuted = true;
+    }
+}
+
+void audio_resume_music(void) {
+    if (pauseMuted) {
+        // Restore audio channel volumes
+        if (musicPlaying) {
+            float musicVol = apply_volume_settings(musicVolume);
+            mixer_ch_set_vol(CHANNEL_MUSIC, musicVol, musicVol);
+        }
+        
+        // Note: SFX volumes will be restored when new sounds play
+        // as they apply volume settings on each play call
+        
+        pauseMuted = false;
+    }
+}
+
+bool audio_is_music_playing(void) {
+    return musicPlaying && !pauseMuted;
 }
