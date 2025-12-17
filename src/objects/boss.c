@@ -30,6 +30,7 @@ static bool bossLowHealthSoundPlayed = false;
 static bool bossPowerJumpImpactPlayed = false;
 static bool bossSecondSlamImpactPlayed = false;
 static bool bossRoarImpactSoundPlayed = false;
+static bool bossWasActive = false; // tracks rising edge of activation across restarts
 
 static void boss_debug_sound(const char* soundName) {
 	if (!soundName) return;
@@ -170,6 +171,7 @@ void boss_init(void)
 	// Initialize the newly allocated matrix before assigning to global
 	t3d_mat4fp_identity(newBoss.modelMat);
 	boss = newBoss;
+	bossWasActive = false;
 }
 
 // ==== Update Functions ====
@@ -890,6 +892,8 @@ void boss_update(void)
 {
 	// Don't update boss AI during cutscenes, reset state for fresh start
 	if (!scene_is_boss_active()) {
+		// Ensure activation edge resets when boss is inactive (e.g. during cutscenes/restart)
+		bossWasActive = false;
 		bossState = ST_IDLE;
 		bossPrevState = ST_IDLE;
 		bossTelegraphTimer = 0.0f;
@@ -913,9 +917,8 @@ void boss_update(void)
 	int stateBefore = bossState;
 
 	// If boss was just activated (scene_is_boss_active became true), start chasing immediately
-	static bool wasActive = false;
-	bool justActivated = scene_is_boss_active() && !wasActive;
-	wasActive = scene_is_boss_active();
+	bool justActivated = scene_is_boss_active() && !bossWasActive;
+	bossWasActive = scene_is_boss_active();
 	
 	if (justActivated && bossState == ST_IDLE) {
 		bossState = ST_CHASE;
@@ -1177,6 +1180,7 @@ void boss_reset(void)
 	// Reset boss to initial state for scene restart
 	bossState = ST_IDLE;
 	bossPrevState = ST_IDLE;
+	bossWasActive = false;
 	bossTelegraphTimer = 0.0f;
 	bossTelegraphName = NULL;
 	bossDebugSoundName = NULL;
