@@ -1123,6 +1123,13 @@ void boss_update_position(void)
 	);
 }
 
+void boss_update_cutscene(void)
+{
+	// Keep idle animation/skeleton updated during cutscenes so the boss renders
+	boss_update_animation_system(deltaTime);
+	boss_update_position();
+}
+
 // ==== Drawing Functions ====
 
 void boss_draw(void) 

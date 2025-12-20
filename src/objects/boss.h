@@ -108,6 +108,7 @@ void boss_init(void);
 void boss_reset(void);
 
 void boss_update_position(void);
+void boss_update_cutscene(void);
 
 void boss_draw();
 void boss_draw_ui();
