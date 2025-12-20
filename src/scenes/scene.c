@@ -46,6 +46,78 @@ static bool lastMenuActive = false;
 static bool lastAPressed = false;
 static bool lastZPressed = false;
 
+// Returns a consistent point around the boss' midsection for lock-on targeting.
+// Prefers the midpoint of the boss capsule if it is configured; otherwise falls
+// back to an estimate derived from the boss' orbit radius.
+static T3DVec3 get_boss_lock_focus_point(void)
+{
+    // Default to a mid-body estimate even if the capsule data is uninitialized.
+    float focusOffset = boss.orbitRadius * 0.6f; // roughly chest height for current tuning
+
+    float capA = boss.capsuleCollider.localCapA.v[1];
+    float capB = boss.capsuleCollider.localCapB.v[1];
+
+    // If a capsule is defined, use its midpoint (scaled to world space).
+    if (boss.scale[1] > 0.0f && (capA != 0.0f || capB != 0.0f)) {
+        focusOffset = (capA + capB) * 0.5f * boss.scale[1];
+    }
+
+    return (T3DVec3){{
+        boss.pos[0],
+        boss.pos[1] + focusOffset,
+        boss.pos[2]
+    }};
+}
+
+// Draw simple letterbox bars for cinematic moments.
+static void draw_cinematic_letterbox(void) {
+    const int barHeight = SCREEN_HEIGHT / 12; // ~20px on 240p
+    rdpq_sync_pipe();
+    rdpq_set_mode_standard();
+    rdpq_mode_combiner(RDPQ_COMBINER_FLAT);
+    rdpq_mode_blender(RDPQ_BLENDER_MULTIPLY);
+    rdpq_set_prim_color(RGBA32(0, 0, 0, 255));
+    rdpq_fill_rectangle(0, 0, SCREEN_WIDTH, barHeight);
+    rdpq_fill_rectangle(0, SCREEN_HEIGHT - barHeight, SCREEN_WIDTH, SCREEN_HEIGHT);
+}
+
+// Draws a small lock-on marker over the boss when Z-targeting is active.
+static void draw_lockon_indicator(T3DViewport *viewport)
+{
+    // Only show during gameplay when the boss is alive and actually targeted
+    if (!cameraLockOnActive || scene_is_cutscene_active() || !scene_is_boss_active() || boss.health <= 0.0f) {
+        return;
+    }
+
+    // Anchor the marker to the boss' mid-body point so it aligns with lock-on aim.
+    T3DVec3 worldPos = get_boss_lock_focus_point();
+
+    // Project to screen space
+    T3DVec3 screenPos;
+    t3d_viewport_calc_viewspace_pos(viewport, &screenPos, &worldPos);
+
+    // Skip if behind the camera or outside a small margin
+    if (screenPos.v[2] >= 1.0f) {
+        return;
+    }
+    const int margin = 8;
+    int px = (int)screenPos.v[0];
+    int py = (int)screenPos.v[1];
+    if (px < -margin || px > SCREEN_WIDTH + margin || py < -margin || py > SCREEN_HEIGHT + margin) {
+        return;
+    }
+
+    // Simple white dot
+    rdpq_sync_pipe();
+    rdpq_set_mode_standard();
+    rdpq_mode_combiner(RDPQ_COMBINER_FLAT);
+    rdpq_mode_blender(RDPQ_BLENDER_MULTIPLY);
+    rdpq_set_prim_color(RGBA32(255, 255, 255, 255));
+
+    const int halfSize = 3;
+    rdpq_fill_rectangle(px - halfSize, py - halfSize, px + halfSize + 1, py + halfSize + 1);
+}
+
 void scene_reset(void)
 {
     cutsceneState = CUTSCENE_BOSS_INTRO;
@@ -216,7 +288,7 @@ void scene_update(void)
         case CUTSCENE_BOSS_INTRO:
             // During intro cutscene, update character and boss for rendering but disable AI
             character_update();
-            boss_update_position();  // Keep boss position updated but no AI
+            boss_update_cutscene();  // Keep boss animated/visible without enabling AI
             dialog_controller_update();
             
             // Only print occasionally to avoid spam
@@ -245,6 +317,7 @@ void scene_update(void)
             break;
             
         case CUTSCENE_BOSS_INTRO_WAIT:
+            boss_update_cutscene();  // Ensure boss stays rendered during the wait
             debugf("CUTSCENE_BOSS_INTRO_WAIT: cutsceneTimer = %.2f\n", cutsceneTimer);
             // Allow skipping wait period with A button
             if (aJustPressed || cutsceneTimer >= 1.0f) {
@@ -285,7 +358,7 @@ void scene_update(void)
     // Update target position when lock-on is active
     if (cameraLockOnActive)
     {
-        cameraLockOnTarget = (T3DVec3){{ boss.pos[0], boss.pos[1] + 1.5f, boss.pos[2] }};
+        cameraLockOnTarget = get_boss_lock_focus_point();
     }
 }
 
@@ -300,12 +373,10 @@ void scene_draw(T3DViewport *viewport)
     t3d_frame_start();
     t3d_viewport_attach(viewport);
 
-    // Fog
-    color_t fogColor = (color_t){242, 218, 166, 0xFF};
+    // Fog (disabled for now; re-enable if UI handling is updated)
     rdpq_set_prim_color((color_t){0xFF, 0xFF, 0xFF, 0xFF});
-    // TODO: Its messing with the boss health bar
     // rdpq_mode_fog(RDPQ_FOG_STANDARD);
-    // rdpq_set_fog_color(fogColor);
+    // rdpq_set_fog_color((color_t){242, 218, 166, 0xFF});
 
     t3d_screen_clear_color(RGBA32(0, 0, 0, 0xFF));
     t3d_screen_clear_depth();
@@ -327,14 +398,23 @@ void scene_draw(T3DViewport *viewport)
         character_draw();
         boss_draw();
     t3d_matrix_pop(1);
+
+    // Overlay lock-on marker above the boss
+    draw_lockon_indicator(viewport);
     
+    bool cutsceneActive = scene_is_cutscene_active();
     GameState state = scene_get_game_state();
     bool isDead = state == GAME_STATE_DEAD;
     bool isVictory = state == GAME_STATE_VICTORY;
     bool isEndScreen = isDead || isVictory;
 
+    // Add letterbox bars during intro cinematic.
+    if (cutsceneActive) {
+        draw_cinematic_letterbox();
+    }
+
     // Draw UI elements after 3D rendering is complete (hide during cutscenes or death)
-    if (!scene_is_cutscene_active() && !isEndScreen) {
+    if (!cutsceneActive && !isEndScreen) {
         if (scene_is_boss_active()) {
             boss_draw_ui();
         }
