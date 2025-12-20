@@ -2,8 +2,10 @@
 #include <t3d/t3d.h>
 #include <t3d/t3ddebug.h>
 #include <string.h>
+#include <math.h>
 
 #include "globals.h"
+#include "game_time.h"
 
 surface_t offscreenBuffer;
 
@@ -63,6 +65,16 @@ void draw_player_health_bar(const char *name, float ratio, float flash)
 	if (flash < 0.0f) flash = 0.0f;
 	if (flash > 1.0f) flash = 1.0f;
 
+	// Add a built-in low-health flash so the bar pulses when critical
+	const float LOW_HEALTH_THRESHOLD = 0.25f;
+	float warningFlash = 0.0f;
+	if (ratio <= LOW_HEALTH_THRESHOLD) {
+		// 4 Hz sine pulse; normalize to 0..1
+		float pulse = sinf(gameTime * 8.0f);
+		warningFlash = 0.5f * (pulse + 1.0f);
+	}
+	float combinedFlash = fmaxf(flash, warningFlash);
+
 	// Set up UI rendering mode (no fog manipulation needed)
 	rdpq_mode_combiner(RDPQ_COMBINER_FLAT);
 	rdpq_mode_blender(RDPQ_BLENDER_MULTIPLY);
@@ -84,20 +96,20 @@ void draw_player_health_bar(const char *name, float ratio, float flash)
 	if (ratio > 0.6f) {
 		// Green to yellow
 		float t = (ratio - 0.6f) / 0.4f;
-		red = 200 - (int)(100.0f * t) + (int)(55.0f * flash);
-		green = 200 + (int)(20.0f * flash);
-		blue = 40 + (int)(20.0f * flash);
+		red = 200 - (int)(100.0f * t) + (int)(55.0f * combinedFlash);
+		green = 200 + (int)(20.0f * combinedFlash);
+		blue = 40 + (int)(20.0f * combinedFlash);
 	} else if (ratio > 0.3f) {
 		// Yellow to orange
 		float t = (ratio - 0.3f) / 0.3f;
-		red = 200 + (int)(30.0f * (1.0f - t)) + (int)(55.0f * flash);
-		green = 200 - (int)(50.0f * (1.0f - t)) + (int)(20.0f * flash);
-		blue = 40 + (int)(20.0f * flash);
+		red = 200 + (int)(30.0f * (1.0f - t)) + (int)(55.0f * combinedFlash);
+		green = 200 - (int)(50.0f * (1.0f - t)) + (int)(20.0f * combinedFlash);
+		blue = 40 + (int)(20.0f * combinedFlash);
 	} else {
 		// Red
-		red = 200 + (int)(55.0f * flash);
-		green = 40 + (int)(20.0f * flash);
-		blue = 40 + (int)(20.0f * flash);
+		red = 200 + (int)(55.0f * combinedFlash);
+		green = 40 + (int)(20.0f * combinedFlash);
+		blue = 40 + (int)(20.0f * combinedFlash);
 	}
 	
 	rdpq_set_prim_color(RGBA32(red, green, blue, 255));
