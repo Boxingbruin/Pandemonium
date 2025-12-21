@@ -12,11 +12,13 @@
 // Animation states for boss behavior
 typedef enum {
     BOSS_ANIM_IDLE = 0,
-    BOSS_ANIM_WALK = 1, 
-    BOSS_ANIM_RUN = 2,
-    BOSS_ANIM_ROLL = 3,
-    BOSS_ANIM_ATTACK = 4,
-    BOSS_ANIM_COUNT = 5
+    BOSS_ANIM_WALK = 1,
+    BOSS_ANIM_ATTACK = 2,
+    BOSS_ANIM_STRAFE_LEFT = 3,
+    BOSS_ANIM_STRAFE_RIGHT = 4,
+    BOSS_ANIM_COMBO_ATTACK = 5,
+    BOSS_ANIM_JUMP_FORWARD = 6,
+    BOSS_ANIM_COUNT = 7
 } BossAnimState;
 
 // Structure for holding boss data

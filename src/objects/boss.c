@@ -18,6 +18,7 @@
 #include "simple_collision_utility.h"
 #include "game_math.h"
 #include "scene.h"
+#include "collision_mesh.h"
 
 T3DModel* bossModel;
 
@@ -31,6 +32,7 @@ static bool bossPowerJumpImpactPlayed = false;
 static bool bossSecondSlamImpactPlayed = false;
 static bool bossRoarImpactSoundPlayed = false;
 static bool bossWasActive = false; // tracks rising edge of activation across restarts
+static float bossStrafeDirection = 1.0f; // 1.0 = right, -1.0 = left (for animation selection)
 
 static void boss_debug_sound(const char* soundName) {
 	if (!soundName) return;
@@ -98,23 +100,31 @@ void boss_apply_damage(float amount)
 
 void boss_init(void) 
 {
-	bossModel = t3d_model_load("rom:/catherine.t3dm");
+	bossModel = t3d_model_load("rom:/boss.t3dm");
 
 	T3DSkeleton* skeleton = malloc(sizeof(T3DSkeleton));
 	*skeleton = t3d_skeleton_create(bossModel);
 
 	T3DAnim** animations = NULL;
 
-	const int animationCount = 5;
+	const int animationCount = 7;
 	const char* animationNames[] = {
-		"Idle",
-		"Walk",
-		"Run",
-		"Roll",
-		"Attack1"
+		"Idle1",
+		"Walk1",
+		"SlowAttack1",
+		"StrafeLeft1",
+		"StrafeRight1",
+		"ComboAttack1",
+		"JumpForwardAttack1"
 	};
 	const bool animationsLooping[] = {
-		true, true, true, false, false
+		true,  // Idle - loop
+		true,  // Walk - loop
+		false, // SlowAttack - one-shot
+		true,  // StrafeLeft - loop
+		true,  // StrafeRight - loop
+		false, // ComboAttack - one-shot
+		false  // JumpForward - one-shot
 	};
 
 	animations = malloc(animationCount * sizeof(T3DAnim*));
@@ -136,19 +146,24 @@ void boss_init(void)
 	t3d_model_draw_skinned(bossModel, skeleton);
 	rspq_block_t* dpl = rspq_block_end();
 
-	CapsuleCollider emptyCollider = {0};  // All fields zeroed
+    // Capsule collider for boss-vs-room collision (approx; rotation ignored)
+    CapsuleCollider bossCollider = {
+        .localCapA = {{0.0f, 0.0f, 0.0f}},
+        .localCapB = {{0.0f, 550.0f, 0.0f}},  // Increased height
+        .radius = 360.0f                       // Increased radius
+    };
 
 	Boss newBoss = {
 		.pos = {0.0f, 0.0f, 0.0f},
 		.rot = {0.0f, 0.0f, 0.0f},
-		// Start with a scale appropriate for Catherine model; scene may override after init
-		.scale = {0.005f, 0.005f, 0.005f},
+		// Scale increased to better match scene scale (map is 0.1, character is 0.004)
+		.scale = {0.2f, 0.2f, 0.2f},
 		.scrollParams = NULL,
 		.skeleton = skeleton,
 		.animations = animations,
 		.currentAnimation = 0,
 		.animationCount = animationCount,
-		.capsuleCollider = emptyCollider,
+		.capsuleCollider = bossCollider,
 		.modelMat = malloc_uncached(sizeof(T3DMat4FP)),
 		.dpl = dpl,
 		.visible = true,
@@ -178,7 +193,7 @@ void boss_init(void)
 
 // Boss state machine
 enum { 
-	ST_IDLE, ST_CHASE, ST_ORBIT, ST_CHARGE, ST_ATTACK, ST_RECOVER,
+	ST_IDLE, ST_CHASE, ST_STRAFE, ST_ORBIT, ST_CHARGE, ST_ATTACK, ST_RECOVER,
 	ST_POWER_JUMP, ST_COMBO_ATTACK, ST_CHAIN_SWORD, ST_ROAR_STOMP, ST_TRACKING_SLAM
 };
 static int bossState = ST_IDLE;
@@ -187,20 +202,25 @@ static int bossPrevState = ST_IDLE;
 static const char* bossTelegraphName = NULL;
 static float bossTelegraphTimer = 0.0f;
 static const float BOSS_TELEGRAPH_DURATION = 1.5f;
+
+// Charge attack tracking
+static float chargeStartDistance = 0.0f;
+static bool chargeHasPassedPlayer = false;
 static const char* boss_get_state_name(void) {
 	switch (bossState) {
 		case ST_IDLE:          return "Idle";
 		case ST_CHASE:         return "Chase";
-		case ST_ORBIT:         return "Orbit";
-		case ST_CHARGE:        return "Charge";
-		case ST_ATTACK:        return "Attack";
-		case ST_RECOVER:       return "Recover";
-		case ST_POWER_JUMP:    return "Power Jump";
-		case ST_COMBO_ATTACK:  return "Combo Attack";
-		case ST_CHAIN_SWORD:   return "Chain Sword";
-		case ST_ROAR_STOMP:    return "Roar Stomp";
+		case ST_STRAFE:       return "Strafe";
+		case ST_ORBIT:        return "Orbit";
+		case ST_CHARGE:       return "Charge";
+		case ST_ATTACK:       return "Attack";
+		case ST_RECOVER:      return "Recover";
+		case ST_POWER_JUMP:   return "Power Jump";
+		case ST_COMBO_ATTACK: return "Combo Attack";
+		case ST_CHAIN_SWORD:  return "Chain Sword";
+		case ST_ROAR_STOMP:   return "Roar Stomp";
 		case ST_TRACKING_SLAM: return "Tracking Slam";
-		default:               return "Unknown";
+		default:              return "Unknown";
 	}
 }
 
@@ -290,7 +310,7 @@ static void boss_select_attack(void) {
         boss.trackingSlamStartTime = boss.stateTimer;
         
         // Calculate target angle to player
-        float angle = atan2f(dx, dz);
+        float angle = atan2f(-dx, dz);
         boss.trackingSlamTargetAngle = angle;
         
         boss.currentAttackName = "Tracking Slam";
@@ -336,8 +356,8 @@ static void boss_select_attack(void) {
         boss.attackNameDisplayTimer = 2.0f;
     }
     else {
-        // All attacks on cooldown, return to orbit
-        bossState = ST_ORBIT;
+        // All attacks on cooldown, return to strafe
+        bossState = ST_STRAFE;
         boss.stateTimer = 0.0f;
     }
 }
@@ -348,7 +368,7 @@ static void boss_handle_tracking_slam_attack(float dt) {
         // Slowly track the player during buildup
         float dx = character.pos[0] - boss.pos[0];
         float dz = character.pos[2] - boss.pos[2];
-        float targetAngle = atan2f(dx, dz);
+        float targetAngle = atan2f(-dx, dz);
         
         // Smooth angle interpolation
         float angleDiff = targetAngle - boss.rot[1];
@@ -386,7 +406,7 @@ static void boss_handle_tracking_slam_attack(float dt) {
         boss.velZ *= 0.9f;
         
         if (boss.stateTimer > boss.trackingSlamHoldTime + 1.5f) {
-            bossState = ST_ORBIT;
+            bossState = ST_STRAFE;
             boss.stateTimer = 0.0f;
         }
     }
@@ -398,7 +418,7 @@ static void boss_handle_chain_sword_attack(float dt) {
         // Aim at predicted position
         float dx = boss.chainSwordTargetPos[0] - boss.pos[0];
         float dz = boss.chainSwordTargetPos[2] - boss.pos[2];
-        float targetAngle = atan2f(dx, dz);
+        float targetAngle = atan2f(-dx, dz);
         boss.rot[1] = targetAngle;
         
         boss_trigger_attack_animation();
@@ -477,7 +497,7 @@ static void boss_handle_chain_sword_attack(float dt) {
     
     // End attack
     if (boss.stateTimer > 3.5f) {
-        bossState = ST_ORBIT;
+        bossState = ST_STRAFE;
         boss.stateTimer = 0.0f;
     }
 }
@@ -488,7 +508,7 @@ static void boss_handle_roar_stomp_attack(float dt) {
         // Face player
         float dx = character.pos[0] - boss.pos[0];
         float dz = character.pos[2] - boss.pos[2];
-        boss.rot[1] = atan2f(dx, dz);
+        boss.rot[1] = atan2f(-dx, dz);
         
         if (boss.stateTimer > 0.8f && boss.stateTimer < 0.9f) {
             boss_trigger_attack_animation();
@@ -520,7 +540,7 @@ static void boss_handle_roar_stomp_attack(float dt) {
     // Phase 3: Recovery (1.1s+)
     else {
         if (boss.stateTimer > 2.0f) {
-            bossState = ST_ORBIT;
+            bossState = ST_STRAFE;
             boss.stateTimer = 0.0f;
         }
     }
@@ -546,7 +566,7 @@ static void boss_handle_power_jump_attack(float dt) {
         float dx = boss.powerJumpTargetPos[0] - boss.powerJumpStartPos[0];
         float dz = boss.powerJumpTargetPos[2] - boss.powerJumpStartPos[2];
         if (dx != 0.0f || dz != 0.0f) {
-            boss.rot[1] = atan2f(dx, dz);
+            boss.rot[1] = atan2f(-dx, dz);
         }
     }
     // Phase 2: Landing impact (1.2 - 1.5s)
@@ -606,7 +626,7 @@ static void boss_handle_power_jump_attack(float dt) {
     // End attack
     else {
         boss.powerJumpDoSecondSlam = false;
-        bossState = ST_ORBIT;
+        bossState = ST_STRAFE;
         boss.stateTimer = 0.0f;
     }
 }
@@ -656,7 +676,7 @@ static void boss_handle_combo_attack(float dt) {
         // Step 1: Sweep attack
         float dx = character.pos[0] - boss.pos[0];
         float dz = character.pos[2] - boss.pos[2];
-        boss.rot[1] = atan2f(dx, dz);
+        boss.rot[1] = atan2f(-dx, dz);
         
         if (boss.stateTimer > 0.5f && boss.stateTimer < 0.7f && !boss.currentAttackHasHit) {
             float dist = sqrtf(dx*dx + dz*dz);
@@ -708,7 +728,7 @@ static void boss_handle_combo_attack(float dt) {
     if (boss.stateTimer > stepDuration * 3 + 0.5f) {
         boss.comboStep = 0;
         boss.comboInterrupted = false;
-        bossState = ST_ORBIT;
+        bossState = ST_STRAFE;
         boss.stateTimer = 0.0f;
     }
 }
@@ -725,6 +745,8 @@ static void boss_update_movement_and_physics(float dt) {
     const float SPEED_CHASE = boss.phaseIndex == 1 ? 200.0f : 220.0f;
     const float SPEED_ORBIT = boss.phaseIndex == 1 ? 90.0f : 120.0f;
     const float SPEED_CHARGE = boss.phaseIndex == 1 ? 220.0f : 280.0f;
+    // Slow strafe speed for Dark Souls-style behavior
+    const float SPEED_STRAFE = boss.phaseIndex == 1 ? 60.0f : 80.0f;
     
     float desiredX = 0.0f, desiredZ = 0.0f;
     float maxSpeed = 0.0f;
@@ -736,7 +758,7 @@ static void boss_update_movement_and_physics(float dt) {
             break;
             
         case ST_CHASE:
-            // Move toward player
+            // Move toward player (for when far away)
             if (dist > 0.0f) {
                 desiredX = dx / dist;
                 desiredZ = dz / dist;
@@ -744,15 +766,92 @@ static void boss_update_movement_and_physics(float dt) {
             maxSpeed = SPEED_CHASE;
             break;
             
-        case ST_ORBIT:
-            // Circle around player
+        case ST_STRAFE:
+            // Strafing behavior: move perpendicular to direction to character
+            // Match character's lateral movement
             if (dist > 0.0f) {
-                float orbitAngle = atan2f(-dx, dz) + T3D_PI * 0.5f; // 90 degrees offset
-                desiredX = cosf(orbitAngle);
-                desiredZ = sinf(orbitAngle);
+                // Normalize direction to character
+                float toCharX = dx / dist;
+                float toCharZ = dz / dist;
+                
+                // Get character's velocity to determine strafe direction
+                float charVelX, charVelZ;
+                character_get_velocity(&charVelX, &charVelZ);
+                
+                // Calculate perpendicular directions (left and right relative to boss->character)
+                // Left perpendicular: (-toCharZ, toCharX)
+                // Right perpendicular: (toCharZ, -toCharX)
+                float leftX = -toCharZ;
+                float leftZ = toCharX;
+                float rightX = toCharZ;
+                float rightZ = -toCharX;
+                
+                // Determine which direction the character is moving laterally
+                // Project character velocity onto left/right perpendicular vectors
+                float leftDot = charVelX * leftX + charVelZ * leftZ;
+                float rightDot = charVelX * rightX + charVelZ * rightZ;
+                
+                // Choose strafe direction - stick to a direction more strongly
+                // Use hysteresis: require strong opposite movement to change direction
+                static float lastStrafeDir = 1.0f; // 1.0 = right, -1.0 = left
+                static float strafeDirTimer = 0.0f; // Timer to prevent rapid direction changes
+                const float STRONG_MOVEMENT_THRESHOLD = 80.0f; // Very high threshold to change direction
+                const float MIN_DIRECTION_TIME = 3.0f; // Must strafe in one direction for at least 3 seconds
+                const float OPPOSITE_DIRECTION_MULTIPLIER = 2.0f; // Require 2x movement in opposite direction
+                
+                strafeDirTimer += dt;
+                
+                // Only consider changing direction if enough time has passed
+                float lateralMovement = fabsf(leftDot) > fabsf(rightDot) ? fabsf(leftDot) : fabsf(rightDot);
+                
+                if (strafeDirTimer >= MIN_DIRECTION_TIME) {
+                    // Determine desired direction based on character movement
+                    float desiredDir = 0.0f;
+                    if (fabsf(leftDot) > fabsf(rightDot)) {
+                        desiredDir = (leftDot > 0.0f) ? -1.0f : 1.0f;
+                    } else {
+                        desiredDir = (rightDot > 0.0f) ? 1.0f : -1.0f;
+                    }
+                    
+                    // Only change if character is moving strongly in OPPOSITE direction to current strafe
+                    if (desiredDir * lastStrafeDir < 0.0f) {
+                        // Character moving opposite to current strafe - require very strong movement
+                        if (lateralMovement > STRONG_MOVEMENT_THRESHOLD * OPPOSITE_DIRECTION_MULTIPLIER) {
+                            lastStrafeDir = desiredDir;
+                            strafeDirTimer = 0.0f; // Reset timer after direction change
+                        }
+                    }
+                    // If character moving same direction as strafe, or not moving much, keep current direction
+                }
+                // Otherwise, maintain lastStrafeDir (stick to current direction until timer expires)
+                
+                // Apply strafe direction
+                if (lastStrafeDir > 0.0f) {
+                    desiredX = rightX;
+                    desiredZ = rightZ;
+                    bossStrafeDirection = 1.0f; // Right
+                } else {
+                    desiredX = leftX;
+                    desiredZ = leftZ;
+                    bossStrafeDirection = -1.0f; // Left
+                }
+                
+                // Blend in some forward movement if character is far away
+                if (dist > boss.orbitRadius + 5.0f) {
+                    float forwardBlend = fminf(1.0f, (dist - boss.orbitRadius) / 20.0f);
+                    desiredX = desiredX * (1.0f - forwardBlend * 0.3f) + toCharX * forwardBlend * 0.3f;
+                    desiredZ = desiredZ * (1.0f - forwardBlend * 0.3f) + toCharZ * forwardBlend * 0.3f;
+                    // Normalize
+                    float len = sqrtf(desiredX * desiredX + desiredZ * desiredZ);
+                    if (len > 0.0f) {
+                        desiredX /= len;
+                        desiredZ /= len;
+                    }
+                }
             }
-            maxSpeed = SPEED_ORBIT;
+            maxSpeed = SPEED_STRAFE;
             break;
+            
             
         case ST_CHARGE:
             // Charge toward player
@@ -791,18 +890,52 @@ static void boss_update_movement_and_physics(float dt) {
     boss.velX *= expf(-k * dt);
     boss.velZ *= expf(-k * dt);
     
-    // Update position
-    boss.pos[0] += boss.velX * dt;
-    boss.pos[2] += boss.velZ * dt;
+    // Update position with room-bounds collision (slide by axis)
+    float nextX = boss.pos[0] + boss.velX * dt;
+    float nextZ = boss.pos[2] + boss.velZ * dt;
+
+    float sx = boss.scale[0];
+    // X axis
+    if (!collision_mesh_check_bounds_capsule(
+            nextX, boss.pos[1], boss.pos[2],
+            boss.capsuleCollider.localCapA.v[0], boss.capsuleCollider.localCapA.v[1], boss.capsuleCollider.localCapA.v[2],
+            boss.capsuleCollider.localCapB.v[0], boss.capsuleCollider.localCapB.v[1], boss.capsuleCollider.localCapB.v[2],
+            boss.capsuleCollider.radius, sx
+        )) {
+        boss.pos[0] = nextX;
+    } else {
+        boss.velX = 0.0f;
+    }
+
+    // Z axis
+    if (!collision_mesh_check_bounds_capsule(
+            boss.pos[0], boss.pos[1], nextZ,
+            boss.capsuleCollider.localCapA.v[0], boss.capsuleCollider.localCapA.v[1], boss.capsuleCollider.localCapA.v[2],
+            boss.capsuleCollider.localCapB.v[0], boss.capsuleCollider.localCapB.v[1], boss.capsuleCollider.localCapB.v[2],
+            boss.capsuleCollider.radius, sx
+        )) {
+        boss.pos[2] = nextZ;
+    } else {
+        boss.velZ = 0.0f;
+    }
     
     // Update facing direction
     float targetAngle;
-    if (bossState == ST_ORBIT) {
-        targetAngle = atan2f(-dx, dz); // Face player while orbiting
+    if (bossState == ST_CHASE) {
+        // During chase, always face the character (not movement direction)
+        float faceDx = character.pos[0] - boss.pos[0];
+        float faceDz = character.pos[2] - boss.pos[2];
+        targetAngle = atan2f(-faceDx, faceDz);
+    } else if (bossState == ST_STRAFE) {
+        // During strafe, always face the character (not movement direction)
+        float faceDx = character.pos[0] - boss.pos[0];
+        float faceDz = character.pos[2] - boss.pos[2];
+        targetAngle = atan2f(-faceDx, faceDz);
     } else if (bossState >= ST_POWER_JUMP) {
         // Attack states handle their own rotation
         return;
     } else {
+        // Default: face movement direction (for other states)
         targetAngle = atan2f(-boss.velX, boss.velZ); // Face movement direction
     }
     
@@ -812,6 +945,7 @@ static void boss_update_movement_and_physics(float dt) {
     while (angleDelta > T3D_PI) angleDelta -= 2.0f * T3D_PI;
     while (angleDelta < -T3D_PI) angleDelta += 2.0f * T3D_PI;
     
+    // Use clamped turn rate for all states
     float maxTurn = boss.turnRate * dt;
     if (angleDelta > maxTurn) angleDelta = maxTurn;
     else if (angleDelta < -maxTurn) angleDelta = -maxTurn;
@@ -835,19 +969,27 @@ static void boss_update_animation_system(float dt) {
     // Choose animation based on state and movement
     BossAnimState targetAnim = BOSS_ANIM_IDLE;
     
-    if (boss.isAttacking) {
+    // Attack-specific animations
+    if (bossState == ST_COMBO_ATTACK) {
+        targetAnim = BOSS_ANIM_COMBO_ATTACK;
+    } else if (bossState == ST_POWER_JUMP) {
+        targetAnim = BOSS_ANIM_JUMP_FORWARD;
+    } else if (boss.isAttacking || bossState == ST_CHARGE || bossState == ST_ATTACK || 
+               bossState == ST_TRACKING_SLAM || bossState == ST_ROAR_STOMP || bossState == ST_CHAIN_SWORD) {
         targetAnim = BOSS_ANIM_ATTACK;
+    } else if (bossState == ST_STRAFE) {
+        // Use left or right strafe animation based on direction
+        targetAnim = (bossStrafeDirection > 0.0f) ? BOSS_ANIM_STRAFE_RIGHT : BOSS_ANIM_STRAFE_LEFT;
     } else if (bossState == ST_CHASE) {
-        // Always run while chasing the player
-        targetAnim = BOSS_ANIM_RUN;
+        // Use walk animation while chasing (no run animation available)
+        targetAnim = BOSS_ANIM_WALK;
     } else {
         float speed = sqrtf(boss.velX * boss.velX + boss.velZ * boss.velZ);
         
-        if (speed > 150.0f) {
-            targetAnim = BOSS_ANIM_RUN;
-        } else if (speed > 30.0f) {
+        if (speed > 30.0f) {
             targetAnim = BOSS_ANIM_WALK;
         }
+        // Otherwise stays as BOSS_ANIM_IDLE
     }
     
     // Switch animations if needed
@@ -888,8 +1030,7 @@ static void boss_update_cooldowns(float dt) {
     if (boss.hitMessageTimer > 0.0f) boss.hitMessageTimer -= dt;
 }
 
-void boss_update(void) 
-{
+void boss_update(void) {
 	// Don't update boss AI during cutscenes, reset state for fresh start
 	if (!scene_is_boss_active()) {
 		// Ensure activation edge resets when boss is inactive (e.g. during cutscenes/restart)
@@ -965,22 +1106,35 @@ void boss_update(void)
 				boss_begin_power_jump();
 				break;
 			}
-			// Transition to orbit when close enough
-			if (dist <= COMBAT_RADIUS + 2.0f) {
-				bossState = ST_ORBIT;
+			// Transition to strafe when close enough (use a more generous threshold)
+			if (dist <= COMBAT_RADIUS + 350.0f) {
+				bossState = ST_STRAFE;
 				boss.stateTimer = 0.0f;
 			}
 			break;
 			
-		case ST_ORBIT:
-			// Try to attack when cooldown is ready
-			if (boss.attackCooldown <= 0.0f) {
+		case ST_STRAFE:
+			// If player moves too far away, chase them (use higher threshold to prevent rapid switching)
+			if (dist > COMBAT_RADIUS + 350.0f) {
+				bossState = ST_CHASE;
+				boss.stateTimer = 0.0f;
+				break;
+			}
+			// Minimum strafe duration for the "slow dance" - boss must strafe for at least this long
+			const float MIN_STRAFE_DURATION = 3.0f; // 3 seconds of strafing before considering attack
+			const float MAX_ATTACK_DISTANCE = 100.0f; // Only attack when within this distance
+			
+			// Select attack when cooldown is ready AND minimum strafe time has passed AND close enough
+			if (boss.attackCooldown <= 0.0f && boss.stateTimer >= MIN_STRAFE_DURATION && dist <= MAX_ATTACK_DISTANCE) {
 				// Random chance to either charge or use special attack
 				float r = (float)(rand() % 100) / 100.0f;
 				if (r < 0.3f) { // 30% chance for basic charge
 					bossState = ST_CHARGE;
 					boss.stateTimer = 0.0f;
 					boss.attackCooldown = 2.0f;
+					// Store initial distance for charge tracking
+					chargeStartDistance = dist;
+					chargeHasPassedPlayer = false;
 					printf("[Boss] CHARGE!\n");
 				} else {
 					// Use sophisticated attack selection
@@ -990,10 +1144,28 @@ void boss_update(void)
 			break;
 			
 		case ST_CHARGE:
-			// Charge lasts briefly then recover
-			if (boss.stateTimer > 1.0f) {
-				bossState = ST_RECOVER;
-				boss.stateTimer = 0.0f;
+			// Calculate current distance to player
+			{
+				float dx = character.pos[0] - boss.pos[0];
+				float dz = character.pos[2] - boss.pos[2];
+				float currentDist = sqrtf(dx*dx + dz*dz);
+				
+				// Track if we've gotten close to the player (within 8 units)
+				if (!chargeHasPassedPlayer && currentDist < 8.0f) {
+					chargeHasPassedPlayer = true;
+				}
+				
+				// Continue charging until we've passed the player:
+				// - We got close to them (chargeHasPassedPlayer = true)
+				// - AND we're now further away than when we started (currentDist > chargeStartDistance)
+				// Also have a maximum duration timeout (5 seconds) as a safety
+				bool hasPassedPlayer = chargeHasPassedPlayer && currentDist > chargeStartDistance;
+				
+				if (hasPassedPlayer || boss.stateTimer > 5.0f) {
+					bossState = ST_RECOVER;
+					boss.stateTimer = 0.0f;
+					chargeHasPassedPlayer = false;
+				}
 			}
 			
 			// Check for charge hit
@@ -1033,7 +1205,11 @@ void boss_update(void)
 		case ST_RECOVER:
 			// Recovery period
 			if (boss.stateTimer > 0.8f) {
-				bossState = dist > COMBAT_RADIUS ? ST_CHASE : ST_ORBIT;
+				if (dist > COMBAT_RADIUS + 10.0f) {
+					bossState = ST_CHASE;
+				} else {
+					bossState = ST_STRAFE;
+				}
 				boss.stateTimer = 0.0f;
 			}
 			break;
@@ -1087,6 +1263,14 @@ void boss_update(void)
 				break;
 			case ST_CHASE:
 				boss_debug_sound("boss_footstep_heavy");
+				break;
+			case ST_STRAFE:
+				boss_debug_sound("boss_footstep_heavy");
+				// Set initial attack cooldown when entering strafe to ensure minimum strafe duration
+				// This creates the "slow dance" feeling where boss and character size each other up
+				if (boss.attackCooldown <= 0.0f) {
+					boss.attackCooldown = 2.0f; // Initial cooldown, combined with MIN_STRAFE_DURATION
+				}
 				break;
 			case ST_IDLE:
 				boss_debug_sound("boss_idle_ambient");

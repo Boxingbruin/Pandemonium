@@ -9,9 +9,11 @@
 #include "dev.h"
 #include "debug_overlay.h"
 #include "debug_draw.h"
+#include "collision_mesh.h"
 
 #include "camera_controller.h"
 #include "character.h"
+#include "boss.h"
 
 #include "game_lighting.h"
 #include "game_time.h"
@@ -477,31 +479,70 @@ void dev_draw_update(T3DViewport *viewport)
     }
 }
 
-void dev_draw_debug_update(T3DViewport *viewport)
-{
-    if(controlling == DEV_COLLISION)
-    {
-        if(toggleColliders)
-        {
-            // T3DVec3 capA = {{
-            //     character.pos.v[0] + character.capsuleCollider.localCapA.v[0],
-            //     character.pos.v[1] + character.capsuleCollider.localCapA.v[1],
-            //     character.pos.v[2] + character.capsuleCollider.localCapA.v[2],
-            // }};
+void dev_draw_debug_update(T3DViewport *viewport) {
+      rspq_wait();
+      // Build character capsule in game space = character.pos + local offsets
+      float charScale = character.scale[0];
+      T3DVec3 charCapA = {{
+          character.pos[0] + character.capsuleCollider.localCapA.v[0],
+          character.pos[1] + character.capsuleCollider.localCapA.v[1],
+          character.pos[2] + character.capsuleCollider.localCapA.v[2],
+      }};
 
-            // T3DVec3 capB = {{
-            //     character.pos.v[0] + character.capsuleCollider.localCapB.v[0],
-            //     character.pos.v[1] + character.capsuleCollider.localCapB.v[1],
-            //     character.pos.v[2] + character.capsuleCollider.localCapB.v[2],
-            // }};
+      T3DVec3 charCapB = {{
+          character.pos[0] + character.capsuleCollider.localCapB.v[0],
+          character.pos[1] + character.capsuleCollider.localCapB.v[1],
+          character.pos[2] + character.capsuleCollider.localCapB.v[2],
+      }};
 
-            // float radius = character.capsuleCollider.radius;
+      float charRadius = character.capsuleCollider.radius;
 
-            // // Draw Sphere collider (instead of capsule for now)
-            // debug_draw_sphere(viewport, &capA, radius, DEBUG_COLORS[1]);
-        }
-    }
+      // Draw character capsule directly in green to ensure it's visible
+      debug_draw_capsule(viewport, &charCapA, &charCapB, charRadius, DEBUG_COLORS[1]);
+
+      AABB debugAabbs[] = {
+          {
+              .min = {{-64.0f, 0.0f, -64.0f}},
+              .max = {{ 64.0f, 64.0f, 64.0f}}
+          },
+          {
+              .min = {{ 32.0f, 0.0f, 32.0f}},
+              .max = {{ 96.0f, 32.0f, 96.0f}}
+          }
+      };
+      int debugAabbCount = sizeof(debugAabbs) / sizeof(debugAabbs[0]);
+
+      // Also draw character capsule vs AABBs for collision testing
+      debug_draw_capsule_vs_aabb_list(
+          viewport,
+          &charCapA,
+          &charCapB,
+          charRadius,
+          debugAabbs,
+          debugAabbCount,
+          DEBUG_COLORS[1],
+          DEBUG_COLORS[0]);
+
+      // Draw boss capsule collider (in yellow to distinguish from character)
+      float bossScale = boss.scale[0];
+      T3DVec3 bossCapA = {{
+          boss.pos[0] + boss.capsuleCollider.localCapA.v[0] * bossScale,
+          boss.pos[1] + boss.capsuleCollider.localCapA.v[1] * bossScale,
+          boss.pos[2] + boss.capsuleCollider.localCapA.v[2] * bossScale,
+      }};
+
+      T3DVec3 bossCapB = {{
+          boss.pos[0] + boss.capsuleCollider.localCapB.v[0] * bossScale,
+          boss.pos[1] + boss.capsuleCollider.localCapB.v[1] * bossScale,
+          boss.pos[2] + boss.capsuleCollider.localCapB.v[2] * bossScale,
+      }};
+
+      float bossRadius = boss.capsuleCollider.radius * bossScale;
+
+      // Draw boss capsule in yellow (DEBUG_COLORS[3]) to distinguish from character green
+      debug_draw_capsule(viewport, &bossCapA, &bossCapB, bossRadius, DEBUG_COLORS[3]);
 }
+
 
 void dev_frames_end_update()
 {

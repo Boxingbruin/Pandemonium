@@ -3,6 +3,10 @@
 #include <t3d/t3dmath.h>
 #include <t3d/t3dmodel.h>
 #include <t3d/t3ddebug.h>
+#include <math.h>
+#include <string.h>
+#include <stdio.h>
+#include <stdint.h>
 
 #include "audio_controller.h"
 
@@ -19,6 +23,7 @@
 #include "character.h"
 #include "boss.h"
 #include "dialog_controller.h"
+#include "collision_mesh.h"
 
 // TODO: This should not be declared in the header file, as it is only used externally (temp)
 #include "dev.h"
@@ -36,7 +41,10 @@ typedef enum {
 
 static CutsceneState cutsceneState = CUTSCENE_BOSS_INTRO;
 static float cutsceneTimer = 0.0f;
+static float cutsceneCameraTimer = 0.0f;  // Separate timer for camera movement (doesn't reset)
 static bool bossActivated = false;
+static T3DVec3 cutsceneCamPosStart;  // Initial camera position (further back)
+static T3DVec3 cutsceneCamPosEnd;    // Final camera position (closer to boss)
 
 // Game state management
 static GameState gameState = GAME_STATE_PLAYING;
@@ -122,6 +130,7 @@ void scene_reset(void)
 {
     cutsceneState = CUTSCENE_BOSS_INTRO;
     cutsceneTimer = 0.0f;
+    cutsceneCameraTimer = 0.0f;
     bossActivated = false;
     gameState = GAME_STATE_PLAYING;
     lastMenuActive = false;
@@ -147,6 +156,13 @@ void scene_set_game_state(GameState state) {
 
 bool scene_is_menu_active(void) {
     return gameState == GAME_STATE_MENU;
+}
+
+// Check if character would collide with room boundaries at the given position
+// Returns true if character would be outside room bounds (collision detected)
+bool scene_check_room_bounds(float posX, float posY, float posZ)
+{
+    return collision_mesh_check_bounds(posX, posY, posZ);
 }
 
 void scene_init(void) 
@@ -176,8 +192,15 @@ void scene_init(void)
     lightDirVec = (T3DVec3){{-0.9833f, 0.1790f, -0.0318f}};
     t3d_vec3_norm(&lightDirVec);
     
+    // Load collision mesh
+    // NOTE: If collision wireframe doesn't match the rendered room, adjust this scale.
+    // The exported bossroom.collision is in glb units (~ +/- 100). Using 0.1 made the
+    // collision volume a tiny square; start with 1.0 for now.
+    collision_mesh_set_transform(6.2f, 0.0f, -5.0f, 0.0f);
+    collision_mesh_init();
+    
     // Load and setup map
-    mapModel = t3d_model_load("rom:/testing_map.t3dm");
+    mapModel = t3d_model_load("rom:/bossroom.t3dm");
     rspq_block_begin();
     t3d_model_draw(mapModel);
     mapDpl = rspq_block_end();
@@ -196,7 +219,8 @@ void scene_init(void)
     // Set character initial position to be on the ground
     character.pos[0] = 0.0f;
     character.pos[1] = -4.8f;  // Position character feet on map surface
-    character.pos[2] = 100.0f;
+    // Spawn inside the collision volume.
+    character.pos[2] = 250.0f;
     character_update_position();  // Ensure matrix is updated
 
     // Initialize boss model (imported from boss.glb -> boss.t3dm)
@@ -204,8 +228,8 @@ void scene_init(void)
 
     // Place boss at a dramatic distance from the character for the intro
     boss.pos[0] = 0.0f;  // Dramatic but visible distance from character
-    boss.pos[1] = -4.8f; // align to ground level similar to character
-    boss.pos[2] = 0.0f;  // Back for dramatic reveal
+    boss.pos[1] = -0.0f; // align to ground level similar to character
+    boss.pos[2] = -250.0f;  // Back for dramatic reveal
     boss_update_position();
 
     // Initialize dialog controller
@@ -216,7 +240,11 @@ void scene_init(void)
     // audio_play_music("rom:/boss_final_phase.wav64", true);
 
     // Set up camera to focus on boss for intro cutscene
-    customCamPos = (T3DVec3){{boss.pos[0]+50.0f, boss.pos[1] + 25.0f, boss.pos[2] + 100.0f}};  // Position camera to view boss
+    // Start position: further back for dramatic reveal
+    cutsceneCamPosStart = (T3DVec3){{boss.pos[0]+50.0f, boss.pos[1] + 25.0f, boss.pos[2] + 250.0f}};
+    // End position: closer to boss (slowly move towards during cutscene)
+    cutsceneCamPosEnd = (T3DVec3){{boss.pos[0]+50.0f, boss.pos[1] + 25.0f, boss.pos[2] + 120.0f}};
+    customCamPos = cutsceneCamPosStart;  // Start at initial position
     customCamTarget = (T3DVec3){{boss.pos[0], boss.pos[1] + 15.0f, boss.pos[2]}};  // Look at boss center/chest area
     camera_mode(CAMERA_CUSTOM);
 
@@ -278,6 +306,10 @@ void scene_update(void)
     
     // Update cutscene state
     cutsceneTimer += deltaTime;
+    // Update camera timer separately (doesn't reset when transitioning states)
+    if (cutsceneState != CUTSCENE_NONE) {
+        cutsceneCameraTimer += deltaTime;
+    }
     
     // Check for A button press to skip intro cutscene
     bool aPressed = joypad.btn.a;
@@ -291,6 +323,20 @@ void scene_update(void)
             boss_update_cutscene();  // Keep boss animated/visible without enabling AI
             dialog_controller_update();
             
+            // Slowly move camera towards boss during cutscene
+            // Use a smooth interpolation over ~5 seconds
+            const float cameraMoveDuration = 7.0f;
+            float t = cutsceneCameraTimer / cameraMoveDuration;
+            if (t > 1.0f) t = 1.0f;  // Clamp to 1.0
+            
+            // Smooth interpolation (ease-in-out)
+            float easeT = t * t * (3.0f - 2.0f * t);
+            
+            // Update camera position
+            customCamPos.v[0] = cutsceneCamPosStart.v[0] + (cutsceneCamPosEnd.v[0] - cutsceneCamPosStart.v[0]) * easeT;
+            customCamPos.v[1] = cutsceneCamPosStart.v[1] + (cutsceneCamPosEnd.v[1] - cutsceneCamPosStart.v[1]) * easeT;
+            customCamPos.v[2] = cutsceneCamPosStart.v[2] + (cutsceneCamPosEnd.v[2] - cutsceneCamPosStart.v[2]) * easeT;
+            
             // Only print occasionally to avoid spam
             if (((int)(cutsceneTimer * 10)) % 10 == 0) {
                 debugf("CUTSCENE_BOSS_INTRO: dialog_speaking = %s, cameraState = %d, cutsceneTimer = %.1f\n",
@@ -302,6 +348,7 @@ void scene_update(void)
                 // Skip dialog and cutscene
                 dialog_controller_stop_speaking();
                 cutsceneState = CUTSCENE_NONE;
+                cutsceneCameraTimer = 0.0f;
                 bossActivated = true;
                 // Return camera control to the player
                 camera_mode_smooth(CAMERA_CHARACTER, 1.0f);
@@ -318,11 +365,20 @@ void scene_update(void)
             
         case CUTSCENE_BOSS_INTRO_WAIT:
             boss_update_cutscene();  // Ensure boss stays rendered during the wait
+            // Continue camera movement during wait period (using same timer)
+            const float cameraMoveDurationWait = 5.0f;
+            float tWait = cutsceneCameraTimer / cameraMoveDurationWait;
+            if (tWait > 1.0f) tWait = 1.0f;
+            float easeTWait = tWait * tWait * (3.0f - 2.0f * tWait);
+            customCamPos.v[0] = cutsceneCamPosStart.v[0] + (cutsceneCamPosEnd.v[0] - cutsceneCamPosStart.v[0]) * easeTWait;
+            customCamPos.v[1] = cutsceneCamPosStart.v[1] + (cutsceneCamPosEnd.v[1] - cutsceneCamPosStart.v[1]) * easeTWait;
+            customCamPos.v[2] = cutsceneCamPosStart.v[2] + (cutsceneCamPosEnd.v[2] - cutsceneCamPosStart.v[2]) * easeTWait;
             debugf("CUTSCENE_BOSS_INTRO_WAIT: cutsceneTimer = %.2f\n", cutsceneTimer);
             // Allow skipping wait period with A button
             if (aJustPressed || cutsceneTimer >= 1.0f) {
                 debugf("CUTSCENE_BOSS_INTRO_WAIT: Ending cutscene, switching to CHARACTER camera\n");
                 cutsceneState = CUTSCENE_NONE;
+                cutsceneCameraTimer = 0.0f;
                 bossActivated = true;
                 // Return camera control to the player
                 camera_mode_smooth(CAMERA_CHARACTER, 1.0f);
@@ -446,8 +502,9 @@ void scene_draw(T3DViewport *viewport)
     dialog_controller_draw();
 }
 
-void scene_cleanup(void) 
+void scene_cleanup(void)
 {
+    collision_mesh_cleanup();
     character_delete();
     camera_reset();
     
@@ -466,5 +523,4 @@ void scene_cleanup(void)
     }
     boss_delete();
     dialog_controller_free();
-    //collision_system_free();
 }

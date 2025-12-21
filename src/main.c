@@ -44,12 +44,6 @@ int main(void)
     
     audio_initialize();
 
-    // Initialize save system and load settings
-    save_controller_init();
-    if (!save_controller_load_settings()) {
-        debugf("Using default audio settings\n");
-    }
-
     rdpq_text_register_font(FONT_BUILTIN_DEBUG_MONO, rdpq_font_load_builtin(FONT_BUILTIN_DEBUG_MONO));
     
     // Load custom unbalanced font
@@ -58,6 +52,12 @@ int main(void)
 
     game_time_init();
     joypad_utility_init();
+
+    // Initialize save system and load settings (after joypad init)
+    save_controller_init();
+    if (!save_controller_load_settings()) {
+        // Silently use defaults - no error message needed for graceful fallback
+    }
 
     t3d_init((T3DInitParams){});
     T3DViewport viewport = t3d_viewport_create();

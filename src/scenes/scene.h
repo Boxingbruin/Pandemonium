@@ -28,4 +28,7 @@ GameState scene_get_game_state(void);
 void scene_set_game_state(GameState state);
 bool scene_is_menu_active(void);
 
+// Room collision functions
+bool scene_check_room_bounds(float posX, float posY, float posZ);
+
 #endif

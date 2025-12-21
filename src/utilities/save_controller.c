@@ -10,7 +10,7 @@
 static bool controllerPakAvailable = false;
 static entry_structure_t saveEntry;
 
-// Calculate simple checksum for save data validation
+// Calculate simple checksum for save data validation (excluding checksum field)
 static uint32_t calculate_checksum(const SaveData* data) {
     uint32_t checksum = SAVE_MAGIC;
     checksum ^= (uint32_t)data->masterVolume;
@@ -20,12 +20,20 @@ static uint32_t calculate_checksum(const SaveData* data) {
     return checksum;
 }
 
+// Calculate checksum without including the checksum field (for validation)
+static uint32_t calculate_checksum_for_validation(const SaveData* data) {
+    // Create a temporary copy without checksum for calculation
+    SaveData tempData = *data;
+    tempData.checksum = 0;
+    return calculate_checksum(&tempData);
+}
+
 void save_controller_init(void) {
     // Check if Controller Pak is valid
     int result = validate_mempak(CONTROLLER_PORT);
     if (result == 0) {
         controllerPakAvailable = true;
-        debugf("Controller Pak validated successfully\n");
+        debugf("Controller Pak detected on port %d\n", CONTROLLER_PORT);
         
         // Try to find existing save entry
         for (int i = 0; i < 16; i++) {
@@ -36,16 +44,16 @@ void save_controller_init(void) {
                 }
             }
         }
-        debugf("No existing save entry found\n");
+        debugf("No existing save entry found (will create on first save)\n");
     } else {
         controllerPakAvailable = false;
-        debugf("Controller Pak not available or invalid (error: %d)\n", result);
+        debugf("Controller Pak not available on port %d (error: %d)\n", CONTROLLER_PORT, result);
+        debugf("Settings will use defaults and not persist\n");
     }
 }
 
 bool save_controller_load_settings(void) {
     if (!controllerPakAvailable) {
-        debugf("Controller Pak not available for loading\n");
         return false;
     }
     
@@ -61,7 +69,6 @@ bool save_controller_load_settings(void) {
     }
     
     if (!entryFound) {
-        debugf("No save entry found on Controller Pak\n");
         return false;
     }
     
@@ -70,14 +77,12 @@ bool save_controller_load_settings(void) {
     // Read save data from Controller Pak entry
     int result = read_mempak_entry_data(CONTROLLER_PORT, &saveEntry, (uint8_t*)&loadedData);
     if (result != 0) {
-        debugf("Failed to read save data from Controller Pak (error: %d)\n", result);
         return false;
     }
     
-    // Validate checksum
-    uint32_t expectedChecksum = calculate_checksum(&loadedData);
+    // Validate checksum (using function that excludes checksum field)
+    uint32_t expectedChecksum = calculate_checksum_for_validation(&loadedData);
     if (loadedData.checksum != expectedChecksum) {
-        debugf("Save data checksum mismatch - using defaults\n");
         return false;
     }
     
@@ -85,7 +90,6 @@ bool save_controller_load_settings(void) {
     if (loadedData.masterVolume < 0 || loadedData.masterVolume > 10 ||
         loadedData.musicVolume < 0 || loadedData.musicVolume > 10 ||
         loadedData.sfxVolume < 0 || loadedData.sfxVolume > 10) {
-        debugf("Save data contains invalid values - using defaults\n");
         return false;
     }
     
@@ -101,17 +105,12 @@ bool save_controller_load_settings(void) {
     // Disable loading mode
     audio_set_loading_mode(false);
     
-    debugf("Audio settings loaded from Controller Pak\n");
-    debugf("  Master: %d, Music: %d, SFX: %d, Mute: %s\n", 
-           loadedData.masterVolume, loadedData.musicVolume, 
-           loadedData.sfxVolume, loadedData.globalMute ? "ON" : "OFF");
-    
     return true;
 }
 
 bool save_controller_save_settings(void) {
     if (!controllerPakAvailable) {
-        debugf("Controller Pak not available for saving\n");
+        debugf("Save failed: Controller Pak not available\n");
         return false;
     }
     
@@ -138,17 +137,70 @@ bool save_controller_save_settings(void) {
         // Update existing entry
         int result = write_mempak_entry_data(CONTROLLER_PORT, &saveEntry, (uint8_t*)&saveData);
         if (result != 0) {
-            debugf("Failed to update save data on Controller Pak (error: %d)\n", result);
+            debugf("Save failed: Failed to write to existing entry (error: %d)\n", result);
             return false;
         }
+        debugf("Settings saved successfully (updated existing entry)\n");
     } else {
-        // Create new entry - this would require more complex implementation
-        // For now, just report that we can't create new entries
-        debugf("Cannot create new save entry - functionality not implemented\n");
-        return false;
+        // Create new entry - find an empty slot
+        bool slotFound = false;
+        entry_structure_t newEntry;
+        
+        for (int i = 0; i < 16; i++) {
+            int entryResult = get_mempak_entry(CONTROLLER_PORT, i, &newEntry);
+            if (entryResult == 0) {
+                // Entry exists - check if it's empty
+                bool isEmpty = (newEntry.valid == 0);
+                if (!isEmpty) {
+                    // Also check if name is empty
+                    isEmpty = true;
+                    for (int j = 0; j < 16; j++) {
+                        if (newEntry.name[j] != 0 && newEntry.name[j] != 0xFF) {
+                            isEmpty = false;
+                            break;
+                        }
+                    }
+                }
+                
+                if (isEmpty) {
+                    // Initialize entry structure for new save
+                    // Preserve the entry structure (it has slot information) but update fields
+                    strncpy(newEntry.name, SAVE_ENTRY_NAME, 16);
+                    // Ensure name doesn't overflow and is properly terminated
+                    newEntry.name[15] = '\0';
+                    newEntry.vendor = 0x4E; // 'N' for Nintendo
+                    newEntry.game_id = 0x5041; // "PA" from "PAND"
+                    
+                    // Calculate size needed (round up to block size)
+                    // Controller Pak blocks are 64 bytes
+                    int dataSize = sizeof(SaveData);
+                    int blocksNeeded = (dataSize + 63) / 64;
+                    if (blocksNeeded < 1) blocksNeeded = 1; // Minimum 1 block
+                    newEntry.blocks = blocksNeeded;
+                    newEntry.valid = 1;
+                    
+                    // Write the entry data (entry structure from get_mempak_entry already has slot info)
+                    int result = write_mempak_entry_data(CONTROLLER_PORT, &newEntry, (uint8_t*)&saveData);
+                    if (result == 0) {
+                        saveEntry = newEntry;
+                        slotFound = true;
+                        debugf("Settings saved successfully (created new entry at slot %d)\n", i);
+                        break;
+                    } else {
+                        debugf("Save failed: Failed to write new entry at slot %d (error: %d)\n", i, result);
+                    }
+                }
+            }
+            // Note: If get_mempak_entry fails, the slot might be truly empty,
+            // but we can't create entries in slots that don't exist in the directory
+        }
+        
+        if (!slotFound) {
+            debugf("Save failed: No available slot found (Controller Pak may be full)\n");
+            return false;
+        }
     }
     
-    debugf("Audio settings saved to Controller Pak\n");
     return true;
 }
 
