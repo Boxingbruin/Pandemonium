@@ -59,6 +59,12 @@ static bool lastZPressed = false;
 // back to an estimate derived from the boss' orbit radius.
 static T3DVec3 get_boss_lock_focus_point(void)
 {
+    // Safety check: ensure boss is initialized
+    if (boss.scale[1] <= 0.0f || boss.orbitRadius <= 0.0f) {
+        // Return safe default if boss data is invalid
+        return (T3DVec3){{boss.pos[0], boss.pos[1] + 10.0f, boss.pos[2]}};
+    }
+    
     // Default to a mid-body estimate even if the capsule data is uninitialized.
     float focusOffset = boss.orbitRadius * 0.6f; // roughly chest height for current tuning
 

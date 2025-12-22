@@ -104,6 +104,11 @@ void boss_init(void)
 
 	T3DSkeleton* skeleton = malloc(sizeof(T3DSkeleton));
 	*skeleton = t3d_skeleton_create(bossModel);
+	
+	// Create blend skeleton for animation blending
+	// Use false to NOT copy matrices (matches example pattern)
+	T3DSkeleton* skeletonBlend = malloc(sizeof(T3DSkeleton));
+	*skeletonBlend = t3d_skeleton_clone(skeleton, false);
 
 	T3DAnim** animations = NULL;
 
@@ -160,8 +165,10 @@ void boss_init(void)
 		.scale = {0.2f, 0.2f, 0.2f},
 		.scrollParams = NULL,
 		.skeleton = skeleton,
+		.skeletonBlend = skeletonBlend,
 		.animations = animations,
 		.currentAnimation = 0,
+		.previousAnimation = -1,
 		.animationCount = animationCount,
 		.capsuleCollider = bossCollider,
 		.modelMat = malloc_uncached(sizeof(T3DMat4FP)),
@@ -180,7 +187,11 @@ void boss_init(void)
 		.attackCooldown = 0.0f,
 		.damageFlashTimer = 0.0f,
 		.isAttacking = false,
-		.attackAnimTimer = 0.0f
+		.attackAnimTimer = 0.0f,
+		.blendFactor = 0.0f,
+		.blendDuration = 0.3f,  // 300ms blend duration
+		.blendTimer = 0.0f,
+		.isBlending = false
 	};
 
 	// Initialize the newly allocated matrix before assigning to global
@@ -952,7 +963,7 @@ static void boss_update_movement_and_physics(float dt) {
 }
 
 static void boss_update_animation_system(float dt) {
-    if (!boss.skeleton || !boss.animations) return;
+    if (!boss.skeleton || !boss.animations || !boss.skeletonBlend) return;
     
     // Update attack animation timer
     if (boss.isAttacking) {
@@ -990,27 +1001,121 @@ static void boss_update_animation_system(float dt) {
         // Otherwise stays as BOSS_ANIM_IDLE
     }
     
-    // Switch animations if needed
+    // Switch animations if needed - start blending
     if (boss.currentAnimation != targetAnim) {
-        // Stop current animation
-        if (boss.currentAnimation >= 0 && boss.currentAnimation < boss.animationCount) {
-            t3d_anim_set_playing(boss.animations[boss.currentAnimation], false);
+        // If we're already blending, complete the blend first
+        if (boss.isBlending) {
+            // Force complete the blend
+            boss.blendFactor = 1.0f;
+            boss.isBlending = false;
+            boss.blendTimer = 0.0f;
+            
+            // Stop previous animation
+            if (boss.previousAnimation >= 0 && boss.previousAnimation < boss.animationCount) {
+                t3d_anim_set_playing(boss.animations[boss.previousAnimation], false);
+            }
         }
         
-        // Start new animation
+        // Store previous animation for blending
+        boss.previousAnimation = boss.currentAnimation;
+        
+        // Start blending if we have a valid previous animation
+        if (boss.previousAnimation >= 0 && boss.previousAnimation < boss.animationCount) {
+            // Save the current animation time before switching
+            float savedTime = 0.0f;
+            if (boss.currentAnimation >= 0 && boss.currentAnimation < boss.animationCount && boss.animations[boss.currentAnimation]) {
+                savedTime = boss.animations[boss.currentAnimation]->time;
+            }
+            
+            // Reset blend skeleton and attach previous animation (matches example pattern)
+            t3d_skeleton_reset(boss.skeletonBlend);
+            t3d_anim_attach(boss.animations[boss.previousAnimation], boss.skeletonBlend);
+            t3d_anim_set_playing(boss.animations[boss.previousAnimation], true);
+            // Restore the animation time so it continues from where it was
+            t3d_anim_set_time(boss.animations[boss.previousAnimation], savedTime);
+            // Don't update skeleton here - let the normal update loop handle it (matches example)
+            
+            // Start blending (will begin after first animation update)
+            boss.isBlending = true;
+            boss.blendFactor = 0.0f;
+            boss.blendTimer = -0.0001f; // Start slightly negative so first frame skips blending
+        }
+        
+        // Start new animation on main skeleton
         boss.currentAnimation = targetAnim;
         if (boss.currentAnimation < boss.animationCount) {
+            // Reset main skeleton and attach new animation
+            t3d_skeleton_reset(boss.skeleton);
+            t3d_anim_attach(boss.animations[boss.currentAnimation], boss.skeleton);
             t3d_anim_set_playing(boss.animations[boss.currentAnimation], true);
+            t3d_anim_set_time(boss.animations[boss.currentAnimation], 0.0f);  // Start from beginning
         }
     }
     
-    // Update all animations
+    // Update blending
+    if (boss.isBlending) {
+        boss.blendTimer += dt;
+        // Clamp negative timer to 0 (first frame skip)
+        if (boss.blendTimer < 0.0f) {
+            boss.blendTimer = 0.0f;
+            boss.blendFactor = 0.0f;
+        } else if (boss.blendTimer >= boss.blendDuration) {
+            // Blend complete
+            boss.blendFactor = 1.0f;
+            boss.isBlending = false;
+            boss.blendTimer = 0.0f;
+            
+            // Stop previous animation
+            if (boss.previousAnimation >= 0 && boss.previousAnimation < boss.animationCount) {
+                t3d_anim_set_playing(boss.animations[boss.previousAnimation], false);
+            }
+        } else {
+            // Interpolate blend factor
+            boss.blendFactor = boss.blendTimer / boss.blendDuration;
+        }
+    }
+    
+    // Update all animations (both main and blend animations are updated every frame)
     for (int i = 0; i < boss.animationCount; i++) {
         if (boss.animations[i]) {
             t3d_anim_update(boss.animations[i], dt);
         }
     }
     
+    // Blend skeletons if blending is active (matches example pattern)
+    // Note: We blend BEFORE updating the skeleton, and we never update the blend skeleton directly
+    // The blend skeleton's state comes from its attached animation being updated
+    if (boss.isBlending && boss.skeletonBlend) {
+        // Safety check: Only proceed if we have all required components
+        // Also ensure blend timer has advanced (animation has been updated at least once)
+        bool canBlend = (boss.previousAnimation >= 0 && 
+                        boss.previousAnimation < boss.animationCount && 
+                        boss.animations[boss.previousAnimation] != NULL &&
+                        boss.animations[boss.previousAnimation]->isPlaying &&
+                        boss.blendFactor >= 0.0f && 
+                        boss.blendFactor <= 1.0f &&
+                        boss.blendTimer > 0.0f); // Ensure animation has been updated at least once
+        
+        if (canBlend) {
+            // Blend skeletons: blend from skeletonBlend (old) to skeleton (new), store result in skeleton
+            // blendFactor: 0.0 = all old (skeletonBlend), 1.0 = all new (skeleton)
+            // IMPORTANT: We do NOT update the blend skeleton - only blend it into the main skeleton
+            // The blend skeleton's state comes from its attached animation
+            t3d_skeleton_blend(boss.skeletonBlend, boss.skeleton, boss.skeleton, boss.blendFactor);
+        } else {
+            // Not safe to blend - disable blending to prevent crashes
+            boss.isBlending = false;
+            boss.blendFactor = 0.0f;
+            boss.blendTimer = 0.0f;
+            // Stop previous animation if it was playing
+            if (boss.previousAnimation >= 0 && boss.previousAnimation < boss.animationCount &&
+                boss.animations[boss.previousAnimation]) {
+                t3d_anim_set_playing(boss.animations[boss.previousAnimation], false);
+            }
+        }
+    }
+    
+    // Update main skeleton (ONLY the main skeleton, never the blend skeleton)
     t3d_skeleton_update(boss.skeleton);
 }
 
@@ -1062,6 +1167,11 @@ void boss_update(void) {
 	if (justActivated && bossState == ST_IDLE) {
 		bossState = ST_CHASE;
 		boss.stateTimer = 0.0f;
+		// Ensure blending is disabled when boss first becomes active
+		boss.isBlending = false;
+		boss.blendFactor = 0.0f;
+		boss.blendTimer = 0.0f;
+		boss.previousAnimation = -1;
 	}
 
 	// Basic AI scaffolding: chase + orbit + simple charge trigger
@@ -1348,6 +1458,13 @@ void boss_delete(void)
 		boss.skeleton = NULL;
 	}
 
+	if (boss.skeletonBlend)
+	{
+		t3d_skeleton_destroy(boss.skeletonBlend);
+		free(boss.skeletonBlend);
+		boss.skeletonBlend = NULL;
+	}
+
 	if (boss.animations) 
 	{
 		for (int i = 0; i < boss.animationCount; i++) 
@@ -1419,6 +1536,10 @@ void boss_reset(void)
 	boss.isAttacking = false;
 	boss.attackAnimTimer = 0.0f;
 	boss.currentAnimation = BOSS_ANIM_IDLE;
+	boss.previousAnimation = -1;
+	boss.isBlending = false;
+	boss.blendFactor = 0.0f;
+	boss.blendTimer = 0.0f;
 }
 
 void boss_draw_ui()
@@ -1463,5 +1584,31 @@ void boss_draw_ui()
     if (bossDebugSoundTimer > 0.0f && bossDebugSoundName) {
         rdpq_text_printf(NULL, FONT_UNBALANCED, 20, y, "Boss SFX: %s", bossDebugSoundName);
         y += listSpacing;
+    }
+    
+    // Animation blending stats
+    if (boss.isBlending) {
+        y += listSpacing;
+        rdpq_set_prim_color(RGBA32(0x39, 0xBF, 0x1F, 0xFF)); // Green for blending active
+        rdpq_text_printf(NULL, FONT_UNBALANCED, 20, y, "Blending: ON");
+        y += listSpacing;
+        rdpq_set_prim_color(RGBA32(255, 255, 255, 255));
+        rdpq_text_printf(NULL, FONT_UNBALANCED, 20, y, "Blend Factor: %.2f (%.0f%%)", boss.blendFactor, boss.blendFactor * 100.0f);
+        y += listSpacing;
+        rdpq_text_printf(NULL, FONT_UNBALANCED, 20, y, "Blend Timer: %.3fs / %.3fs", boss.blendTimer, boss.blendDuration);
+        y += listSpacing;
+        if (boss.previousAnimation >= 0 && boss.previousAnimation < boss.animationCount) {
+            const char* animNames[] = {"Idle", "Walk", "Attack", "StrafeL", "StrafeR", "Combo", "Jump"};
+            int prevIdx = (boss.previousAnimation < 7) ? boss.previousAnimation : 0;
+            int currIdx = (boss.currentAnimation < 7) ? boss.currentAnimation : 0;
+            rdpq_text_printf(NULL, FONT_UNBALANCED, 20, y, "Anim: %d->%d (%s->%s)", 
+                boss.previousAnimation, boss.currentAnimation,
+                animNames[prevIdx], animNames[currIdx]);
+        }
+    } else {
+        y += listSpacing;
+        rdpq_set_prim_color(RGBA32(0x66, 0x66, 0x66, 0xFF)); // Grey for blending inactive
+        rdpq_text_printf(NULL, FONT_UNBALANCED, 20, y, "Blending: OFF");
+        rdpq_set_prim_color(RGBA32(255, 255, 255, 255));
     }
 }

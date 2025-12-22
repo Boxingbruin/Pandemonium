@@ -26,7 +26,14 @@ typedef struct {
     T3DAnim **animations;
     T3DAnim **animationsBlend;
     int currentAnimation;
+    int previousAnimation;
     int animationCount;
+    
+    // Animation blending state
+    float blendFactor;
+    float blendDuration;
+    float blendTimer;
+    bool isBlending;
 
     bool hasCollision;
     CapsuleCollider capsuleCollider;

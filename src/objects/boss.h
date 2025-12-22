@@ -30,10 +30,17 @@ typedef struct {
 
     ScrollParams *scrollParams;
     T3DSkeleton *skeleton;
-    //T3DSkeleton *skeletonBlend;
+    T3DSkeleton *skeletonBlend;
     T3DAnim **animations;
     int currentAnimation;
+    int previousAnimation;
     int animationCount;
+    
+    // Animation blending state
+    float blendFactor;
+    float blendDuration;
+    float blendTimer;
+    bool isBlending;
 
     CapsuleCollider capsuleCollider;
 
