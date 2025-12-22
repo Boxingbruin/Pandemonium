@@ -746,7 +746,7 @@ static void boss_update_movement_and_physics(float dt) {
     const float SPEED_ORBIT = boss.phaseIndex == 1 ? 90.0f : 120.0f;
     const float SPEED_CHARGE = boss.phaseIndex == 1 ? 220.0f : 280.0f;
     // Slow strafe speed for Dark Souls-style behavior
-    const float SPEED_STRAFE = boss.phaseIndex == 1 ? 60.0f : 80.0f;
+    const float SPEED_STRAFE = boss.phaseIndex == 1 ? 100.0f : 120.0f;
     
     float desiredX = 0.0f, desiredZ = 0.0f;
     float maxSpeed = 0.0f;
@@ -921,16 +921,14 @@ static void boss_update_movement_and_physics(float dt) {
     
     // Update facing direction
     float targetAngle;
-    if (bossState == ST_CHASE) {
-        // During chase, always face the character (not movement direction)
+    if (bossState == ST_STRAFE || bossState == ST_CHASE) {
+        // During strafe/chase, always face the character immediately (not movement direction)
         float faceDx = character.pos[0] - boss.pos[0];
         float faceDz = character.pos[2] - boss.pos[2];
-        targetAngle = atan2f(-faceDx, faceDz);
-    } else if (bossState == ST_STRAFE) {
-        // During strafe, always face the character (not movement direction)
-        float faceDx = character.pos[0] - boss.pos[0];
-        float faceDz = character.pos[2] - boss.pos[2];
-        targetAngle = atan2f(-faceDx, faceDz);
+        // Use immediate rotation during strafe/chase to ensure boss always faces player
+        // Use same formula as attack states
+        boss.rot[1] = -atan2f(-faceDz, faceDx) + T3D_PI;
+        return; // Skip smooth rotation for strafe/chase
     } else if (bossState >= ST_POWER_JUMP) {
         // Attack states handle their own rotation
         return;
@@ -939,7 +937,7 @@ static void boss_update_movement_and_physics(float dt) {
         targetAngle = atan2f(-boss.velX, boss.velZ); // Face movement direction
     }
     
-    // Smooth rotation
+    // Smooth rotation for non-strafe/chase states
     float currentAngle = boss.rot[1];
     float angleDelta = targetAngle - currentAngle;
     while (angleDelta > T3D_PI) angleDelta -= 2.0f * T3D_PI;
@@ -978,8 +976,8 @@ static void boss_update_animation_system(float dt) {
                bossState == ST_TRACKING_SLAM || bossState == ST_ROAR_STOMP || bossState == ST_CHAIN_SWORD) {
         targetAnim = BOSS_ANIM_ATTACK;
     } else if (bossState == ST_STRAFE) {
-        // Use left or right strafe animation based on direction
-        targetAnim = (bossStrafeDirection > 0.0f) ? BOSS_ANIM_STRAFE_RIGHT : BOSS_ANIM_STRAFE_LEFT;
+        // Use left or right strafe animation based on direction (swapped - animations are reversed)
+        targetAnim = (bossStrafeDirection > 0.0f) ? BOSS_ANIM_STRAFE_LEFT : BOSS_ANIM_STRAFE_RIGHT;
     } else if (bossState == ST_CHASE) {
         // Use walk animation while chasing (no run animation available)
         targetAnim = BOSS_ANIM_WALK;
@@ -1106,10 +1104,23 @@ void boss_update(void) {
 				boss_begin_power_jump();
 				break;
 			}
-			// Transition to strafe when close enough (use a more generous threshold)
-			if (dist <= COMBAT_RADIUS + 350.0f) {
-				bossState = ST_STRAFE;
-				boss.stateTimer = 0.0f;
+			// Continue chasing and attack when close enough - don't transition to strafe
+			const float MAX_ATTACK_DISTANCE_CHASE = 100.0f; // Attack when within this distance
+			if (boss.attackCooldown <= 0.0f && dist <= MAX_ATTACK_DISTANCE_CHASE) {
+				// Random chance to either charge or use special attack
+				float r = (float)(rand() % 100) / 100.0f;
+				if (r < 0.3f) { // 30% chance for basic charge
+					bossState = ST_CHARGE;
+					boss.stateTimer = 0.0f;
+					boss.attackCooldown = 2.0f;
+					// Store initial distance for charge tracking
+					chargeStartDistance = dist;
+					chargeHasPassedPlayer = false;
+					printf("[Boss] CHARGE!\n");
+				} else {
+					// Use sophisticated attack selection
+					boss_select_attack();
+				}
 			}
 			break;
 			
