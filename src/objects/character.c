@@ -14,7 +14,7 @@
 #include "globals.h"    
 
 #include "debug_draw.h"
-#include "boss.h"
+#include "game/bosses/boss.h"
 #include "scene.h"
 #include "simple_collision_utility.h"
 #include "game_math.h"
@@ -114,7 +114,7 @@ void character_get_velocity(float* outVelX, float* outVelZ)
 
 static const float MOVEMENT_ACCELERATION = 7.0f;
 static const float MOVEMENT_FRICTION = 12.0f;
-static const float MAX_MOVEMENT_SPEED = 200.0f;  // Much faster movement
+static const float MAX_MOVEMENT_SPEED = 160.0f;  // Slightly slower movement
 static const float SPEED_BUILDUP_RATE = 1.5f;    // How fast speed builds up to run
 static const float SPEED_DECAY_RATE = 4.0f;      // How fast speed decays when slowing  
 
@@ -206,20 +206,24 @@ static inline bool attack_hit_test(void) {
     cc.radius = TO_FIXED(character.capsuleCollider.radius * sx);
 
     SCU_CapsuleFixed bc;
-    float bs = boss.scale[0];
-    float bax = boss.capsuleCollider.localCapA.v[0] * bs;
-    float bay = boss.capsuleCollider.localCapA.v[1] * bs;
-    float baz = boss.capsuleCollider.localCapA.v[2] * bs;
-    float bbx = boss.capsuleCollider.localCapB.v[0] * bs;
-    float bby = boss.capsuleCollider.localCapB.v[1] * bs;
-    float bbz = boss.capsuleCollider.localCapB.v[2] * bs;
-    bc.a.v[0] = TO_FIXED(boss.pos[0] + bax);
-    bc.a.v[1] = TO_FIXED(boss.pos[1] + bay);
-    bc.a.v[2] = TO_FIXED(boss.pos[2] + baz);
-    bc.b.v[0] = TO_FIXED(boss.pos[0] + bbx);
-    bc.b.v[1] = TO_FIXED(boss.pos[1] + bby);
-    bc.b.v[2] = TO_FIXED(boss.pos[2] + bbz);
-    bc.radius = TO_FIXED(boss.capsuleCollider.radius * bs);
+    Boss* boss = boss_get_instance();
+    if (!boss) {
+        return false;  // No boss to hit
+    }
+    float bs = boss->scale[0];
+    float bax = boss->capsuleCollider.localCapA.v[0] * bs;
+    float bay = boss->capsuleCollider.localCapA.v[1] * bs;
+    float baz = boss->capsuleCollider.localCapA.v[2] * bs;
+    float bbx = boss->capsuleCollider.localCapB.v[0] * bs;
+    float bby = boss->capsuleCollider.localCapB.v[1] * bs;
+    float bbz = boss->capsuleCollider.localCapB.v[2] * bs;
+    bc.a.v[0] = TO_FIXED(boss->pos[0] + bax);
+    bc.a.v[1] = TO_FIXED(boss->pos[1] + bay);
+    bc.a.v[2] = TO_FIXED(boss->pos[2] + baz);
+    bc.b.v[0] = TO_FIXED(boss->pos[0] + bbx);
+    bc.b.v[1] = TO_FIXED(boss->pos[1] + bby);
+    bc.b.v[2] = TO_FIXED(boss->pos[2] + bbz);
+    bc.radius = TO_FIXED(boss->capsuleCollider.radius * bs);
 
     bool attackHit = scu_fixed_capsule_vs_capsule(&cc, &bc);
 
@@ -230,10 +234,10 @@ static inline bool attack_hit_test(void) {
         float reachEnd = 2.5f;    // sword reach
         float hitX = character.pos[0] - fm_sinf(yaw) * reachStart;
         float hitZ = character.pos[2] + fm_cosf(yaw) * reachStart;
-        float dx = boss.pos[0] - hitX;
-        float dz = boss.pos[2] - hitZ;
+        float dx = boss->pos[0] - hitX;
+        float dz = boss->pos[2] - hitZ;
         float dist = sqrtf(dx * dx + dz * dz);
-        float bossRadius = boss.capsuleCollider.radius * boss.scale[0];
+        float bossRadius = boss->capsuleCollider.radius * boss->scale[0];
         if (dist <= (reachEnd + bossRadius)) {
             attackHit = true;
         }
@@ -541,7 +545,7 @@ static inline void update_animations(float speedRatio, CharacterState state, flo
 /* Initialize character model, skeletons, animations, and camera. */
 void character_init(void)
 {
-    characterModel = t3d_model_load("rom:/catherine.t3dm");
+    characterModel = t3d_model_load("rom:/catherine/catherine.t3dm");
 
     T3DSkeleton* skeleton = malloc(sizeof(T3DSkeleton));
     *skeleton = t3d_skeleton_create(characterModel);
@@ -780,7 +784,10 @@ void character_update(void)
         float damage = (characterState == CHAR_STATE_ATTACKING_STRONG) ? STRONG_ATTACK_DAMAGE : 10.0f;
         if (actionTimer > hitStart && actionTimer < hitEnd) {
             if (!character.currentAttackHasHit && attack_hit_test()) {
-                boss_apply_damage(damage);
+                Boss* boss = boss_get_instance();
+                if (boss) {
+                    boss_apply_damage(boss, damage);
+                }
                 character.currentAttackHasHit = true; // Mark attack as having hit
             }
         }

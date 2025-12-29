@@ -11,12 +11,13 @@
 
 #include <math.h> // for isfinite
 
-uint16_t DEBUG_COLORS[5] = {
+uint16_t DEBUG_COLORS[6] = {
     0xf800, // Red     (#ff0000)
     0x0fe0, // Green   (#08ff00)
     0x001f, // Blue    (#0000ff)
     0xff80, // Yellow  (#fff300)
     0xf01f, // Magenta (#fa00ff)
+    0xf8a5, // Orange  (#ffa500)
 };
 
 static void debug_draw_line(int px0, int py0, int px1, int py1, uint16_t color)

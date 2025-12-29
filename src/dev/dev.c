@@ -13,7 +13,7 @@
 
 #include "camera_controller.h"
 #include "character.h"
-#include "boss.h"
+#include "game/bosses/boss.h"
 
 #include "game_lighting.h"
 #include "game_time.h"
@@ -524,23 +524,48 @@ void dev_draw_debug_update(T3DViewport *viewport) {
           DEBUG_COLORS[0]);
 
       // Draw boss capsule collider (in yellow to distinguish from character)
-      float bossScale = boss.scale[0];
-      T3DVec3 bossCapA = {{
-          boss.pos[0] + boss.capsuleCollider.localCapA.v[0] * bossScale,
-          boss.pos[1] + boss.capsuleCollider.localCapA.v[1] * bossScale,
-          boss.pos[2] + boss.capsuleCollider.localCapA.v[2] * bossScale,
-      }};
+      Boss* boss = boss_get_instance();
+      if (boss) {
+          float bossScale = boss->scale[0];
+          T3DVec3 bossCapA = {{
+              boss->pos[0] + boss->capsuleCollider.localCapA.v[0] * bossScale,
+              boss->pos[1] + boss->capsuleCollider.localCapA.v[1] * bossScale,
+              boss->pos[2] + boss->capsuleCollider.localCapA.v[2] * bossScale,
+          }};
 
-      T3DVec3 bossCapB = {{
-          boss.pos[0] + boss.capsuleCollider.localCapB.v[0] * bossScale,
-          boss.pos[1] + boss.capsuleCollider.localCapB.v[1] * bossScale,
-          boss.pos[2] + boss.capsuleCollider.localCapB.v[2] * bossScale,
-      }};
+          T3DVec3 bossCapB = {{
+              boss->pos[0] + boss->capsuleCollider.localCapB.v[0] * bossScale,
+              boss->pos[1] + boss->capsuleCollider.localCapB.v[1] * bossScale,
+              boss->pos[2] + boss->capsuleCollider.localCapB.v[2] * bossScale,
+          }};
 
-      float bossRadius = boss.capsuleCollider.radius * bossScale;
+          float bossRadius = boss->capsuleCollider.radius * bossScale;
 
-      // Draw boss capsule in yellow (DEBUG_COLORS[3]) to distinguish from character green
-      debug_draw_capsule(viewport, &bossCapA, &bossCapB, bossRadius, DEBUG_COLORS[3]);
+          // Draw boss capsule in yellow (DEBUG_COLORS[3]) to distinguish from character green
+          debug_draw_capsule(viewport, &bossCapA, &bossCapB, bossRadius, DEBUG_COLORS[3]);
+          
+          // Draw hand attack collider if bone index is valid (always draw for debugging, use active state for color)
+        //   if (boss->handRightBoneIndex >= 0) {
+              float handRadius = 300.0f;
+              float handHalfLen = 600.0f;
+              
+              // Calculate endpoints from center position (capsule along Y axis)
+              T3DVec3 handCapA = {{
+                  boss->handAttackColliderWorldPos[0],
+                  boss->handAttackColliderWorldPos[1],
+                  boss->handAttackColliderWorldPos[2] + 100.0f,
+              }};
+              T3DVec3 handCapB = {{
+                  boss->handAttackColliderWorldPos[0],
+                  boss->handAttackColliderWorldPos[1] + handHalfLen,
+                  boss->handAttackColliderWorldPos[2] + 100.0f,
+              }};
+              
+              // Draw in red if active, cyan if inactive (for debugging)
+              uint16_t color = boss->handAttackColliderActive ? DEBUG_COLORS[0] : DEBUG_COLORS[2]; // Red if active, blue if inactive
+              debug_draw_capsule(viewport, &handCapA, &handCapB, handRadius, color);
+        //   }
+      }
 }
 
 

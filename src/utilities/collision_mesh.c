@@ -232,13 +232,13 @@ void collision_mesh_init(void)
     // 1. Try parsing a simple text collision file (recommended workflow)
     // Single-file workflow: assets/bossroom.glb contains Object named "COLLISION"
     // Build step exports filesystem/bossroom.collision, which we load here.
-    if (parse_collision_text("bossroom.collision")) {
+    if (parse_collision_text("rom:/bossroom/bossroom.collision")) {
         debugf("Loaded collision mesh from bossroom.collision\n");
         return;
     }
 
     // Back-compat with older filename
-    if (parse_collision_text("bossroom_simple.collision")) {
+    if (parse_collision_text("rom:/bossroom/bossroom_simple.collision")) {
         debugf("Loaded collision mesh from bossroom_simple.collision\n");
         return;
     }

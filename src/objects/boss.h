@@ -97,18 +97,28 @@ typedef struct {
     float chainSwordTargetPos[3];  // Where sword will land
     
     // Tracking slam state
-    float trackingSlamHoldTime;  // Variable hold duration (randomized)
     float trackingSlamTargetAngle;
-    float trackingSlamStartTime;
     
     // Power jump state
     float powerJumpStartPos[3];
     float powerJumpTargetPos[3];
     float powerJumpHeight;
-    bool powerJumpDoSecondSlam;  // Whether to chain second slam
-    
+
+    // Debug targeting visualization
+    float debugTargetingPos[3];  // Current position the boss is targeting/aiming at
+
+    // Advanced targeting system
+    bool targetingLocked;        // Whether targeting position is locked for an attack
+    float lockedTargetingPos[3]; // Position locked when attack begins
+    float targetingUpdateTimer;  // Timer for updating targeting during non-attack states
+    float lastPlayerPos[3];      // Last known player position for movement prediction
+    float lastPlayerVel[2];      // Last known player velocity for anticipation
+
     // Hit tracking to prevent multiple damage applications per attack
     bool currentAttackHasHit;    // Track if current attack has already hit
+
+    // Animation transition timer
+    float animationTransitionTimer;  // Timer for smooth animation transitions
 } Boss;
 
 extern Boss boss;
@@ -120,7 +130,7 @@ void boss_update_position(void);
 void boss_update_cutscene(void);
 
 void boss_draw();
-void boss_draw_ui();
+void boss_draw_ui(T3DViewport *viewport);
 void boss_update();
 void boss_delete();
 

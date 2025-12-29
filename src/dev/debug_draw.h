@@ -11,7 +11,7 @@ typedef struct {
     T3DVec3 max;
 } AABB;
 
-extern uint16_t DEBUG_COLORS[5];
+extern uint16_t DEBUG_COLORS[6];
 
 void debug_draw_aabb(
     T3DViewport *vp,

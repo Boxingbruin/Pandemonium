@@ -21,9 +21,11 @@
 
 #include "scene.h"
 #include "character.h"
-#include "boss.h"
+#include "game/bosses/boss.h"
+#include "game/bosses/boss_anim.h"
 #include "dialog_controller.h"
 #include "collision_mesh.h"
+#include <t3d/t3dmath.h>
 
 // TODO: This should not be declared in the header file, as it is only used externally (temp)
 #include "dev.h"
@@ -43,6 +45,7 @@ static CutsceneState cutsceneState = CUTSCENE_BOSS_INTRO;
 static float cutsceneTimer = 0.0f;
 static float cutsceneCameraTimer = 0.0f;  // Separate timer for camera movement (doesn't reset)
 static bool bossActivated = false;
+static Boss* g_boss = NULL;  // Boss instance pointer
 static T3DVec3 cutsceneCamPosStart;  // Initial camera position (further back)
 static T3DVec3 cutsceneCamPosEnd;    // Final camera position (closer to boss)
 
@@ -59,27 +62,31 @@ static bool lastZPressed = false;
 // back to an estimate derived from the boss' orbit radius.
 static T3DVec3 get_boss_lock_focus_point(void)
 {
+    if (!g_boss) {
+        return (T3DVec3){{0.0f, 0.0f, 0.0f}};
+    }
+    
     // Safety check: ensure boss is initialized
-    if (boss.scale[1] <= 0.0f || boss.orbitRadius <= 0.0f) {
+    if (g_boss->scale[1] <= 0.0f || g_boss->orbitRadius <= 0.0f) {
         // Return safe default if boss data is invalid
-        return (T3DVec3){{boss.pos[0], boss.pos[1] + 10.0f, boss.pos[2]}};
+        return (T3DVec3){{g_boss->pos[0], g_boss->pos[1] + 10.0f, g_boss->pos[2]}};
     }
     
     // Default to a mid-body estimate even if the capsule data is uninitialized.
-    float focusOffset = boss.orbitRadius * 0.6f; // roughly chest height for current tuning
+    float focusOffset = g_boss->orbitRadius * 0.6f; // roughly chest height for current tuning
 
-    float capA = boss.capsuleCollider.localCapA.v[1];
-    float capB = boss.capsuleCollider.localCapB.v[1];
+    float capA = g_boss->capsuleCollider.localCapA.v[1];
+    float capB = g_boss->capsuleCollider.localCapB.v[1];
 
     // If a capsule is defined, use its midpoint (scaled to world space).
-    if (boss.scale[1] > 0.0f && (capA != 0.0f || capB != 0.0f)) {
-        focusOffset = (capA + capB) * 0.5f * boss.scale[1];
+    if (g_boss->scale[1] > 0.0f && (capA != 0.0f || capB != 0.0f)) {
+        focusOffset = (capA + capB) * 0.5f * g_boss->scale[1];
     }
 
     return (T3DVec3){{
-        boss.pos[0],
-        boss.pos[1] + focusOffset,
-        boss.pos[2]
+        g_boss->pos[0],
+        g_boss->pos[1] + focusOffset,
+        g_boss->pos[2]
     }};
 }
 
@@ -99,7 +106,7 @@ static void draw_cinematic_letterbox(void) {
 static void draw_lockon_indicator(T3DViewport *viewport)
 {
     // Only show during gameplay when the boss is alive and actually targeted
-    if (!cameraLockOnActive || scene_is_cutscene_active() || !scene_is_boss_active() || boss.health <= 0.0f) {
+    if (!cameraLockOnActive || scene_is_cutscene_active() || !scene_is_boss_active() || !g_boss || g_boss->health <= 0.0f) {
         return;
     }
 
@@ -206,7 +213,7 @@ void scene_init(void)
     collision_mesh_init();
     
     // Load and setup map
-    mapModel = t3d_model_load("rom:/bossroom.t3dm");
+    mapModel = t3d_model_load("rom:/bossroom/bossroom.t3dm");
     rspq_block_begin();
     t3d_model_draw(mapModel);
     mapDpl = rspq_block_end();
@@ -230,28 +237,34 @@ void scene_init(void)
     character_update_position();  // Ensure matrix is updated
 
     // Initialize boss model (imported from boss.glb -> boss.t3dm)
-    boss_init();
+    g_boss = boss_spawn();
+    if (!g_boss) {
+        // Handle error
+        return;
+    }
 
     // Place boss at a dramatic distance from the character for the intro
-    boss.pos[0] = 0.0f;  // Dramatic but visible distance from character
-    boss.pos[1] = -0.0f; // align to ground level similar to character
-    boss.pos[2] = -250.0f;  // Back for dramatic reveal
-    boss_update_position();
+    g_boss->pos[0] = 0.0f;  // Dramatic but visible distance from character
+    g_boss->pos[1] = -0.0f; // align to ground level similar to character
+    g_boss->pos[2] = -250.0f;  // Back for dramatic reveal
+    // Transform will be updated in boss_update()
 
     // Initialize dialog controller
     dialog_controller_init();
 
     // Start boss music
     // TODO: Its turned off for now as it gets annoying to listen to and it crackles
-    // audio_play_music("rom:/boss_final_phase.wav64", true);
+    // audio_play_music("rom:/audio/music/boss_final_phase.wav64", true);
 
     // Set up camera to focus on boss for intro cutscene
     // Start position: further back for dramatic reveal
-    cutsceneCamPosStart = (T3DVec3){{boss.pos[0]+50.0f, boss.pos[1] + 25.0f, boss.pos[2] + 250.0f}};
-    // End position: closer to boss (slowly move towards during cutscene)
-    cutsceneCamPosEnd = (T3DVec3){{boss.pos[0]+50.0f, boss.pos[1] + 25.0f, boss.pos[2] + 120.0f}};
-    customCamPos = cutsceneCamPosStart;  // Start at initial position
-    customCamTarget = (T3DVec3){{boss.pos[0], boss.pos[1] + 15.0f, boss.pos[2]}};  // Look at boss center/chest area
+    if (g_boss) {
+        cutsceneCamPosStart = (T3DVec3){{g_boss->pos[0]+50.0f, g_boss->pos[1] + 25.0f, g_boss->pos[2] + 250.0f}};
+        // End position: closer to boss (slowly move towards during cutscene)
+        cutsceneCamPosEnd = (T3DVec3){{g_boss->pos[0]+50.0f, g_boss->pos[1] + 25.0f, g_boss->pos[2] + 120.0f}};
+        customCamPos = cutsceneCamPosStart;  // Start at initial position
+        customCamTarget = (T3DVec3){{g_boss->pos[0], g_boss->pos[1] + 15.0f, g_boss->pos[2]}};  // Look at boss center/chest area
+    }
     camera_mode(CAMERA_CUSTOM);
 
     // Start boss intro cutscene after character and boss are loaded and positioned
@@ -264,13 +277,19 @@ void scene_restart(void)
     
     // Reset ALL static variables first
     dialog_controller_reset();
-    boss_reset();
+    if (g_boss) {
+        boss_reset(g_boss);
+    }
     character_reset();
     scene_reset();
     
     // Clean up current scene objects
     character_delete();
-    boss_delete();
+    if (g_boss) {
+        boss_free(g_boss);
+        free(g_boss);
+        g_boss = NULL;
+    }
     
     // Reset camera 
     camera_reset();
@@ -326,7 +345,14 @@ void scene_update(void)
         case CUTSCENE_BOSS_INTRO:
             // During intro cutscene, update character and boss for rendering but disable AI
             character_update();
-            boss_update_cutscene();  // Keep boss animated/visible without enabling AI
+            if (g_boss) {
+                boss_anim_update(g_boss);
+                // Update transforms for rendering
+                T3DMat4FP* mat = (T3DMat4FP*)g_boss->modelMat;
+                if (mat) {
+                    t3d_mat4fp_from_srt_euler(mat, g_boss->scale, g_boss->rot, g_boss->pos);
+                }
+            }
             dialog_controller_update();
             
             // Slowly move camera towards boss during cutscene
@@ -370,7 +396,14 @@ void scene_update(void)
             break;
             
         case CUTSCENE_BOSS_INTRO_WAIT:
-            boss_update_cutscene();  // Ensure boss stays rendered during the wait
+            if (g_boss) {
+                boss_anim_update(g_boss);
+                // Update transforms for rendering
+                T3DMat4FP* mat = (T3DMat4FP*)g_boss->modelMat;
+                if (mat) {
+                    t3d_mat4fp_from_srt_euler(mat, g_boss->scale, g_boss->rot, g_boss->pos);
+                }
+            }
             // Continue camera movement during wait period (using same timer)
             const float cameraMoveDurationWait = 5.0f;
             float tWait = cutsceneCameraTimer / cameraMoveDurationWait;
@@ -394,8 +427,8 @@ void scene_update(void)
         case CUTSCENE_NONE:
             // Normal gameplay
             character_update();
-            if (bossActivated) {
-                boss_update();
+            if (bossActivated && g_boss) {
+                boss_update(g_boss);
             }
             dialog_controller_update();
             break;
@@ -458,7 +491,9 @@ void scene_draw(T3DViewport *viewport)
         
         //bvh_utility_draw_collision_mesh();
         character_draw();
-        boss_draw();
+        if (g_boss) {
+            boss_draw(g_boss);
+        }
     t3d_matrix_pop(1);
 
     // Overlay lock-on marker above the boss
@@ -477,8 +512,8 @@ void scene_draw(T3DViewport *viewport)
 
     // Draw UI elements after 3D rendering is complete (hide during cutscenes or death)
     if (!cutsceneActive && !isEndScreen) {
-        if (scene_is_boss_active()) {
-            boss_draw_ui();
+        if (scene_is_boss_active() && g_boss) {
+            boss_draw_ui(g_boss, viewport);
         }
         character_draw_ui();
     }
@@ -527,6 +562,10 @@ void scene_cleanup(void)
         free_uncached(mapMatrix);
         mapMatrix = NULL;
     }
-    boss_delete();
+    if (g_boss) {
+        boss_free(g_boss);
+        free(g_boss);
+        g_boss = NULL;
+    }
     dialog_controller_free();
 }

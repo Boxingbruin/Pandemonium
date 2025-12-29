@@ -8,6 +8,7 @@
 
 #include "boss.h"
 #include "dev.h"
+#include "dev/debug_draw.h"
 #include "character.h"
 
 #include "game_time.h"
@@ -29,7 +30,6 @@ static const float BOSS_SOUND_DISPLAY_DURATION = 2.5f;
 
 static bool bossLowHealthSoundPlayed = false;
 static bool bossPowerJumpImpactPlayed = false;
-static bool bossSecondSlamImpactPlayed = false;
 static bool bossRoarImpactSoundPlayed = false;
 static bool bossWasActive = false; // tracks rising edge of activation across restarts
 static float bossStrafeDirection = 1.0f; // 1.0 = right, -1.0 = left (for animation selection)
@@ -100,7 +100,7 @@ void boss_apply_damage(float amount)
 
 void boss_init(void) 
 {
-	bossModel = t3d_model_load("rom:/boss.t3dm");
+	bossModel = t3d_model_load("rom:/boss/boss.t3dm");
 
 	T3DSkeleton* skeleton = malloc(sizeof(T3DSkeleton));
 	*skeleton = t3d_skeleton_create(bossModel);
@@ -189,9 +189,15 @@ void boss_init(void)
 		.isAttacking = false,
 		.attackAnimTimer = 0.0f,
 		.blendFactor = 0.0f,
-		.blendDuration = 0.3f,  // 300ms blend duration
+		.blendDuration = 0.5f,  // 500ms blend duration
 		.blendTimer = 0.0f,
-		.isBlending = false
+		.isBlending = false,
+		.debugTargetingPos = {0.0f, 0.0f, 0.0f},
+		.targetingLocked = false,
+		.lockedTargetingPos = {0.0f, 0.0f, 0.0f},
+		.targetingUpdateTimer = 0.0f,
+		.lastPlayerPos = {0.0f, 0.0f, 0.0f},
+		.lastPlayerVel = {0.0f, 0.0f}
 	};
 
 	// Initialize the newly allocated matrix before assigning to global
@@ -215,23 +221,22 @@ static float bossTelegraphTimer = 0.0f;
 static const float BOSS_TELEGRAPH_DURATION = 1.5f;
 
 // Charge attack tracking
-static float chargeStartDistance = 0.0f;
 static bool chargeHasPassedPlayer = false;
 static const char* boss_get_state_name(void) {
 	switch (bossState) {
-		case ST_IDLE:          return "Idle";
-		case ST_CHASE:         return "Chase";
-		case ST_STRAFE:       return "Strafe";
-		case ST_ORBIT:        return "Orbit";
-		case ST_CHARGE:       return "Charge";
-		case ST_ATTACK:       return "Attack";
-		case ST_RECOVER:      return "Recover";
-		case ST_POWER_JUMP:   return "Power Jump";
-		case ST_COMBO_ATTACK: return "Combo Attack";
-		case ST_CHAIN_SWORD:  return "Chain Sword";
-		case ST_ROAR_STOMP:   return "Roar Stomp";
-		case ST_TRACKING_SLAM: return "Tracking Slam";
-		default:              return "Unknown";
+		case ST_IDLE:              return "Idle";
+		case ST_CHASE:             return "Chase";
+		case ST_STRAFE:            return "Strafe";
+		case ST_ORBIT:             return "Orbit";
+		case ST_CHARGE:            return "Charge";
+		case ST_ATTACK:            return "Attack";
+		case ST_RECOVER:           return "Recover";
+		case ST_POWER_JUMP:        return "Power Jump";
+		case ST_COMBO_ATTACK:      return "Combo Attack";
+		case ST_CHAIN_SWORD:       return "Chain Sword";
+		case ST_ROAR_STOMP:        return "Roar Stomp";
+		case ST_TRACKING_SLAM:     return "Slow Attack";
+		default:                   return "Unknown";
 	}
 }
 
@@ -251,12 +256,83 @@ static void predict_character_position(float *predictedPos, float predictionTime
     predictedPos[0] = character.pos[0];
     predictedPos[1] = character.pos[1];
     predictedPos[2] = character.pos[2];
-    
+
     // Get character velocity and add prediction
     float velX, velZ;
     character_get_velocity(&velX, &velZ);
     predictedPos[0] += velX * predictionTime;
     predictedPos[2] += velZ * predictionTime;
+}
+
+// Advanced targeting system with lag, anticipation, and attack locking
+static void boss_update_targeting_system(float dt) {
+    // Track player movement for anticipation
+    float currentPlayerPos[3] = {character.pos[0], character.pos[1], character.pos[2]};
+    float velX, velZ;
+    character_get_velocity(&velX, &velZ);
+
+    // Update player tracking data
+    boss.lastPlayerVel[0] = velX;
+    boss.lastPlayerVel[1] = velZ;
+
+    // Check if we should lock targeting (entering attack state)
+    bool shouldLockTargeting = boss_state_is_attack(bossState) && !boss.targetingLocked;
+
+    if (shouldLockTargeting) {
+        // Lock the current predicted target position for the attack
+        // Use different prediction times based on attack type
+        float predictionTime = 0.3f; // Default prediction time
+        switch (bossState) {
+            case ST_POWER_JUMP:
+                predictionTime = 1.0f; // Longer prediction for power jump (long-range attack)
+                break;
+            case ST_CHAIN_SWORD:
+                predictionTime = 0.8f; // Medium prediction for chain sword
+                break;
+            case ST_CHARGE:
+            case ST_TRACKING_SLAM:
+            case ST_COMBO_ATTACK:
+            case ST_ROAR_STOMP:
+            case ST_ATTACK:
+                predictionTime = 0.3f; // Short prediction for close/fast attacks
+                break;
+        }
+
+        predict_character_position(boss.lockedTargetingPos, predictionTime);
+        boss.targetingLocked = true;
+        boss.targetingUpdateTimer = 0.0f;
+    }
+
+    // Check if we should unlock targeting (leaving attack state)
+    if (!boss_state_is_attack(bossState) && boss.targetingLocked) {
+        boss.targetingLocked = false;
+    }
+
+    // Update targeting position based on state
+    if (boss.targetingLocked) {
+        // During attacks: use locked position (with slight lag for telegraphing)
+        boss.debugTargetingPos[0] = boss.lockedTargetingPos[0];
+        boss.debugTargetingPos[1] = boss.lockedTargetingPos[1];
+        boss.debugTargetingPos[2] = boss.lockedTargetingPos[2];
+    } else {
+        // During non-attack states: anticipate player movement
+        boss.targetingUpdateTimer += dt;
+
+        // Update targeting every 0.1-0.2 seconds for some delay/lag
+        if (boss.targetingUpdateTimer >= 0.15f) {
+            boss.targetingUpdateTimer = 0.0f;
+
+            // Anticipate where player will be based on current velocity
+            float anticipationTime = 0.4f; // Look ahead 0.4 seconds
+            predict_character_position(boss.debugTargetingPos, anticipationTime);
+
+            // Store current player position for next update
+            boss.lastPlayerPos[0] = currentPlayerPos[0];
+            boss.lastPlayerPos[1] = currentPlayerPos[1];
+            boss.lastPlayerPos[2] = currentPlayerPos[2];
+        }
+        // If not updating this frame, keep the current targeting position
+    }
 }
 
 // Animation control function
@@ -289,13 +365,16 @@ static void boss_begin_power_jump(void) {
     boss.powerJumpStartPos[1] = boss.pos[1];
     boss.powerJumpStartPos[2] = boss.pos[2];
     
-    // Calculate target with slight prediction
-    predict_character_position(boss.powerJumpTargetPos, 0.5f);
+    // Lock targeting position with 1.0s prediction time (matching power jump prediction)
+    predict_character_position(boss.lockedTargetingPos, 1.0f);
+    boss.targetingLocked = true;
+    
+    // Use locked targeting position for attack
+    boss.powerJumpTargetPos[0] = boss.lockedTargetingPos[0];
+    boss.powerJumpTargetPos[1] = boss.lockedTargetingPos[1];
+    boss.powerJumpTargetPos[2] = boss.lockedTargetingPos[2];
     boss.powerJumpHeight = 250.0f + ((float)(rand() % 5));
-    
-    // Sometimes do a double slam in phase 2
-    boss.powerJumpDoSecondSlam = (boss.phaseIndex == 2 && (rand() % 100) < 30);
-    
+
     boss.currentAttackName = "Power Jump";
     boss.attackNameDisplayTimer = 2.0f;
 }
@@ -310,24 +389,35 @@ static void boss_select_attack(void) {
     boss.currentAttackHasHit = false;
     
     // Simple distance-based attack selection with cooldown checks
-    if (dist < 50.0f && boss.trackingSlamCooldown <= 0.0f) {
+    // When distance is 0-200, prefer close attacks (tracking slam or roar/stomp)
+    if (dist <= 200.0f && boss.trackingSlamCooldown <= 0.0f) {
         // Close range - tracking slam
         bossState = ST_TRACKING_SLAM;
         boss.stateTimer = 0.0f;
         boss.trackingSlamCooldown = 8.0f; // 8 second cooldown
-        
-        // Variable hold time for unpredictability
-        boss.trackingSlamHoldTime = 1.0f + ((float)(rand() % 100) / 100.0f) * 1.5f;
-        boss.trackingSlamStartTime = boss.stateTimer;
-        
+
+        // Set attacking flag to trigger attack animation through state-based system
+        boss.isAttacking = true;
+        boss.attackAnimTimer = 0.0f;
+        boss.animationTransitionTimer = 0.0f;
+
         // Calculate target angle to player
         float angle = atan2f(-dx, dz);
         boss.trackingSlamTargetAngle = angle;
-        
-        boss.currentAttackName = "Tracking Slam";
+
+        boss.currentAttackName = "Slow Attack";
         boss.attackNameDisplayTimer = 2.0f;
     }
-    else if (dist > 50.0f && boss.chainSwordCooldown <= 0.0f) {
+    else if (dist <= 200.0f && boss.roarStompCooldown <= 0.0f) {
+        // Close range alternative - roar stomp (AOE)
+        bossState = ST_ROAR_STOMP;
+        boss.stateTimer = 0.0f;
+        boss.roarStompCooldown = 6.0f; // 6 second cooldown
+        
+        boss.currentAttackName = "Roar Stomp";
+        boss.attackNameDisplayTimer = 2.0f;
+    }
+    else if (dist > 200.0f && boss.chainSwordCooldown <= 0.0f) {
         // Long range - chain sword
         bossState = ST_CHAIN_SWORD;
         boss.stateTimer = 0.0f;
@@ -335,8 +425,10 @@ static void boss_select_attack(void) {
         boss.swordThrown = false;
         boss.chainSwordSlamHasHit = false;
         
-        // Predict where to throw sword
-        predict_character_position(boss.chainSwordTargetPos, 0.8f);
+        // Use locked targeting position for attack
+        boss.chainSwordTargetPos[0] = boss.lockedTargetingPos[0];
+        boss.chainSwordTargetPos[1] = boss.lockedTargetingPos[1];
+        boss.chainSwordTargetPos[2] = boss.lockedTargetingPos[2];
         
         boss.currentAttackName = "Chain Sword";
         boss.attackNameDisplayTimer = 2.0f;
@@ -374,64 +466,32 @@ static void boss_select_attack(void) {
 }
 
 static void boss_handle_tracking_slam_attack(float dt) {
-    // Phase 1: Hold and track (build up)
-    if (boss.stateTimer < boss.trackingSlamHoldTime) {
-        // Slowly track the player during buildup
+    // Stationary attack - boss stays in place and tries to hit the character
+
+    // Check for hit during slam
+    if (!boss.currentAttackHasHit) {
         float dx = character.pos[0] - boss.pos[0];
         float dz = character.pos[2] - boss.pos[2];
-        float targetAngle = atan2f(-dx, dz);
-        
-        // Smooth angle interpolation
-        float angleDiff = targetAngle - boss.rot[1];
-        while (angleDiff > T3D_PI) angleDiff -= 2.0f * T3D_PI;
-        while (angleDiff < -T3D_PI) angleDiff += 2.0f * T3D_PI;
-        
-        boss.rot[1] += angleDiff * 2.0f * dt; // Turn toward player
-        boss.trackingSlamTargetAngle = boss.rot[1];
-        
-        // Visual feedback: charge up effect
-    }
-    // Phase 2: Slam attack
-    else if (boss.stateTimer < boss.trackingSlamHoldTime + 0.3f) {
-        // Quick forward slam
-        float slamSpeed = 400.0f;
-        boss.velX = sinf(boss.trackingSlamTargetAngle) * slamSpeed;
-        boss.velZ = cosf(boss.trackingSlamTargetAngle) * slamSpeed;
-        
-        // Check for hit during slam
-        if (!boss.currentAttackHasHit) {
-            float dx = character.pos[0] - boss.pos[0];
-            float dz = character.pos[2] - boss.pos[2];
-            float dist = sqrtf(dx*dx + dz*dz);
-            
-            if (dist < 4.0f) { // Hit radius
-                character_apply_damage(25.0f);
-                boss.currentAttackHasHit = true;
-            }
+        float dist = sqrtf(dx*dx + dz*dz);
+
+        if (dist < 4.0f) { // Hit radius
+            character_apply_damage(25.0f);
+            boss.currentAttackHasHit = true;
         }
     }
-    // Phase 3: Recovery
-    else {
-        // Gradually reduce velocity
-        boss.velX *= 0.9f;
-        boss.velZ *= 0.9f;
-        
-        if (boss.stateTimer > boss.trackingSlamHoldTime + 1.5f) {
-            bossState = ST_STRAFE;
-            boss.stateTimer = 0.0f;
-        }
-    }
+
+    // Animation system will handle timing - attack completes when boss.isAttacking becomes false
 }
 
 static void boss_handle_chain_sword_attack(float dt) {
+    // Keep boss facing the target during the entire attack
+    float dx = boss.chainSwordTargetPos[0] - boss.pos[0];
+    float dz = boss.chainSwordTargetPos[2] - boss.pos[2];
+    // Use same rotation formula as strafe/chase for consistency
+    boss.rot[1] = -atan2f(-dz, dx) + T3D_PI;
+    
     // Phase 1: Throw sword (0.0 - 0.5s)
     if (!boss.swordThrown && boss.stateTimer < 0.5f) {
-        // Aim at predicted position
-        float dx = boss.chainSwordTargetPos[0] - boss.pos[0];
-        float dz = boss.chainSwordTargetPos[2] - boss.pos[2];
-        float targetAngle = atan2f(-dx, dz);
-        boss.rot[1] = targetAngle;
-        
         boss_trigger_attack_animation();
     }
     else if (!boss.swordThrown && boss.stateTimer >= 0.5f) {
@@ -453,12 +513,12 @@ static void boss_handle_chain_sword_attack(float dt) {
         boss.swordProjectilePos[1] = boss.pos[1] + 2.0f + sinf(t * T3D_PI) * 5.0f; // Arc
         
         // Check for hit
-        float dx = character.pos[0] - boss.swordProjectilePos[0];
-        float dz = character.pos[2] - boss.swordProjectilePos[2];
-        float dy = character.pos[1] - boss.swordProjectilePos[1];
-        float dist = sqrtf(dx*dx + dy*dy + dz*dz);
+        float hitDx = character.pos[0] - boss.swordProjectilePos[0];
+        float hitDz = character.pos[2] - boss.swordProjectilePos[2];
+        float hitDy = character.pos[1] - boss.swordProjectilePos[1];
+        float hitDist = sqrtf(hitDx*hitDx + hitDy*hitDy + hitDz*hitDz);
         
-        if (dist < 3.0f && !boss.currentAttackHasHit) {
+        if (hitDist < 3.0f && !boss.currentAttackHasHit) {
             character_apply_damage(20.0f);
 			boss_debug_sound("boss_chain_sword_impact");
 			boss_debug_sound("boss_attack_success");
@@ -477,11 +537,11 @@ static void boss_handle_chain_sword_attack(float dt) {
         boss.swordProjectilePos[2] = boss.chainSwordTargetPos[2];
         
         // Ground impact damage
-        float dx = character.pos[0] - boss.swordProjectilePos[0];
-        float dz = character.pos[2] - boss.swordProjectilePos[2];
-        float dist = sqrtf(dx*dx + dz*dz);
+        float impactDx = character.pos[0] - boss.swordProjectilePos[0];
+        float impactDz = character.pos[2] - boss.swordProjectilePos[2];
+        float impactDist = sqrtf(impactDx*impactDx + impactDz*impactDz);
         
-        if (dist < 5.0f && !boss.currentAttackHasHit) {
+        if (impactDist < 5.0f && !boss.currentAttackHasHit) {
             character_apply_damage(15.0f);
 			boss_debug_sound("boss_attack_success");
             boss.currentAttackHasHit = true;
@@ -489,25 +549,30 @@ static void boss_handle_chain_sword_attack(float dt) {
         }
     }
     
-    // Phase 4: Pull boss toward sword (2.0s+)
-    if (boss.stateTimer >= 2.0f && boss.stateTimer < 3.0f) {
+    // Phase 4: Pull boss toward sword (2.0s - 3.5s)
+    if (boss.stateTimer >= 2.0f && boss.stateTimer < 3.5f) {
         // Boss gets pulled toward sword
-        float dx = boss.swordProjectilePos[0] - boss.pos[0];
-        float dz = boss.swordProjectilePos[2] - boss.pos[2];
-        float dist = sqrtf(dx*dx + dz*dz);
+        float pullDx = boss.swordProjectilePos[0] - boss.pos[0];
+        float pullDz = boss.swordProjectilePos[2] - boss.pos[2];
+        float pullDist = sqrtf(pullDx*pullDx + pullDz*pullDz);
         
-        if (dist > 2.0f) {
+        if (pullDist > 2.0f) {
             float pullSpeed = 200.0f;
-            boss.velX = (dx / dist) * pullSpeed;
-            boss.velZ = (dz / dist) * pullSpeed;
+            boss.velX = (pullDx / pullDist) * pullSpeed;
+            boss.velZ = (pullDz / pullDist) * pullSpeed;
         } else {
             boss.velX *= 0.8f;
             boss.velZ *= 0.8f;
         }
     }
     
-    // End attack
-    if (boss.stateTimer > 3.5f) {
+    // End attack - ensure clean transition
+    if (boss.stateTimer >= 3.5f) {
+        // Reset attack state
+        boss.swordThrown = false;
+        boss.chainSwordSlamHasHit = false;
+        boss.velX = 0.0f;
+        boss.velZ = 0.0f;
         bossState = ST_STRAFE;
         boss.stateTimer = 0.0f;
     }
@@ -516,10 +581,10 @@ static void boss_handle_chain_sword_attack(float dt) {
 static void boss_handle_roar_stomp_attack(float dt) {
     // Phase 1: Roar buildup (0.0 - 1.0s)
     if (boss.stateTimer < 1.0f) {
-        // Face player
+        // Face player - use consistent rotation formula
         float dx = character.pos[0] - boss.pos[0];
         float dz = character.pos[2] - boss.pos[2];
-        boss.rot[1] = atan2f(-dx, dz);
+        boss.rot[1] = -atan2f(-dz, dx) + T3D_PI;
         
         if (boss.stateTimer > 0.8f && boss.stateTimer < 0.9f) {
             boss_trigger_attack_animation();
@@ -558,13 +623,24 @@ static void boss_handle_roar_stomp_attack(float dt) {
 }
 
 static void boss_handle_power_jump_attack(float dt) {
-    const float jumpDuration = 1.2f;
-    const float landDuration = 0.3f;
-    const float totalDuration = jumpDuration + landDuration;
-    
-    // Phase 1: Jump arc (0.0 - 1.2s)
-    if (boss.stateTimer < jumpDuration) {
-        float t = boss.stateTimer / jumpDuration;
+    // Frame timings at 30 FPS: 0-41 idle, 41-83 jump+land, 83-136 land+recover
+    const float idleDuration = 41.0f / 25.0f;      // 1.367s
+    const float jumpDuration = 42.0f / 25.0f;      // 1.4s
+    const float recoverDuration = 53.0f / 25.0f;   // 1.767s
+    const float totalDuration = idleDuration + jumpDuration + recoverDuration;
+
+    // Phase 1: Idle preparation (0.0 - 1.367s)
+    if (boss.stateTimer < idleDuration) {
+        // Stay in place, face target direction
+        float dx = boss.powerJumpTargetPos[0] - boss.pos[0];
+        float dz = boss.powerJumpTargetPos[2] - boss.pos[2];
+        if (dx != 0.0f || dz != 0.0f) {
+            boss.rot[1] = -atan2f(-dz, dx) + T3D_PI;
+        }
+    }
+    // Phase 2: Jump arc (1.367 - 2.767s)
+    else if (boss.stateTimer < idleDuration + jumpDuration) {
+        float t = (boss.stateTimer - idleDuration) / jumpDuration;
         
         // Smooth arc from start to target
         boss.pos[0] = boss.powerJumpStartPos[0] + (boss.powerJumpTargetPos[0] - boss.powerJumpStartPos[0]) * t;
@@ -573,24 +649,24 @@ static void boss_handle_power_jump_attack(float dt) {
         // Parabolic height
         boss.pos[1] = boss.powerJumpStartPos[1] + boss.powerJumpHeight * sinf(t * T3D_PI);
         
-        // Face movement direction
+        // Face movement direction - use consistent rotation formula
         float dx = boss.powerJumpTargetPos[0] - boss.powerJumpStartPos[0];
         float dz = boss.powerJumpTargetPos[2] - boss.powerJumpStartPos[2];
         if (dx != 0.0f || dz != 0.0f) {
-            boss.rot[1] = atan2f(-dx, dz);
+            boss.rot[1] = -atan2f(-dz, dx) + T3D_PI;
         }
     }
-    // Phase 2: Landing impact (1.2 - 1.5s)
+    // Phase 3: Landing impact + recovery (2.767 - 4.533s)
     else if (boss.stateTimer < totalDuration) {
-        // Boss hits ground
+        // Boss hits ground and recovers
         boss.pos[1] = boss.powerJumpStartPos[1];
-		if (boss.stateTimer >= jumpDuration && !bossPowerJumpImpactPlayed) {
+		if (boss.stateTimer >= idleDuration + jumpDuration && !bossPowerJumpImpactPlayed) {
 			boss_debug_sound("boss_power_jump_impact");
 			bossPowerJumpImpactPlayed = true;
 		}
         
         // Check for impact damage
-        if (boss.stateTimer >= jumpDuration && boss.stateTimer < jumpDuration + 0.1f && !boss.currentAttackHasHit) {
+        if (boss.stateTimer >= idleDuration + jumpDuration && boss.stateTimer < idleDuration + jumpDuration + 0.1f && !boss.currentAttackHasHit) {
             float dx = character.pos[0] - boss.pos[0];
             float dz = character.pos[2] - boss.pos[2];
             float dist = sqrtf(dx*dx + dz*dz);
@@ -602,41 +678,11 @@ static void boss_handle_power_jump_attack(float dt) {
                 // printf("[Boss] Power jump impact hit!\n");
             }
         }
-        
+
         boss_trigger_attack_animation();
-    }
-    // Phase 3: Second jump (if enabled)
-    else if (boss.powerJumpDoSecondSlam && boss.stateTimer < totalDuration + 1.5f) {
-        float secondT = (boss.stateTimer - totalDuration) / 1.5f;
-        
-        if (secondT < 1.0f) {
-            // Predict new position for second slam
-            predict_character_position(boss.powerJumpTargetPos, 0.3f);
-            
-            boss.pos[0] = boss.pos[0] + (boss.powerJumpTargetPos[0] - boss.pos[0]) * secondT;
-            boss.pos[2] = boss.pos[2] + (boss.powerJumpTargetPos[2] - boss.pos[2]) * secondT;
-            boss.pos[1] = boss.powerJumpStartPos[1] + (boss.powerJumpHeight * 0.7f) * sinf(secondT * T3D_PI);
-        }
-        
-        // Second impact
-        if (boss.stateTimer >= totalDuration + 1.5f - 0.1f && boss.stateTimer < totalDuration + 1.5f) {
-			if (!bossSecondSlamImpactPlayed) {
-				boss_debug_sound("boss_power_jump_impact");
-				bossSecondSlamImpactPlayed = true;
-			}
-            float dx = character.pos[0] - boss.pos[0];
-            float dz = character.pos[2] - boss.pos[2];
-            float dist = sqrtf(dx*dx + dz*dz);
-            
-            if (dist < 6.0f) {
-                character_apply_damage(25.0f);
-				boss_debug_sound("boss_attack_success");
-            }
-        }
     }
     // End attack
     else {
-        boss.powerJumpDoSecondSlam = false;
         bossState = ST_STRAFE;
         boss.stateTimer = 0.0f;
     }
@@ -687,7 +733,8 @@ static void boss_handle_combo_attack(float dt) {
         // Step 1: Sweep attack
         float dx = character.pos[0] - boss.pos[0];
         float dz = character.pos[2] - boss.pos[2];
-        boss.rot[1] = atan2f(-dx, dz);
+        // Use consistent rotation formula
+        boss.rot[1] = -atan2f(-dz, dx) + T3D_PI;
         
         if (boss.stateTimer > 0.5f && boss.stateTimer < 0.7f && !boss.currentAttackHasHit) {
             float dist = sqrtf(dx*dx + dz*dz);
@@ -752,8 +799,8 @@ static void boss_update_movement_and_physics(float dt) {
     
     const float ACCEL = 7.0f;
     const float FRICTION = 10.0f;
-    // Match player top speed (~200) so the boss can keep up during chase
-    const float SPEED_CHASE = boss.phaseIndex == 1 ? 200.0f : 220.0f;
+    // Reduced chase speed to be less aggressive
+    const float SPEED_CHASE = 60.0f;
     const float SPEED_ORBIT = boss.phaseIndex == 1 ? 90.0f : 120.0f;
     const float SPEED_CHARGE = boss.phaseIndex == 1 ? 220.0f : 280.0f;
     // Slow strafe speed for Dark Souls-style behavior
@@ -865,10 +912,15 @@ static void boss_update_movement_and_physics(float dt) {
             
             
         case ST_CHARGE:
-            // Charge toward player
-            if (dist > 0.0f) {
-                desiredX = dx / dist;
-                desiredZ = dz / dist;
+            // Charge toward locked targeting position
+            {
+                float targetDx = boss.lockedTargetingPos[0] - boss.pos[0];
+                float targetDz = boss.lockedTargetingPos[2] - boss.pos[2];
+                float targetDist = sqrtf(targetDx*targetDx + targetDz*targetDz);
+                if (targetDist > 0.0f) {
+                    desiredX = targetDx / targetDist;
+                    desiredZ = targetDz / targetDist;
+                }
             }
             maxSpeed = SPEED_CHARGE;
             break;
@@ -940,6 +992,12 @@ static void boss_update_movement_and_physics(float dt) {
         // Use same formula as attack states
         boss.rot[1] = -atan2f(-faceDz, faceDx) + T3D_PI;
         return; // Skip smooth rotation for strafe/chase
+    } else if (bossState == ST_CHARGE) {
+        // During charge, face the locked targeting position immediately
+        float faceDx = boss.lockedTargetingPos[0] - boss.pos[0];
+        float faceDz = boss.lockedTargetingPos[2] - boss.pos[2];
+        boss.rot[1] = -atan2f(-faceDz, faceDx) + T3D_PI;
+        return; // Skip smooth rotation for charge
     } else if (bossState >= ST_POWER_JUMP) {
         // Attack states handle their own rotation
         return;
@@ -968,8 +1026,9 @@ static void boss_update_animation_system(float dt) {
     // Update attack animation timer
     if (boss.isAttacking) {
         boss.attackAnimTimer += dt;
-        const float BOSS_ATTACK_DURATION = 0.9f;
-        if (boss.attackAnimTimer >= BOSS_ATTACK_DURATION) {
+        // Use longer duration for slow attack to allow animation to complete (155 frames at 60 FPS = 2.58s, doubled = 5.2s)
+        const float attackDuration = (bossState == ST_TRACKING_SLAM) ? 6.0f : 0.9f;
+        if (boss.attackAnimTimer >= attackDuration) {
             boss.isAttacking = false;
             boss.attackAnimTimer = 0.0f;
         }
@@ -1027,21 +1086,23 @@ static void boss_update_animation_system(float dt) {
                 savedTime = boss.animations[boss.currentAnimation]->time;
             }
             
-            // Reset blend skeleton and attach previous animation (matches example pattern)
+            // CRITICAL FIX: Set up blend skeleton to preserve current visual state
+            // Reset blend skeleton and attach previous animation (which is still current at this point)
             t3d_skeleton_reset(boss.skeletonBlend);
             t3d_anim_attach(boss.animations[boss.previousAnimation], boss.skeletonBlend);
             t3d_anim_set_playing(boss.animations[boss.previousAnimation], true);
             // Restore the animation time so it continues from where it was
             t3d_anim_set_time(boss.animations[boss.previousAnimation], savedTime);
-            // Don't update skeleton here - let the normal update loop handle it (matches example)
             
-            // Start blending (will begin after first animation update)
+            // Start blending - the blend skeleton will be updated in the normal animation loop
             boss.isBlending = true;
             boss.blendFactor = 0.0f;
-            boss.blendTimer = -0.0001f; // Start slightly negative so first frame skips blending
+            boss.blendTimer = 0.0f; // Start at 0 so blending can begin after blend skeleton is updated
         }
         
         // Start new animation on main skeleton
+        // IMPORTANT: We reset the main skeleton here, which will cause a visual snap on the first frame
+        // However, blending will smooth this out over the next frames
         boss.currentAnimation = targetAnim;
         if (boss.currentAnimation < boss.animationCount) {
             // Reset main skeleton and attach new animation
@@ -1082,25 +1143,31 @@ static void boss_update_animation_system(float dt) {
         }
     }
     
+    // Update blend skeleton if blending is active
+    // This applies the previous animation's pose to the blend skeleton before blending
+    if (boss.isBlending && boss.skeletonBlend && 
+        boss.previousAnimation >= 0 && boss.previousAnimation < boss.animationCount &&
+        boss.animations[boss.previousAnimation] && boss.animations[boss.previousAnimation]->isPlaying) {
+        // Update the blend skeleton to apply the previous animation's current pose
+        // This must happen after animations are updated but before blending
+        t3d_skeleton_update(boss.skeletonBlend);
+    }
+    
     // Blend skeletons if blending is active (matches example pattern)
-    // Note: We blend BEFORE updating the skeleton, and we never update the blend skeleton directly
-    // The blend skeleton's state comes from its attached animation being updated
+    // Note: We blend BEFORE updating the main skeleton
     if (boss.isBlending && boss.skeletonBlend) {
         // Safety check: Only proceed if we have all required components
-        // Also ensure blend timer has advanced (animation has been updated at least once)
         bool canBlend = (boss.previousAnimation >= 0 && 
                         boss.previousAnimation < boss.animationCount && 
                         boss.animations[boss.previousAnimation] != NULL &&
                         boss.animations[boss.previousAnimation]->isPlaying &&
                         boss.blendFactor >= 0.0f && 
                         boss.blendFactor <= 1.0f &&
-                        boss.blendTimer > 0.0f); // Ensure animation has been updated at least once
+                        boss.blendTimer >= 0.0f); // Allow blending after blend skeleton is updated
         
         if (canBlend) {
             // Blend skeletons: blend from skeletonBlend (old) to skeleton (new), store result in skeleton
             // blendFactor: 0.0 = all old (skeletonBlend), 1.0 = all new (skeleton)
-            // IMPORTANT: We do NOT update the blend skeleton - only blend it into the main skeleton
-            // The blend skeleton's state comes from its attached animation
             t3d_skeleton_blend(boss.skeletonBlend, boss.skeleton, boss.skeleton, boss.blendFactor);
         } else {
             // Not safe to blend - disable blending to prevent crashes
@@ -1184,6 +1251,9 @@ void boss_update(void) {
 	float dz = target.v[2] - boss.pos[2];
 	float dist = sqrtf(dx*dx + dz*dz);
 
+	// Advanced targeting system with lag, delay, and anticipation
+	boss_update_targeting_system(dt);
+
 	// Phase switch at 50% HP
 	if (boss.phaseIndex == 1 && boss.health <= boss.maxHealth * 0.5f) {
 		boss.phaseIndex = 2;
@@ -1214,21 +1284,21 @@ void boss_update(void) {
 				boss_begin_power_jump();
 				break;
 			}
-			// Continue chasing and attack when close enough - don't transition to strafe
-			const float MAX_ATTACK_DISTANCE_CHASE = 100.0f; // Attack when within this distance
-			if (boss.attackCooldown <= 0.0f && dist <= MAX_ATTACK_DISTANCE_CHASE) {
+			// Attack when distance is between 0 and 200 - prefer close attacks
+			const float MIN_ATTACK_DISTANCE_CHASE = 0.0f;
+			const float MAX_ATTACK_DISTANCE_CHASE = 200.0f; // Attack when within this distance
+			if (boss.attackCooldown <= 0.0f && dist >= MIN_ATTACK_DISTANCE_CHASE && dist <= MAX_ATTACK_DISTANCE_CHASE) {
+				// When close (0-200), prefer close attacks (tracking slam or roar/stomp)
 				// Random chance to either charge or use special attack
 				float r = (float)(rand() % 100) / 100.0f;
 				if (r < 0.3f) { // 30% chance for basic charge
 					bossState = ST_CHARGE;
 					boss.stateTimer = 0.0f;
 					boss.attackCooldown = 2.0f;
-					// Store initial distance for charge tracking
-					chargeStartDistance = dist;
 					chargeHasPassedPlayer = false;
 					printf("[Boss] CHARGE!\n");
 				} else {
-					// Use sophisticated attack selection
+					// Use sophisticated attack selection (will prefer close attacks when distance is 0-200)
 					boss_select_attack();
 				}
 			}
@@ -1236,7 +1306,8 @@ void boss_update(void) {
 			
 		case ST_STRAFE:
 			// If player moves too far away, chase them (use higher threshold to prevent rapid switching)
-			if (dist > COMBAT_RADIUS + 350.0f) {
+			// But don't immediately chase if we just finished a slow attack (give time for repositioning)
+			if (dist > COMBAT_RADIUS + 350.0f && boss.stateTimer > 0.1f) {
 				bossState = ST_CHASE;
 				boss.stateTimer = 0.0f;
 				break;
@@ -1253,8 +1324,6 @@ void boss_update(void) {
 					bossState = ST_CHARGE;
 					boss.stateTimer = 0.0f;
 					boss.attackCooldown = 2.0f;
-					// Store initial distance for charge tracking
-					chargeStartDistance = dist;
 					chargeHasPassedPlayer = false;
 					printf("[Boss] CHARGE!\n");
 				} else {
@@ -1265,24 +1334,26 @@ void boss_update(void) {
 			break;
 			
 		case ST_CHARGE:
-			// Calculate current distance to player
+			// Calculate distance to locked target position (where we're charging toward)
 			{
-				float dx = character.pos[0] - boss.pos[0];
-				float dz = character.pos[2] - boss.pos[2];
-				float currentDist = sqrtf(dx*dx + dz*dz);
-				
-				// Track if we've gotten close to the player (within 8 units)
-				if (!chargeHasPassedPlayer && currentDist < 8.0f) {
+				float targetDx = boss.lockedTargetingPos[0] - boss.pos[0];
+				float targetDz = boss.lockedTargetingPos[2] - boss.pos[2];
+				float distToTarget = sqrtf(targetDx*targetDx + targetDz*targetDz);
+
+				// Track if we've reached the target point (within 3 units)
+				if (!chargeHasPassedPlayer && distToTarget < 3.0f) {
 					chargeHasPassedPlayer = true;
 				}
-				
-				// Continue charging until we've passed the player:
-				// - We got close to them (chargeHasPassedPlayer = true)
-				// - AND we're now further away than when we started (currentDist > chargeStartDistance)
-				// Also have a maximum duration timeout (5 seconds) as a safety
-				bool hasPassedPlayer = chargeHasPassedPlayer && currentDist > chargeStartDistance;
-				
-				if (hasPassedPlayer || boss.stateTimer > 5.0f) {
+
+				// Continue charging for a bit after reaching the target:
+				// - We reached the target (chargeHasPassedPlayer = true)
+				// - AND we've charged for at least 1.5 seconds total (minimum charge duration)
+				// - OR we've charged for 2.5 seconds (maximum charge duration)
+				bool reachedTarget = chargeHasPassedPlayer;
+				bool minimumChargeTime = boss.stateTimer >= 1.5f;
+				bool maximumChargeTime = boss.stateTimer > 3.0f; // Increased from 5.0f for more controlled duration
+
+				if ((reachedTarget && minimumChargeTime) || maximumChargeTime) {
 					bossState = ST_RECOVER;
 					boss.stateTimer = 0.0f;
 					chargeHasPassedPlayer = false;
@@ -1354,6 +1425,16 @@ void boss_update(void) {
 			
 		case ST_TRACKING_SLAM:
 			boss_handle_tracking_slam_attack(dt);
+			// Transition to strafe when animation completes
+			if (!boss.isAttacking) {
+				// Wait for blend to complete before changing state
+				boss.animationTransitionTimer += dt;
+				if (boss.animationTransitionTimer >= boss.blendDuration) {
+					bossState = ST_STRAFE;
+					boss.stateTimer = 0.0f;
+					boss.animationTransitionTimer = 0.0f;
+				}
+			}
 			break;
 	}
 
@@ -1362,7 +1443,6 @@ void boss_update(void) {
 		switch (bossState) {
 			case ST_POWER_JUMP:
 				bossPowerJumpImpactPlayed = false;
-				bossSecondSlamImpactPlayed = false;
 				boss_debug_sound("boss_power_jump_windup");
 				break;
 			case ST_COMBO_ATTACK:
@@ -1506,7 +1586,6 @@ void boss_reset(void)
 	bossDebugSoundTimer = 0.0f;
 	bossLowHealthSoundPlayed = false;
 	bossPowerJumpImpactPlayed = false;
-	bossSecondSlamImpactPlayed = false;
 	bossRoarImpactSoundPlayed = false;
 	boss.health = boss.maxHealth;
 	boss.phaseIndex = 1;
@@ -1524,10 +1603,26 @@ void boss_reset(void)
 	boss.currentAttackHasHit = false;
 	boss.currentAttackName = NULL;
 	boss.attackNameDisplayTimer = 0.0f;
+	boss.animationTransitionTimer = 0.0f;
 	
 	// Reset position to origin or keep current (depending on game design)
 	// boss.pos values will be set by the scene initialization
-	
+
+	// Reset targeting system
+	boss.debugTargetingPos[0] = 0.0f;
+	boss.debugTargetingPos[1] = 0.0f;
+	boss.debugTargetingPos[2] = 0.0f;
+	boss.targetingLocked = false;
+	boss.lockedTargetingPos[0] = 0.0f;
+	boss.lockedTargetingPos[1] = 0.0f;
+	boss.lockedTargetingPos[2] = 0.0f;
+	boss.targetingUpdateTimer = 0.0f;
+	boss.lastPlayerPos[0] = 0.0f;
+	boss.lastPlayerPos[1] = 0.0f;
+	boss.lastPlayerPos[2] = 0.0f;
+	boss.lastPlayerVel[0] = 0.0f;
+	boss.lastPlayerVel[1] = 0.0f;
+
 	// Reset velocity
 	boss.velX = 0.0f;
 	boss.velZ = 0.0f;
@@ -1542,7 +1637,7 @@ void boss_reset(void)
 	boss.blendTimer = 0.0f;
 }
 
-void boss_draw_ui()
+void boss_draw_ui(T3DViewport *viewport)
 {
 	// Show simple HUD info when the boss is active
 	if (boss.health <= 0 || !scene_is_boss_active() || scene_is_cutscene_active()) {
@@ -1610,5 +1705,14 @@ void boss_draw_ui()
         rdpq_set_prim_color(RGBA32(0x66, 0x66, 0x66, 0xFF)); // Grey for blending inactive
         rdpq_text_printf(NULL, FONT_UNBALANCED, 20, y, "Blending: OFF");
         rdpq_set_prim_color(RGBA32(255, 255, 255, 255));
+    }
+
+    // Draw boss targeting debug visualization
+    if (scene_is_boss_active()) {
+        T3DVec3 targetPos = {{boss.debugTargetingPos[0], boss.debugTargetingPos[1], boss.debugTargetingPos[2]}};
+        // Draw larger orange sphere at targeting position (size 1.5 for better visibility)
+        debug_draw_sphere(viewport, &targetPos, 4.0f, DEBUG_COLORS[5]);
+        // Also draw a cross for extra visibility
+        debug_draw_cross(viewport, &targetPos, 4.0f, DEBUG_COLORS[5]);
     }
 }
