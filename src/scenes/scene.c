@@ -27,12 +27,38 @@
 #include "collision_mesh.h"
 #include <t3d/t3dmath.h>
 
+
 // TODO: This should not be declared in the header file, as it is only used externally (temp)
 #include "dev.h"
+#include "debug_draw.h"
 
 T3DModel* mapModel;
 rspq_block_t* mapDpl;
 T3DMat4FP* mapMatrix;
+
+T3DModel* sunshaftModel;
+rspq_block_t* sunshaftDpl;
+T3DMat4FP* sunshaftMatrix;
+
+T3DModel* pillarsModel;
+rspq_block_t* pillarsDpl;
+T3DMat4FP* pillarsMatrix;
+
+T3DModel* chainsModel;
+rspq_block_t* chainsDpl;
+T3DMat4FP* chainsMatrix;
+
+T3DModel* fogDoorModel;
+rspq_block_t* fogDoorDpl;
+T3DMat4FP* fogDoorMatrix;
+
+T3DModel* windowsModel;
+rspq_block_t* windowsDpl;
+T3DMat4FP* windowsMatrix;
+
+T3DModel* roomLedgeModel;
+rspq_block_t* roomLedgeDpl;
+T3DMat4FP* roomLedgeMatrix;
 
 // Cutscene state management
 typedef enum {
@@ -41,7 +67,7 @@ typedef enum {
     CUTSCENE_BOSS_INTRO_WAIT
 } CutsceneState;
 
-static CutsceneState cutsceneState = CUTSCENE_BOSS_INTRO;
+static CutsceneState cutsceneState = CUTSCENE_BOSS_INTRO_WAIT;
 static float cutsceneTimer = 0.0f;
 static float cutsceneCameraTimer = 0.0f;  // Separate timer for camera movement (doesn't reset)
 static bool bossActivated = false;
@@ -192,9 +218,9 @@ void scene_init(void)
     
     // ==== Lighting ====
     game_lighting_initialize();
-    colorAmbient[2] = 100;
-    colorAmbient[1] = 100;
-    colorAmbient[0] = 100;
+    colorAmbient[2] = 255;
+    colorAmbient[1] = 255;
+    colorAmbient[0] = 255;
     colorAmbient[3] = 0xFF;
 
     colorDir[2] = 0xFF;
@@ -212,18 +238,70 @@ void scene_init(void)
     collision_mesh_set_transform(6.2f, 0.0f, -5.0f, 0.0f);
     collision_mesh_init();
     
-    // Load and setup map
-    mapModel = t3d_model_load("rom:/bossroom/bossroom.t3dm");
+    // ===== LOAD MAP =====
+    mapModel = t3d_model_load("rom:/boss_room/room.t3dm");
     rspq_block_begin();
     t3d_model_draw(mapModel);
     mapDpl = rspq_block_end();
     
-    // Create map matrix once
+    // Create map matrix
     mapMatrix = malloc_uncached(sizeof(T3DMat4FP));
     t3d_mat4fp_from_srt_euler(mapMatrix, 
-        (float[3]){0.1f, 0.1f, 0.1f},    // scale to match character
+        (float[3]){MODEL_SCALE, MODEL_SCALE, MODEL_SCALE},    // scale to match character
         (float[3]){0.0f, 0.0f, 0.0f},    // rotation
         (float[3]){0.0f, -5.0f, 0.0f}    // ground level position
+    );
+
+    // ===== LOAD PILLARS =====
+    pillarsModel = t3d_model_load("rom:/boss_room/pillars.t3dm");
+    rspq_block_begin();
+    t3d_model_draw(pillarsModel);
+    pillarsDpl = rspq_block_end();
+    
+    pillarsMatrix = malloc_uncached(sizeof(T3DMat4FP));
+    t3d_mat4fp_from_srt_euler(pillarsMatrix, 
+        (float[3]){MODEL_SCALE, MODEL_SCALE, MODEL_SCALE},
+        (float[3]){0.0f, 0.0f, 0.0f},
+        (float[3]){0.0f, -5.0f, 0.0f}
+    );
+
+    // ===== LOAD LEDGE =====
+    roomLedgeModel = t3d_model_load("rom:/boss_room/room_ledge_walls.t3dm");
+    rspq_block_begin();
+    t3d_model_draw(roomLedgeModel);
+    roomLedgeDpl = rspq_block_end();
+    
+    roomLedgeMatrix = malloc_uncached(sizeof(T3DMat4FP));
+    t3d_mat4fp_from_srt_euler(roomLedgeMatrix, 
+        (float[3]){MODEL_SCALE, MODEL_SCALE, MODEL_SCALE},
+        (float[3]){0.0f, 0.0f, 0.0f},
+        (float[3]){0.0f, -5.0f, 0.0f}
+    );
+
+    // ===== LOAD WINDOWS =====
+    windowsModel = t3d_model_load("rom:/boss_room/windows.t3dm");
+    rspq_block_begin();
+    t3d_model_draw(windowsModel);
+    windowsDpl = rspq_block_end();
+    
+    windowsMatrix = malloc_uncached(sizeof(T3DMat4FP));
+    t3d_mat4fp_from_srt_euler(windowsMatrix, 
+        (float[3]){MODEL_SCALE, MODEL_SCALE, MODEL_SCALE},
+        (float[3]){0.0f, 0.0f, 0.0f},
+        (float[3]){0.0f, -5.0f, 0.0f}
+    );
+
+    // ===== LOAD CHAINS =====
+    chainsModel = t3d_model_load("rom:/boss_room/chains.t3dm");
+    rspq_block_begin();
+    t3d_model_draw(chainsModel);
+    chainsDpl = rspq_block_end();
+
+    chainsMatrix = malloc_uncached(sizeof(T3DMat4FP));
+    t3d_mat4fp_from_srt_euler(chainsMatrix, 
+        (float[3]){MODEL_SCALE, MODEL_SCALE, MODEL_SCALE},
+        (float[3]){0.0f, 0.0f, 0.0f},
+        (float[3]){0.0f, -5.0f, 0.0f}
     );
     
     // Initialize character
@@ -461,22 +539,22 @@ void scene_fixed_update(void)
 {
 }
 
-#include "dev/debug_draw.h"
-
 void scene_draw(T3DViewport *viewport) 
 {
     t3d_frame_start();
+    rdpq_mode_dithering(DITHER_NONE_NONE);
     t3d_viewport_attach(viewport);
 
-    // Fog (disabled for now; re-enable if UI handling is updated)
+    // Fog
+    color_t fogColor = (color_t){0, 0, 0, 0xFF};
     rdpq_set_prim_color((color_t){0xFF, 0xFF, 0xFF, 0xFF});
-    // rdpq_mode_fog(RDPQ_FOG_STANDARD);
-    // rdpq_set_fog_color((color_t){242, 218, 166, 0xFF});
+    rdpq_mode_fog(RDPQ_FOG_STANDARD);
+    rdpq_set_fog_color(fogColor);
 
     t3d_screen_clear_color(RGBA32(0, 0, 0, 0xFF));
     t3d_screen_clear_depth();
 
-    t3d_fog_set_range(150.0f, 450.0f);
+    t3d_fog_set_range(200.0f, 800.0f);
     t3d_fog_set_enabled(true);
 
     // Lighting
@@ -484,12 +562,30 @@ void scene_draw(T3DViewport *viewport)
     t3d_light_set_directional(0, colorDir, &lightDirVec);
     t3d_light_set_count(1);
 
+    rdpq_sync_pipe();
+    rdpq_mode_zbuf(false, false);
+
     t3d_matrix_push_pos(1);
         // Draw map at origin - position as ground level
         t3d_matrix_set(mapMatrix, true);
         rspq_block_run(mapDpl);
         
-        //bvh_utility_draw_collision_mesh();
+        t3d_matrix_set(windowsMatrix, true);
+        rspq_block_run(windowsDpl);
+    t3d_matrix_pop(1);
+
+    rdpq_sync_pipe();
+    rdpq_mode_zbuf(true, true);
+
+    t3d_matrix_push_pos(1);   
+        t3d_matrix_set(roomLedgeMatrix, true);
+        rspq_block_run(roomLedgeDpl);
+
+        t3d_matrix_set(pillarsMatrix, true);
+        rspq_block_run(pillarsDpl);
+    t3d_matrix_pop(1); 
+
+    t3d_matrix_push_pos(1);
         character_draw();
         if (g_boss) {
             boss_draw(g_boss);
