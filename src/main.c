@@ -103,16 +103,47 @@ int main(void)
         
         // ===== UPDATE LOOP =====
         mixer_try_play();
-        camera_update(&viewport);
+        
+        // Update dev controller to check menu state
+        if(DEV_MODE)
+        {
+            dev_controller_update();
+        }
+        
+        // Pause game updates when dev menu is open
+        bool devMenuOpen = DEV_MODE && dev_menu_is_open();
+        
+        // Check if camera is in free camera mode (needs updates even when paused)
+        bool cameraNeedsUpdate = (cameraState == CAMERA_FREECAM);
+        
+        if(!devMenuOpen)
+        {
+            camera_update(&viewport);
 
-        // Update menu controller first to handle input
-        menu_controller_update();
+            // Update menu controller first to handle input
+            menu_controller_update();
 
-        scene_update();
-        scene_fixed_update();
+            scene_update();
+            scene_fixed_update();
+        }
+        else
+        {
+            // Still update camera if in free camera mode (for dev tools)
+            if(cameraNeedsUpdate)
+            {
+                camera_update(&viewport);
+            }
+            
+            // Still update menu controller even when dev menu is open (for pause menu)
+            menu_controller_update();
+        }
 
         // ===== DRAW LOOP =====
-        scene_draw(&viewport); // Draw scene
+        // Draw scene when dev menu is not open, or when free camera is active (so we can see the world)
+        if(!devMenuOpen || cameraNeedsUpdate)
+        {
+            scene_draw(&viewport); // Draw scene
+        }
         
         // Draw menu on top of everything
         menu_controller_draw();
@@ -152,7 +183,6 @@ int main(void)
         if(DEV_MODE)
         {
             dev_frame_update();
-            dev_controller_update();
         }
 
         if(frame >= 30)

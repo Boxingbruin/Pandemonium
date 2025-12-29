@@ -22,14 +22,28 @@
 
 #include "game_time.h"
 
-// Animation module internal state
-typedef struct {
-    // These are stored in Boss but owned/managed here
-    // We access them through the Boss struct
-} BossAnimInternal;
 
 void boss_anim_init(Boss* boss) {
     if (!boss) return;
+    
+    // Stop all animations first to ensure clean state
+    if (boss->animations) {
+        T3DAnim** anims = (T3DAnim**)boss->animations;
+        for (int i = 0; i < boss->animationCount; i++) {
+            if (anims[i]) {
+                t3d_anim_set_playing(anims[i], false);
+                t3d_anim_set_time(anims[i], 0.0f);
+            }
+        }
+    }
+    
+    // Reset skeletons
+    if (boss->skeleton) {
+        t3d_skeleton_reset((T3DSkeleton*)boss->skeleton);
+    }
+    if (boss->skeletonBlend) {
+        t3d_skeleton_reset((T3DSkeleton*)boss->skeletonBlend);
+    }
     
     // Initialize animation state
     boss->currentAnimation = 0;
@@ -41,6 +55,17 @@ void boss_anim_init(Boss* boss) {
     boss->blendDuration = 0.5f;
     boss->blendTimer = 0.0f;
     boss->isBlending = false;
+    
+    // Set up idle animation properly
+    if (boss->animations && boss->animationCount > 0 && boss->skeleton) {
+        T3DAnim** anims = (T3DAnim**)boss->animations;
+        T3DSkeleton* skeleton = (T3DSkeleton*)boss->skeleton;
+        if (anims[0]) {
+            t3d_anim_attach(anims[0], skeleton);
+            t3d_anim_set_playing(anims[0], true);
+            t3d_anim_set_time(anims[0], 0.0f);
+        }
+    }
 }
 
 void boss_anim_request(Boss* boss, BossAnimState target, float start_time, 
@@ -133,7 +158,16 @@ void boss_anim_request(Boss* boss, BossAnimState target, float start_time,
 void boss_anim_update(Boss* boss) {
     if (!boss || !boss->skeleton || !boss->animations || !boss->skeletonBlend) return;
     
+    // Safety check: ensure deltaTime is valid (not zero, negative, or denormal)
+    // Use a minimum threshold to prevent denormal floating point values
+    const float MIN_DELTA_TIME = 0.0001f;
+    const float MAX_DELTA_TIME = 1.0f;  // Cap at 1 second to prevent huge jumps
     float dt = deltaTime;
+    // Check for invalid values: zero, negative, too large, or NaN/Inf
+    if (dt < MIN_DELTA_TIME || dt > MAX_DELTA_TIME || dt != dt) {
+        // Invalid deltaTime - use a safe default (60 FPS)
+        dt = 1.0f / 60.0f;
+    }
     
     // Update attack animation timer
     // This manages the isAttacking flag for attacks that use it (like tracking slam)
@@ -180,23 +214,39 @@ void boss_anim_update(Boss* boss) {
     if (boss->isBlending) {
         boss->blendTimer += dt;
         
-        // Clamp negative timer to 0
-        if (boss->blendTimer < 0.0f) {
-            boss->blendTimer = 0.0f;
-            boss->blendFactor = 0.0f;
-        } else if (boss->blendTimer >= boss->blendDuration) {
-            // Blend complete
+        // Safety check: ensure blendDuration is valid to prevent division by zero or denormal results
+        // Use a minimum threshold (0.001f) to prevent denormal floating point values
+        const float MIN_BLEND_DURATION = 0.001f;
+        if (boss->blendDuration < MIN_BLEND_DURATION) {
+            // Invalid blend duration - disable blending immediately
             boss->blendFactor = 1.0f;
             boss->isBlending = false;
             boss->blendTimer = 0.0f;
+            boss->blendDuration = 0.5f;  // Reset to default value
             
             // Stop previous animation
             if (boss->previousAnimation >= 0 && boss->previousAnimation < boss->animationCount) {
                 t3d_anim_set_playing(anims[boss->previousAnimation], false);
             }
         } else {
-            // Interpolate blend factor
-            boss->blendFactor = boss->blendTimer / boss->blendDuration;
+            // Clamp negative timer to 0
+            if (boss->blendTimer < 0.0f) {
+                boss->blendTimer = 0.0f;
+                boss->blendFactor = 0.0f;
+            } else if (boss->blendTimer >= boss->blendDuration) {
+                // Blend complete
+                boss->blendFactor = 1.0f;
+                boss->isBlending = false;
+                boss->blendTimer = 0.0f;
+                
+                // Stop previous animation
+                if (boss->previousAnimation >= 0 && boss->previousAnimation < boss->animationCount) {
+                    t3d_anim_set_playing(anims[boss->previousAnimation], false);
+                }
+            } else {
+                // Interpolate blend factor (safe division - blendDuration is guaranteed >= MIN_BLEND_DURATION)
+                boss->blendFactor = boss->blendTimer / boss->blendDuration;
+            }
         }
     }
     
@@ -244,7 +294,4 @@ void boss_anim_update(Boss* boss) {
     }
 }
 
-BossAnimState boss_anim_current(const Boss* boss) {
-    return boss ? boss->currentAnimState : BOSS_ANIM_IDLE;
-}
 

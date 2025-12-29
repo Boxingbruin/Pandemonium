@@ -47,7 +47,6 @@ void boss_attacks_update(Boss* boss, float dt) {
                           boss->state == BOSS_STATE_CHAIN_SWORD ||
                           boss->state == BOSS_STATE_ROAR_STOMP ||
                           boss->state == BOSS_STATE_TRACKING_SLAM ||
-                          boss->state == BOSS_STATE_ATTACK ||
                           boss->state == BOSS_STATE_CHARGE);
     
     // Always update collider position for debugging (even when not attacking)

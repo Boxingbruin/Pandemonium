@@ -67,7 +67,7 @@ typedef enum {
     CUTSCENE_BOSS_INTRO_WAIT
 } CutsceneState;
 
-static CutsceneState cutsceneState = CUTSCENE_BOSS_INTRO_WAIT;
+static CutsceneState cutsceneState = CUTSCENE_BOSS_INTRO;
 static float cutsceneTimer = 0.0f;
 static float cutsceneCameraTimer = 0.0f;  // Separate timer for camera movement (doesn't reset)
 static bool bossActivated = false;
@@ -308,10 +308,10 @@ void scene_init(void)
     character_init();
     
     // Set character initial position to be on the ground
-    character.pos[0] = 0.0f;
+    character.pos[0] = 150.0f;
     character.pos[1] = -4.8f;  // Position character feet on map surface
     // Spawn inside the collision volume.
-    character.pos[2] = 250.0f;
+    character.pos[2] = 0.0f;
     character_update_position();  // Ensure matrix is updated
 
     // Initialize boss model (imported from boss.glb -> boss.t3dm)
@@ -322,10 +322,16 @@ void scene_init(void)
     }
 
     // Place boss at a dramatic distance from the character for the intro
-    g_boss->pos[0] = 0.0f;  // Dramatic but visible distance from character
-    g_boss->pos[1] = -0.0f; // align to ground level similar to character
-    g_boss->pos[2] = -250.0f;  // Back for dramatic reveal
+    g_boss->pos[0] = -452.0f;  // Dramatic but visible distance from character
+    g_boss->pos[1] = 0.0f; // align to ground level similar to character
+    g_boss->pos[2] = 0.0f;  // Back for dramatic reveal
     // Transform will be updated in boss_update()
+    
+    // Make character face the boss
+    float dx = g_boss->pos[0] - character.pos[0];
+    float dz = g_boss->pos[2] - character.pos[2];
+    character.rot[1] = -atan2f(dx, dz);
+    character_update_position();  // Update transform matrix with new rotation
 
     // Initialize dialog controller
     dialog_controller_init();
@@ -337,9 +343,9 @@ void scene_init(void)
     // Set up camera to focus on boss for intro cutscene
     // Start position: further back for dramatic reveal
     if (g_boss) {
-        cutsceneCamPosStart = (T3DVec3){{g_boss->pos[0]+50.0f, g_boss->pos[1] + 25.0f, g_boss->pos[2] + 250.0f}};
+        cutsceneCamPosStart = (T3DVec3){{g_boss->pos[0]+0.0f, g_boss->pos[1] + 250.0f, g_boss->pos[2] + 250.0f}};
         // End position: closer to boss (slowly move towards during cutscene)
-        cutsceneCamPosEnd = (T3DVec3){{g_boss->pos[0]+50.0f, g_boss->pos[1] + 25.0f, g_boss->pos[2] + 120.0f}};
+        cutsceneCamPosEnd = (T3DVec3){{g_boss->pos[0]+700.0f, g_boss->pos[1] + 50.0f, g_boss->pos[2] + 0.0f}};
         customCamPos = cutsceneCamPosStart;  // Start at initial position
         customCamTarget = (T3DVec3){{g_boss->pos[0], g_boss->pos[1] + 15.0f, g_boss->pos[2]}};  // Look at boss center/chest area
     }
@@ -473,6 +479,7 @@ void scene_update(void)
             }
             break;
             
+        // Wait for boss to be activated before moving to the next state
         case CUTSCENE_BOSS_INTRO_WAIT:
             if (g_boss) {
                 boss_anim_update(g_boss);
@@ -501,7 +508,8 @@ void scene_update(void)
                 camera_mode_smooth(CAMERA_CHARACTER, 1.0f);
             }
             break;
-            
+        
+        // Normal gameplay
         case CUTSCENE_NONE:
             // Normal gameplay
             character_update();

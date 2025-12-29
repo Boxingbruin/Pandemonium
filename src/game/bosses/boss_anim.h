@@ -9,7 +9,6 @@
 void boss_anim_init(Boss* boss);
 void boss_anim_request(Boss* boss, BossAnimState target, float start_time, bool force_restart, BossAnimPriority priority);
 void boss_anim_update(Boss* boss);
-BossAnimState boss_anim_current(const Boss* boss);
 
 #endif // BOSS_ANIM_H
 

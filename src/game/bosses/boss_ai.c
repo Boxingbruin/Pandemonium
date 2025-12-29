@@ -20,7 +20,6 @@
 // Internal helper functions
 static void boss_ai_update_targeting_system(Boss* boss, float dt);
 static void boss_ai_update_cooldowns(Boss* boss, float dt);
-static void boss_ai_update_movement(Boss* boss, float dt);
 static void boss_ai_select_attack(Boss* boss, float dist);
 static bool boss_ai_state_is_attack(BossState state);
 static void predict_character_position(float *predictedPos, float predictionTime);
@@ -60,7 +59,6 @@ void boss_ai_init(Boss* boss) {
 
 static bool boss_ai_state_is_attack(BossState state) {
     return state == BOSS_STATE_CHARGE
-        || state == BOSS_STATE_ATTACK
         || state == BOSS_STATE_POWER_JUMP
         || state == BOSS_STATE_COMBO_ATTACK
         || state == BOSS_STATE_CHAIN_SWORD
@@ -301,6 +299,10 @@ void boss_ai_update(Boss* boss, BossIntent* out_intent) {
     BossState prevState = boss->state;
     const float COMBAT_RADIUS = boss->orbitRadius;
     
+    // Maximum time before forcing an attack (prevents boring behavior)
+    const float MAX_CHASE_TIME = 6.0f;
+    const float MAX_STRAFE_TIME = 5.0f;
+    
     switch (boss->state) {
         case BOSS_STATE_INTRO:
         case BOSS_STATE_NEUTRAL:
@@ -311,6 +313,11 @@ void boss_ai_update(Boss* boss, BossIntent* out_intent) {
             break;
             
         case BOSS_STATE_CHASE:
+            // Force attack if chasing for too long
+            if (boss->stateTimer >= MAX_CHASE_TIME) {
+                boss_ai_select_attack(boss, dist);
+                break;
+            }
             if (dist >= 400.0f && boss->powerJumpCooldown <= 0.0f) {
                 boss_ai_select_attack(boss, dist);
                 break;
@@ -333,6 +340,11 @@ void boss_ai_update(Boss* boss, BossIntent* out_intent) {
             if (dist > COMBAT_RADIUS + 350.0f && boss->stateTimer > 0.1f) {
                 boss->state = BOSS_STATE_CHASE;
                 boss->stateTimer = 0.0f;
+                break;
+            }
+            // Force attack if strafing for too long
+            if (boss->stateTimer >= MAX_STRAFE_TIME) {
+                boss_ai_select_attack(boss, dist);
                 break;
             }
             if (boss->attackCooldown <= 0.0f && boss->stateTimer >= 3.0f && dist <= 100.0f) {
@@ -482,9 +494,6 @@ void boss_ai_update(Boss* boss, BossIntent* out_intent) {
             }
             break;
             
-        case BOSS_STATE_ATTACK:
-            // Generic attack transitions handled elsewhere
-            break;
     }
     
     // Output animation intent based on state
@@ -505,7 +514,6 @@ void boss_ai_update(Boss* boss, BossIntent* out_intent) {
                 out_intent->anim = BOSS_ANIM_JUMP_FORWARD;
                 out_intent->priority = BOSS_ANIM_PRIORITY_HIGH;
                 break;
-            case BOSS_STATE_ATTACK:
             case BOSS_STATE_CHARGE:
             case BOSS_STATE_TRACKING_SLAM:
             case BOSS_STATE_ROAR_STOMP:
@@ -514,6 +522,39 @@ void boss_ai_update(Boss* boss, BossIntent* out_intent) {
                 out_intent->priority = BOSS_ANIM_PRIORITY_HIGH;
                 break;
             case BOSS_STATE_STRAFE:
+                // Calculate strafe direction based on character movement
+                {
+                    float dx = character.pos[0] - boss->pos[0];
+                    float dz = character.pos[2] - boss->pos[2];
+                    float dist = sqrtf(dx*dx + dz*dz);
+                    
+                    if (dist > 0.0f) {
+                        // Normalize direction to character
+                        float toCharX = dx / dist;
+                        float toCharZ = dz / dist;
+                        
+                        // Get character's velocity to determine strafe direction
+                        float charVelX, charVelZ;
+                        character_get_velocity(&charVelX, &charVelZ);
+                        
+                        // Calculate perpendicular directions
+                        float leftX = -toCharZ;
+                        float leftZ = toCharX;
+                        float rightX = toCharZ;
+                        float rightZ = -toCharX;
+                        
+                        // Project character velocity onto left/right perpendicular vectors
+                        float leftDot = charVelX * leftX + charVelZ * leftZ;
+                        float rightDot = charVelX * rightX + charVelZ * rightZ;
+                        
+                        // Update strafe direction based on character's lateral movement
+                        if (fabsf(leftDot) > fabsf(rightDot)) {
+                            bossStrafeDirection = (leftDot > 0.0f) ? -1.0f : 1.0f;
+                        } else {
+                            bossStrafeDirection = (rightDot > 0.0f) ? 1.0f : -1.0f;
+                        }
+                    }
+                }
                 // Use left or right strafe based on direction
                 out_intent->anim = (bossStrafeDirection > 0.0f) ? BOSS_ANIM_STRAFE_LEFT : BOSS_ANIM_STRAFE_RIGHT;
                 break;
@@ -581,9 +622,4 @@ void boss_ai_update(Boss* boss, BossIntent* out_intent) {
     }
 }
 
-// Movement update (simplified - full implementation would be in boss_update_movement)
-static void boss_ai_update_movement(Boss* boss, float dt) {
-    // Movement logic is complex and involves collision, so it's kept in boss.c
-    // This is a placeholder for future refactoring
-}
 

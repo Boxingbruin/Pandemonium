@@ -369,22 +369,40 @@ static inline void update_animations(float speedRatio, CharacterState state, flo
     
     // Handle special cases: recreate roll/attack animations when entering those states
     if (state == CHAR_STATE_ROLLING && prevState != CHAR_STATE_ROLLING) {
-        if (character.animations[ANIM_ROLL]) {
+        if (character.animations && character.animations[ANIM_ROLL]) {
             t3d_anim_destroy(character.animations[ANIM_ROLL]);
             free(character.animations[ANIM_ROLL]);
+            character.animations[ANIM_ROLL] = NULL;
         }
-        character.animations[ANIM_ROLL] = malloc(sizeof(T3DAnim));
-        *character.animations[ANIM_ROLL] = t3d_anim_create(characterModel, kAnimNames[ANIM_ROLL]);
-        t3d_anim_set_looping(character.animations[ANIM_ROLL], false);
+        if (character.animations) {
+            character.animations[ANIM_ROLL] = malloc(sizeof(T3DAnim));
+            if (character.animations[ANIM_ROLL]) {
+                *character.animations[ANIM_ROLL] = t3d_anim_create(characterModel, kAnimNames[ANIM_ROLL]);
+                // Attach animation to skeleton to ensure it's properly initialized
+                if (character.skeleton) {
+                    t3d_anim_attach(character.animations[ANIM_ROLL], character.skeleton);
+                }
+                t3d_anim_set_looping(character.animations[ANIM_ROLL], false);
+            }
+        }
     }
     if ((state == CHAR_STATE_ATTACKING || state == CHAR_STATE_ATTACKING_STRONG) && prevState != state) {
-        if (character.animations[ANIM_ATTACK]) {
+        if (character.animations && character.animations[ANIM_ATTACK]) {
             t3d_anim_destroy(character.animations[ANIM_ATTACK]);
             free(character.animations[ANIM_ATTACK]);
+            character.animations[ANIM_ATTACK] = NULL;
         }
-        character.animations[ANIM_ATTACK] = malloc(sizeof(T3DAnim));
-        *character.animations[ANIM_ATTACK] = t3d_anim_create(characterModel, kAnimNames[ANIM_ATTACK]);
-        t3d_anim_set_looping(character.animations[ANIM_ATTACK], false);
+        if (character.animations) {
+            character.animations[ANIM_ATTACK] = malloc(sizeof(T3DAnim));
+            if (character.animations[ANIM_ATTACK]) {
+                *character.animations[ANIM_ATTACK] = t3d_anim_create(characterModel, kAnimNames[ANIM_ATTACK]);
+                // Attach animation to skeleton to ensure it's properly initialized
+                if (character.skeleton) {
+                    t3d_anim_attach(character.animations[ANIM_ATTACK], character.skeleton);
+                }
+                t3d_anim_set_looping(character.animations[ANIM_ATTACK], false);
+            }
+        }
     }
     
     // Switch animations if needed - start blending
@@ -397,7 +415,8 @@ static inline void update_animations(float speedRatio, CharacterState state, flo
             character.blendTimer = 0.0f;
             
             // Stop previous animation
-            if (character.previousAnimation >= 0 && character.previousAnimation < character.animationCount) {
+            if (character.previousAnimation >= 0 && character.previousAnimation < character.animationCount &&
+                character.animations && character.animations[character.previousAnimation]) {
                 t3d_anim_set_playing(character.animations[character.previousAnimation], false);
             }
         }
@@ -407,7 +426,7 @@ static inline void update_animations(float speedRatio, CharacterState state, flo
         
         // Start blending if we have a valid previous animation
         if (character.previousAnimation >= 0 && character.previousAnimation < character.animationCount && 
-            character.animations[character.previousAnimation]) {
+            character.animations && character.animations[character.previousAnimation]) {
             // Save the current animation time before switching
             float savedTime = 0.0f;
             if (character.currentAnimation >= 0 && character.currentAnimation < character.animationCount && 
@@ -452,7 +471,8 @@ static inline void update_animations(float speedRatio, CharacterState state, flo
             character.blendTimer = 0.0f;
             
             // Stop previous animation
-            if (character.previousAnimation >= 0 && character.previousAnimation < character.animationCount) {
+            if (character.previousAnimation >= 0 && character.previousAnimation < character.animationCount &&
+                character.animations && character.animations[character.previousAnimation]) {
                 t3d_anim_set_playing(character.animations[character.previousAnimation], false);
             }
         } else {
@@ -462,13 +482,13 @@ static inline void update_animations(float speedRatio, CharacterState state, flo
     
     // Update all animations (both current and previous if blending)
     if (state == CHAR_STATE_ROLLING) {
-        if (character.animations[ANIM_ROLL]) {
+        if (character.animations && character.animations[ANIM_ROLL]) {
             t3d_anim_set_playing(character.animations[ANIM_ROLL], true);
             t3d_anim_update(character.animations[ANIM_ROLL], dt);
         }
     } else if (state == CHAR_STATE_JUMPING) {
         // Reuse the roll animation during jump with a quick taper
-        if (character.animations[ANIM_ROLL]) {
+        if (character.animations && character.animations[ANIM_ROLL]) {
             float jumpPhase = fminf(1.0f, actionTimer / JUMP_DURATION);
             float rollSpeed = fmaxf(0.4f, 1.0f - jumpPhase * 0.6f);
             t3d_anim_set_playing(character.animations[ANIM_ROLL], true);
@@ -476,7 +496,7 @@ static inline void update_animations(float speedRatio, CharacterState state, flo
             t3d_anim_update(character.animations[ANIM_ROLL], dt);
         }
     } else if (state == CHAR_STATE_ATTACKING || state == CHAR_STATE_ATTACKING_STRONG) {
-        if (character.animations[ANIM_ATTACK]) {
+        if (character.animations && character.animations[ANIM_ATTACK]) {
             t3d_anim_set_playing(character.animations[ANIM_ATTACK], true);
             if (state == CHAR_STATE_ATTACKING_STRONG) {
                 t3d_anim_set_speed(character.animations[ANIM_ATTACK], 0.8f);
@@ -488,19 +508,19 @@ static inline void update_animations(float speedRatio, CharacterState state, flo
     } else {
         // Normal state: update based on speed
         if (speedRatio < IDLE_THRESHOLD) {
-            if (character.animations[ANIM_IDLE]) {
+            if (character.animations && character.animations[ANIM_IDLE]) {
                 t3d_anim_set_playing(character.animations[ANIM_IDLE], true);
                 t3d_anim_update(character.animations[ANIM_IDLE], dt);
             }
         } else if (speedRatio < WALK_THRESHOLD) {
-            if (character.animations[ANIM_WALK]) {
+            if (character.animations && character.animations[ANIM_WALK]) {
                 t3d_anim_set_playing(character.animations[ANIM_WALK], true);
                 float transitionSpeed = fmaxf(speedRatio * 2.5f + 0.2f, 0.3f);
                 t3d_anim_set_speed(character.animations[ANIM_WALK], transitionSpeed);
                 t3d_anim_update(character.animations[ANIM_WALK], dt);
             }
         } else if (speedRatio < RUN_THRESHOLD) {
-            if (character.animations[ANIM_WALK]) {
+            if (character.animations && character.animations[ANIM_WALK]) {
                 t3d_anim_set_playing(character.animations[ANIM_WALK], true);
                 float walkSpeed = fmaxf(speedRatio * 2.0f + 0.3f, 0.5f);
                 t3d_anim_set_speed(character.animations[ANIM_WALK], walkSpeed);
@@ -512,7 +532,7 @@ static inline void update_animations(float speedRatio, CharacterState state, flo
             float blendEnd = RUN_THRESHOLD + BLEND_MARGIN;
             float blendRatio = (speedRatio - blendStart) / (blendEnd - blendStart);
             blendRatio = fminf(1.0f, fmaxf(0.0f, blendRatio));
-            if (character.animations[ANIM_WALK] && character.animations[ANIM_RUN]) {
+            if (character.animations && character.animations[ANIM_WALK] && character.animations[ANIM_RUN]) {
                 t3d_anim_set_playing(character.animations[ANIM_WALK], true);
                 t3d_anim_set_playing(character.animations[ANIM_RUN], true);
                 float walkSpeed = fmaxf(speedRatio * 2.5f + 0.4f, 0.8f);
@@ -523,7 +543,7 @@ static inline void update_animations(float speedRatio, CharacterState state, flo
                 t3d_anim_update(character.animations[ANIM_RUN], dt);
             }
         } else {
-            if (character.animations[ANIM_RUN]) {
+            if (character.animations && character.animations[ANIM_RUN]) {
                 t3d_anim_set_playing(character.animations[ANIM_RUN], true);
                 float runSpeed = fmaxf(speedRatio * 0.8f + 0.2f, 0.6f);
                 t3d_anim_set_speed(character.animations[ANIM_RUN], runSpeed);
@@ -535,7 +555,7 @@ static inline void update_animations(float speedRatio, CharacterState state, flo
     // Update previous animation if blending
     if (character.isBlending && character.previousAnimation >= 0 && 
         character.previousAnimation < character.animationCount && 
-        character.animations[character.previousAnimation]) {
+        character.animations && character.animations[character.previousAnimation]) {
         t3d_anim_update(character.animations[character.previousAnimation], dt);
     }
 }
@@ -639,7 +659,7 @@ void character_update(void)
             if (character.isBlending && character.skeletonBlend && character.blendTimer > 0.0f) {
                 bool canBlend = (character.previousAnimation >= 0 && 
                                 character.previousAnimation < character.animationCount && 
-                                character.animations[character.previousAnimation] != NULL &&
+                                character.animations && character.animations[character.previousAnimation] != NULL &&
                                 character.animations[character.previousAnimation]->isPlaying &&
                                 character.blendFactor >= 0.0f && 
                                 character.blendFactor <= 1.0f);
@@ -689,7 +709,7 @@ void character_update(void)
             if (character.isBlending && character.skeletonBlend && character.blendTimer > 0.0f) {
                 bool canBlend = (character.previousAnimation >= 0 && 
                                 character.previousAnimation < character.animationCount && 
-                                character.animations[character.previousAnimation] != NULL &&
+                                character.animations && character.animations[character.previousAnimation] != NULL &&
                                 character.animations[character.previousAnimation]->isPlaying &&
                                 character.blendFactor >= 0.0f && 
                                 character.blendFactor <= 1.0f);

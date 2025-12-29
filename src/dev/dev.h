@@ -1,6 +1,8 @@
 #ifndef DEV_H
 #define DEV_H
 
+#include <stdbool.h>
+
 extern bool showingCollisionMesh;
 extern bool debugDraw;
 
@@ -16,5 +18,8 @@ void dev_frames_end_update(void);
 
 // Memory debug mode
 void dev_draw_memory_debug(void);
+
+// Check if dev menu is currently open
+bool dev_menu_is_open(void);
 
 #endif

@@ -80,10 +80,10 @@ void boss_render_debug(Boss* boss, void* viewport) {
     int listSpacing = 12;
     
     const char* stateNames[] = {
-        "Intro", "Neutral", "Chase", "Strafe", "Attack", "Recover", "Stagger", "Dead",
+        "Intro", "Neutral", "Chase", "Strafe", "Recover", "Stagger", "Dead",
         "Charge", "Power Jump", "Combo", "Chain Sword", "Roar Stomp", "Tracking Slam"
     };
-    const char* stateName = (boss->state < 14) ? stateNames[boss->state] : "Unknown";
+    const char* stateName = (boss->state < 13) ? stateNames[boss->state] : "Unknown";
     
     rdpq_text_printf(NULL, FONT_UNBALANCED, 20, y, "Boss State: %s", stateName);
     y += listSpacing;

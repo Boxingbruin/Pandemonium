@@ -57,6 +57,10 @@ static bool inCategoryScreen = false;
 
 static bool toggleColliders = false;
 
+// Button state tracking for C-pad Up+Down toggle
+static bool lastCUpPressed = false;
+static bool lastCDownPressed = false;
+
 static T3DModel *devArrow;
 static rspq_block_t *dplDevArrow;
 static T3DMat4 devArrowMat;
@@ -70,6 +74,11 @@ void dev_take_heap_snapshot(void)
 {
     sys_get_heap_stats(&heap_snapshot);
     heap_snapshot_taken = 1;
+}
+
+bool dev_menu_is_open(void)
+{
+    return toggleDevMenu;
 }
 
 void dev_tools_init()
@@ -115,7 +124,11 @@ void dev_handle_camera_state()
 
 void dev_controller_update()
 {
-    if(btn.z)
+    // C-pad Up+Down combination to toggle dev menu as z button is used for targeting
+    bool bothPressed = btn.c_up && btn.c_down;
+    bool justPressed = bothPressed && (!lastCUpPressed || !lastCDownPressed);
+    
+    if(justPressed)
     {
         toggleDevMenu = !toggleDevMenu;
         inCategoryScreen = false; // Always return to main menu when toggling
@@ -153,17 +166,6 @@ void dev_controller_update()
                 inCategoryScreen = true;
                 selected = 0;
                 dev_handle_camera_state();
-            }
-            // L/R bumpers can still cycle, or could be repurposed
-            if(btn.l) 
-            {
-                sidebarSelected--;
-                if(sidebarSelected < 0) sidebarSelected = rowCount;
-            }
-            if(btn.r) 
-            {
-                sidebarSelected++;
-                if(sidebarSelected > rowCount) sidebarSelected = 0;
             }
         } 
         else 
@@ -336,6 +338,10 @@ void dev_controller_update()
             buttonPressed = false;
         }
     }
+    
+    // Update button state tracking for next frame
+    lastCUpPressed = btn.c_up;
+    lastCDownPressed = btn.c_down;
 }
 
 void dev_draw_memory_debug(void) {
@@ -543,27 +549,28 @@ void dev_draw_debug_update(T3DViewport *viewport) {
           // Draw boss capsule in yellow (DEBUG_COLORS[3]) to distinguish from character green
           debug_draw_capsule(viewport, &bossCapA, &bossCapB, bossRadius, DEBUG_COLORS[3]);
           
+          // TODO: Uncomment this when we have a hand attack collider working
           // Draw hand attack collider if bone index is valid (always draw for debugging, use active state for color)
-        //   if (boss->handRightBoneIndex >= 0) {
-              float handRadius = 300.0f;
-              float handHalfLen = 600.0f;
+          if (boss->handRightBoneIndex >= 0) {
+            //   float handRadius = 300.0f;
+            //   float handHalfLen = 600.0f;
               
-              // Calculate endpoints from center position (capsule along Y axis)
-              T3DVec3 handCapA = {{
-                  boss->handAttackColliderWorldPos[0],
-                  boss->handAttackColliderWorldPos[1],
-                  boss->handAttackColliderWorldPos[2] + 100.0f,
-              }};
-              T3DVec3 handCapB = {{
-                  boss->handAttackColliderWorldPos[0],
-                  boss->handAttackColliderWorldPos[1] + handHalfLen,
-                  boss->handAttackColliderWorldPos[2] + 100.0f,
-              }};
+            //   // Calculate endpoints from center position (capsule along Y axis)
+            //   T3DVec3 handCapA = {{
+            //       boss->handAttackColliderWorldPos[0],
+            //       boss->handAttackColliderWorldPos[1],
+            //       boss->handAttackColliderWorldPos[2] + 100.0f,
+            //   }};
+            //   T3DVec3 handCapB = {{
+            //       boss->handAttackColliderWorldPos[0],
+            //       boss->handAttackColliderWorldPos[1] + handHalfLen,
+            //       boss->handAttackColliderWorldPos[2] + 100.0f,
+            //   }};
               
-              // Draw in red if active, cyan if inactive (for debugging)
-              uint16_t color = boss->handAttackColliderActive ? DEBUG_COLORS[0] : DEBUG_COLORS[2]; // Red if active, blue if inactive
-              debug_draw_capsule(viewport, &handCapA, &handCapB, handRadius, color);
-        //   }
+            //   // Draw in red if active, cyan if inactive (for debugging)
+            //   uint16_t color = boss->handAttackColliderActive ? DEBUG_COLORS[0] : DEBUG_COLORS[2]; // Red if active, blue if inactive
+            //   debug_draw_capsule(viewport, &handCapA, &handCapB, handRadius, color);
+          }
       }
 }
 

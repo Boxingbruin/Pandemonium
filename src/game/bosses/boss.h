@@ -12,7 +12,6 @@ typedef enum {
     BOSS_STATE_NEUTRAL,
     BOSS_STATE_CHASE,
     BOSS_STATE_STRAFE,
-    BOSS_STATE_ATTACK,
     BOSS_STATE_RECOVER,
     BOSS_STATE_STAGGER,
     BOSS_STATE_DEAD,
@@ -37,9 +36,6 @@ typedef enum {
 } BossAnimState;
 
 typedef enum {
-    BOSS_ATTACK_SLASH,
-    BOSS_ATTACK_THRUST,
-    BOSS_ATTACK_LEAP,
     BOSS_ATTACK_CHARGE,
     BOSS_ATTACK_POWER_JUMP,
     BOSS_ATTACK_COMBO,
@@ -184,15 +180,6 @@ typedef struct {
     // Attack request
     bool attack_req;
     BossAttackId attack;
-    
-    // Face/turn request (optional)
-    bool face_req;
-    float target_angle;
-    
-    // Movement request (optional - if not handled elsewhere)
-    bool move_req;
-    float move_x, move_z;
-    float move_speed;
 } BossIntent;
 
 // Public API - only what other game code needs
