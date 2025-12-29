@@ -115,12 +115,11 @@ void dev_handle_camera_state()
 
 void dev_controller_update()
 {
-    // if(btn.z)
-    // {
-    //     toggleDevMenu = !toggleDevMenu;
-    //     inCategoryScreen = false; // Always return to main menu when toggling
-    // }
-    return; // Disabled for now
+    if(btn.z)
+    {
+        toggleDevMenu = !toggleDevMenu;
+        inCategoryScreen = false; // Always return to main menu when toggling
+    }
 
     if(!toggleDevMenu)
     {
