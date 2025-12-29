@@ -24,13 +24,13 @@ Pandemonium is an N64 game built using LibDragon and the T3D 3D engine. The proj
 
 ### Implemented Systems
 - ✅ Core game loop with fixed timestep
-- ✅ Camera system with multiple modes (character, freecam, etc.)
+- ✅ Camera system with multiple modes (character, freecam, z-lock etc.)
 - ✅ Lighting system with directional and ambient lights
 - ✅ Audio controller for music and SFX
 - ✅ Input handling via joypad utility
 - ✅ Development tools and debug overlay
-- ✅ Character object system (knight model)
-- ✅ Boss object system (placeholder)
+- ✅ Character object system (catherine model placeholder)
+- ✅ Boss object system (catherine model placeholder)
 
 ### Scene System
 - `scene_init()` - Initialize game objects and systems
@@ -56,6 +56,9 @@ make clean && make
 ### Running/Testing
 - Launch emulator: `$ARES pandemonium.z64`
 - Emulator executable available via $ARES environment variable
+
+### Building z64 file
+- run `make clean && make`
 
 ### Asset Pipeline
 - 3D models: `.t3dm` format via T3D tools

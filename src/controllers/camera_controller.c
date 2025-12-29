@@ -46,6 +46,46 @@ float camRoll = 0.0f;
 float FOV = 50.0f;
 float distanceInFrontOfCamera = 100.0f;
 
+// Clipping planes (raised far clip to keep distant geometry visible)
+static const float CAMERA_NEAR_CLIP = 4.0f;
+static const float CAMERA_FAR_CLIP = 2000.0f;
+
+// Camera transition (for smooth blends between modes)
+static bool cameraTransitionActive = false;
+static CameraState cameraTransitionTarget = CAMERA_NONE;
+static float cameraTransitionTime = 0.0f;
+static float cameraTransitionDuration = 0.0f;
+static T3DVec3 cameraTransitionStartPos;
+static T3DVec3 cameraTransitionStartTarget;
+
+static void vec3_lerp_local(T3DVec3 *out, const T3DVec3 *a, const T3DVec3 *b, float t)
+{
+	out->v[0] = a->v[0] + (b->v[0] - a->v[0]) * t;
+	out->v[1] = a->v[1] + (b->v[1] - a->v[1]) * t;
+	out->v[2] = a->v[2] + (b->v[2] - a->v[2]) * t;
+}
+
+static void camera_get_view_for_state(CameraState state, T3DVec3 *outPos, T3DVec3 *outTarget)
+{
+	switch (state)
+	{
+		case CAMERA_CHARACTER:
+			*outPos = characterCamPos;
+			*outTarget = characterCamTarget;
+			break;
+		case CAMERA_CUSTOM:
+			*outPos = customCamPos;
+			*outTarget = customCamTarget;
+			break;
+		case CAMERA_FREECAM:
+		case CAMERA_FIXED:
+		default:
+			*outPos = camPos;
+			*outTarget = camTarget;
+			break;
+	}
+}
+
 void camera_initialize(T3DVec3 *pos, T3DVec3 *dir, float rotX, float rotY) 
 {
     // Camera
@@ -74,6 +114,38 @@ void camera_initialize(T3DVec3 *pos, T3DVec3 *dir, float rotX, float rotY)
 
 void camera_update(T3DViewport *viewport)
 {
+	if (cameraTransitionActive)
+	{
+		cameraTransitionTime += deltaTime;
+		float t = (cameraTransitionDuration > 0.0f) ? (cameraTransitionTime / cameraTransitionDuration) : 1.0f;
+		if (t > 1.0f) t = 1.0f;
+
+		T3DVec3 endPos;
+		T3DVec3 endTarget;
+		camera_get_view_for_state(cameraTransitionTarget, &endPos, &endTarget);
+
+		// Smoothstep easing for a softer blend
+		float s = t * t * (3.0f - 2.0f * t);
+		vec3_lerp_local(&camPos, &cameraTransitionStartPos, &endPos, s);
+		vec3_lerp_local(&camTarget, &cameraTransitionStartTarget, &endTarget, s);
+
+		camDir.v[0] = camTarget.v[0] - camPos.v[0];
+		camDir.v[1] = camTarget.v[1] - camPos.v[1];
+		camDir.v[2] = camTarget.v[2] - camPos.v[2];
+		t3d_vec3_norm(&camDir);
+
+		t3d_viewport_set_projection(viewport, T3D_DEG_TO_RAD(60), CAMERA_NEAR_CLIP, CAMERA_FAR_CLIP);
+		t3d_viewport_look_at(viewport, &camPos, &camTarget, &up);
+
+		if (t >= 1.0f)
+		{
+			cameraTransitionActive = false;
+			lastCameraState = cameraState;
+			cameraState = cameraTransitionTarget;
+		}
+		return;
+	}
+
     if(cameraState == CAMERA_CHARACTER)
     {
         // Handle camera rotation input with C-buttons
@@ -121,7 +193,7 @@ void camera_update(T3DViewport *viewport)
         camDir.v[2] = camTarget.v[2] - camPos.v[2];  // Z component
         t3d_vec3_norm(&camDir);
 
-        t3d_viewport_set_projection(viewport, T3D_DEG_TO_RAD(60), 4.0f, 500.0f);
+        t3d_viewport_set_projection(viewport, T3D_DEG_TO_RAD(60), CAMERA_NEAR_CLIP, CAMERA_FAR_CLIP);
         t3d_viewport_look_at(viewport, &camPos, &camTarget, &up);
     }
     else if(cameraState == CAMERA_FREECAM)
@@ -179,8 +251,8 @@ void camera_update(T3DViewport *viewport)
         camTarget.v[1] = camPos.v[1] + camDir.v[1] * distanceInFrontOfCamera;
         camTarget.v[2] = camPos.v[2] + camDir.v[2] * distanceInFrontOfCamera;
 
-        //t3d_viewport_set_projection(viewport, T3D_DEG_TO_RAD(FOV), 4.0f, 500.0f);
-        t3d_viewport_set_projection(viewport, T3D_DEG_TO_RAD(FOV), 4.0f, 1000.0f);
+        //t3d_viewport_set_projection(viewport, T3D_DEG_TO_RAD(FOV), CAMERA_NEAR_CLIP, CAMERA_FAR_CLIP);
+        t3d_viewport_set_projection(viewport, T3D_DEG_TO_RAD(FOV), CAMERA_NEAR_CLIP, CAMERA_FAR_CLIP);
         t3d_viewport_look_at(viewport, &camPos, &camTarget, &up);
 
     }
@@ -212,7 +284,7 @@ void camera_update(T3DViewport *viewport)
         }
         
         // Pass the rolled-up vector to the camera look-at function
-        t3d_viewport_set_projection(viewport, T3D_DEG_TO_RAD(FOV), 4.0f, 400.0f);
+        t3d_viewport_set_projection(viewport, T3D_DEG_TO_RAD(FOV), CAMERA_NEAR_CLIP, CAMERA_FAR_CLIP);
         t3d_viewport_look_at(viewport, &customCamPos, &customCamTarget, &rolledUp);
     }
     else if(cameraState == CAMERA_FIXED)
@@ -243,7 +315,7 @@ void camera_update(T3DViewport *viewport)
         }
         
         // Pass the rolled-up vector to the camera look-at function
-        t3d_viewport_set_projection(viewport, T3D_DEG_TO_RAD(FOV), 4.0f, 400.0f);
+        t3d_viewport_set_projection(viewport, T3D_DEG_TO_RAD(FOV), CAMERA_NEAR_CLIP, CAMERA_FAR_CLIP);
         t3d_viewport_look_at(viewport, &camPos, &camTarget, &rolledUp);
     }
 }
@@ -252,6 +324,22 @@ void camera_mode(CameraState state)
 {
     lastCameraState = cameraState;
     cameraState = state;
+}
+
+void camera_mode_smooth(CameraState state, float duration)
+{
+	if (duration <= 0.0f)
+	{
+		camera_mode(state);
+		return;
+	}
+
+	lastCameraState = cameraState;
+	cameraTransitionTarget = state;
+	cameraTransitionDuration = duration;
+	cameraTransitionTime = 0.0f;
+	camera_get_view_for_state(cameraState, &cameraTransitionStartPos, &cameraTransitionStartTarget);
+	cameraTransitionActive = true;
 }
 
 void camera_roll_camera(void)

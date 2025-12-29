@@ -11,6 +11,8 @@
 #include "audio_controller.h"
 
 #include "display_utility.h"
+#include "menu_controller.h"
+#include "save_controller.h"
 
 #include "scene.h"
 #include "dev.h"
@@ -51,6 +53,12 @@ int main(void)
     game_time_init();
     joypad_utility_init();
 
+    // Initialize save system and load settings (after joypad init)
+    save_controller_init();
+    if (!save_controller_load_settings()) {
+        // Silently use defaults - no error message needed for graceful fallback
+    }
+
     t3d_init((T3DInitParams){});
     T3DViewport viewport = t3d_viewport_create();
 
@@ -61,6 +69,9 @@ int main(void)
     }
 
     scene_init();
+
+    // Initialize menu controller
+    menu_controller_init();
 
     rspq_syncpoint_t syncPoint = 0; // TODO: I have no idea what this does but it's needed for flipbook textures.
 
@@ -94,11 +105,17 @@ int main(void)
         mixer_try_play();
         camera_update(&viewport);
 
+        // Update menu controller first to handle input
+        menu_controller_update();
+
         scene_update();
         scene_fixed_update();
 
         // ===== DRAW LOOP =====
         scene_draw(&viewport); // Draw scene
+        
+        // Draw menu on top of everything
+        menu_controller_draw();
 
         syncPoint = rspq_syncpoint_new();
         
@@ -149,6 +166,8 @@ int main(void)
     }
 
     scene_cleanup();  // Call cleanup before exiting
+    menu_controller_free();
+    save_controller_free();
 
     return 0;
 }

@@ -50,3 +50,7 @@ assets/**/*.zip
 # N64 specific
 *.sym
 *.map
+# Stores various build artifacts(game code, graphics, audio, other assets)
+*.bs1
+# Memory card that stores game save data in battery-buffered SRAM
+*.pak

@@ -7,15 +7,17 @@
 #include "globals.h"
 #include "game_math.h"
 #include "display_utility.h"
+#include "simple_collision_utility.h" 
 
 #include <math.h> // for isfinite
 
-uint16_t DEBUG_COLORS[5] = {
+uint16_t DEBUG_COLORS[6] = {
     0xf800, // Red     (#ff0000)
     0x0fe0, // Green   (#08ff00)
     0x001f, // Blue    (#0000ff)
     0xff80, // Yellow  (#fff300)
     0xf01f, // Magenta (#fa00ff)
+    0xf8a5, // Orange  (#ffa500)
 };
 
 static void debug_draw_line(int px0, int py0, int px1, int py1, uint16_t color)
@@ -55,35 +57,42 @@ static inline void debug_draw_line_vec3(const T3DVec3 *p0, const T3DVec3 *p1, ui
     }
 }
 
-void debug_draw_aabb(T3DViewport *vp, const FixedVec3 *min, const FixedVec3 *max, uint16_t color)
+void debug_draw_aabb(
+    T3DViewport *vp,
+    const T3DVec3 *min,
+    const T3DVec3 *max,
+    uint16_t color)
 {
-    // rspq_wait();
-    // uint16_t *fb = offscreenBuffer.buffer;
-
-    // transform min/max to screen space
     T3DVec3 points[8];
-    T3DVec3 pt0 = {{FROM_FIXED(min->v[0])*MODEL_SCALE, FROM_FIXED(min->v[1])*MODEL_SCALE, FROM_FIXED(min->v[2])*MODEL_SCALE}};
-    T3DVec3 pt1 = {{FROM_FIXED(max->v[0])*MODEL_SCALE, FROM_FIXED(min->v[1])*MODEL_SCALE, FROM_FIXED(min->v[2])*MODEL_SCALE}};
-    t3d_viewport_calc_viewspace_pos(vp, &points[0], &pt0);
-    t3d_viewport_calc_viewspace_pos(vp, &points[1], &pt1); pt0.v[1] = FROM_FIXED(max->v[1])*MODEL_SCALE;
-    t3d_viewport_calc_viewspace_pos(vp, &points[2], &pt0); pt1.v[1] = FROM_FIXED(max->v[1])*MODEL_SCALE;
-    t3d_viewport_calc_viewspace_pos(vp, &points[3], &pt1); pt0.v[2] = FROM_FIXED(max->v[2])*MODEL_SCALE;
-    t3d_viewport_calc_viewspace_pos(vp, &points[4], &pt0); pt1.v[2] = FROM_FIXED(max->v[2])*MODEL_SCALE;
-    t3d_viewport_calc_viewspace_pos(vp, &points[5], &pt1); pt0.v[1] = FROM_FIXED(min->v[1])*MODEL_SCALE;
-    t3d_viewport_calc_viewspace_pos(vp, &points[6], &pt0); pt1.v[1] = FROM_FIXED(min->v[1])*MODEL_SCALE;
-    t3d_viewport_calc_viewspace_pos(vp, &points[7], &pt1);
 
-    // draw min/max as wireframe cube
+    // Corner world positions (no fixed / MODEL_SCALE stuff)
+    T3DVec3 p0 = *min;
+    T3DVec3 p1 = {{ max->v[0], min->v[1], min->v[2] }};
+    T3DVec3 p2 = {{ min->v[0], max->v[1], min->v[2] }};
+    T3DVec3 p3 = {{ max->v[0], max->v[1], min->v[2] }};
+    T3DVec3 p4 = {{ min->v[0], max->v[1], max->v[2] }};
+    T3DVec3 p5 = {{ max->v[0], max->v[1], max->v[2] }};
+    T3DVec3 p6 = {{ min->v[0], min->v[1], max->v[2] }};
+    T3DVec3 p7 = {{ max->v[0], min->v[1], max->v[2] }};
+
+    // Project to view space
+    t3d_viewport_calc_viewspace_pos(vp, &points[0], &p0);
+    t3d_viewport_calc_viewspace_pos(vp, &points[1], &p1);
+    t3d_viewport_calc_viewspace_pos(vp, &points[2], &p2);
+    t3d_viewport_calc_viewspace_pos(vp, &points[3], &p3);
+    t3d_viewport_calc_viewspace_pos(vp, &points[4], &p4);
+    t3d_viewport_calc_viewspace_pos(vp, &points[5], &p5);
+    t3d_viewport_calc_viewspace_pos(vp, &points[6], &p6);
+    t3d_viewport_calc_viewspace_pos(vp, &points[7], &p7);
+
     const int indices[24] = {
         0, 1, 1, 3, 3, 2, 2, 0,
         4, 5, 5, 7, 7, 6, 6, 4,
         0, 6, 1, 7, 2, 4, 3, 5
     };
 
-    for(int i=0; i<24; i+=2) 
-    {
+    for (int i = 0; i < 24; i += 2)
         debug_draw_line_vec3(&points[indices[i]], &points[indices[i+1]], color);
-    }
 }
 
 void debug_draw_circle(T3DViewport *vp, const T3DVec3 *center, float radius, const T3DVec3 *normal, uint16_t color)
@@ -178,28 +187,94 @@ void debug_draw_dot(T3DViewport *vp, const T3DVec3 *center, float radius, uint16
     debug_draw_sphere(vp, center, radius, color);
 }
 
-void debug_draw_capsule_from_fixed(T3DViewport *vp, const FixedVec3 *a, const FixedVec3 *b, int32_t radius_fixed, uint16_t color)
+void debug_draw_tri_wire(
+    T3DViewport *vp,
+    const T3DVec3 *p0,
+    const T3DVec3 *p1,
+    const T3DVec3 *p2,
+    uint16_t color)
 {
-    T3DVec3 aworld = {{
-        FROM_FIXED(a->v[0]) * MODEL_SCALE,
-        FROM_FIXED(a->v[1]) * MODEL_SCALE,
-        FROM_FIXED(a->v[2]) * MODEL_SCALE
-    }};
-    T3DVec3 bworld = {{
-        FROM_FIXED(b->v[0]) * MODEL_SCALE,
-        FROM_FIXED(b->v[1]) * MODEL_SCALE,
-        FROM_FIXED(b->v[2]) * MODEL_SCALE
-    }};
+    // Project world-space vertices to viewspace
+    T3DVec3 sp0, sp1, sp2;
+    t3d_viewport_calc_viewspace_pos(vp, &sp0, p0);
+    t3d_viewport_calc_viewspace_pos(vp, &sp1, p1);
+    t3d_viewport_calc_viewspace_pos(vp, &sp2, p2);
+    
+    // Draw three lines to form a triangle wireframe
+    debug_draw_line_vec3(&sp0, &sp1, color);
+    debug_draw_line_vec3(&sp1, &sp2, color);
+    debug_draw_line_vec3(&sp2, &sp0, color);
+}
 
-    float radius_world = FROM_FIXED(radius_fixed) * MODEL_SCALE;
+void debug_draw_capsule(
+    T3DViewport *vp,
+    const T3DVec3 *a,
+    const T3DVec3 *b,
+    float radius,
+    uint16_t color)
+{
+    // Draw end-cap spheres
+    debug_draw_sphere(vp, a, radius, color);
+    debug_draw_sphere(vp, b, radius, color);
 
-    // end spheres
-    debug_draw_sphere(vp, &aworld, radius_world, color);
-    debug_draw_sphere(vp, &bworld, radius_world, color);
-
-    // connect ends with a line
+    // Connect ends with a line
     T3DVec3 sp0, sp1;
-    t3d_viewport_calc_viewspace_pos(vp, &sp0, &aworld);
-    t3d_viewport_calc_viewspace_pos(vp, &sp1, &bworld);
-    debug_draw_line_vec3(&sp0, &sp1, color);  // static inline, same file
+    t3d_viewport_calc_viewspace_pos(vp, &sp0, a);
+    t3d_viewport_calc_viewspace_pos(vp, &sp1, b);
+    debug_draw_line_vec3(&sp0, &sp1, color);
+}
+
+void debug_draw_capsule_vs_aabb_list(
+    T3DViewport   *vp,
+    const T3DVec3 *capA,
+    const T3DVec3 *capB,
+    float          capRadius,
+    const AABB    *aabbs,
+    int            aabbCount,
+    uint16_t       colorNoHit,
+    uint16_t       colorHit)
+{
+    float capAF[3] = { capA->v[0], capA->v[1], capA->v[2] };
+    float capBF[3] = { capB->v[0], capB->v[1], capB->v[2] };
+
+    bool anyHit = false;
+
+    for (int i = 0; i < aabbCount; ++i)
+    {
+        const AABB *box = &aabbs[i];
+
+        float rectMin[3] = {
+            box->min.v[0],
+            box->min.v[1],
+            box->min.v[2]
+        };
+
+        float rectMax[3] = {
+            box->max.v[0],
+            box->max.v[1],
+            box->max.v[2]
+        };
+
+        bool hit = scu_capsule_vs_rect_f(
+            capAF, capBF, capRadius,
+            rectMin, rectMax);
+
+        if (hit) anyHit = true;
+
+        uint16_t c = hit ? colorHit : colorNoHit;
+        debug_draw_aabb(vp, &box->min, &box->max, c);
+    }
+
+    uint16_t capColor = anyHit ? colorHit : colorNoHit;
+    debug_draw_capsule(vp, capA, capB, capRadius, capColor);
+
+    if (anyHit)
+    {
+        T3DVec3 mid = {{
+            0.5f * (capA->v[0] + capB->v[0]),
+            0.5f * (capA->v[1] + capB->v[1]),
+            0.5f * (capA->v[2] + capB->v[2]),
+        }};
+        debug_draw_cross(vp, &mid, capRadius, capColor);
+    }
 }
