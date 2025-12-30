@@ -367,41 +367,18 @@ static inline void update_animations(float speedRatio, CharacterState state, flo
     // Determine target animation
     int targetAnim = get_target_animation(state, speedRatio);
     
-    // Handle special cases: recreate roll/attack animations when entering those states
     if (state == CHAR_STATE_ROLLING && prevState != CHAR_STATE_ROLLING) {
         if (character.animations && character.animations[ANIM_ROLL]) {
-            t3d_anim_destroy(character.animations[ANIM_ROLL]);
-            free(character.animations[ANIM_ROLL]);
-            character.animations[ANIM_ROLL] = NULL;
-        }
-        if (character.animations) {
-            character.animations[ANIM_ROLL] = malloc(sizeof(T3DAnim));
-            if (character.animations[ANIM_ROLL]) {
-                *character.animations[ANIM_ROLL] = t3d_anim_create(characterModel, kAnimNames[ANIM_ROLL]);
-                // Attach animation to skeleton to ensure it's properly initialized
-                if (character.skeleton) {
-                    t3d_anim_attach(character.animations[ANIM_ROLL], character.skeleton);
-                }
-                t3d_anim_set_looping(character.animations[ANIM_ROLL], false);
-            }
+            t3d_anim_set_time(character.animations[ANIM_ROLL], 0.0f);
+            t3d_anim_set_looping(character.animations[ANIM_ROLL], false);
+            t3d_anim_set_playing(character.animations[ANIM_ROLL], true);
         }
     }
     if ((state == CHAR_STATE_ATTACKING || state == CHAR_STATE_ATTACKING_STRONG) && prevState != state) {
         if (character.animations && character.animations[ANIM_ATTACK]) {
-            t3d_anim_destroy(character.animations[ANIM_ATTACK]);
-            free(character.animations[ANIM_ATTACK]);
-            character.animations[ANIM_ATTACK] = NULL;
-        }
-        if (character.animations) {
-            character.animations[ANIM_ATTACK] = malloc(sizeof(T3DAnim));
-            if (character.animations[ANIM_ATTACK]) {
-                *character.animations[ANIM_ATTACK] = t3d_anim_create(characterModel, kAnimNames[ANIM_ATTACK]);
-                // Attach animation to skeleton to ensure it's properly initialized
-                if (character.skeleton) {
-                    t3d_anim_attach(character.animations[ANIM_ATTACK], character.skeleton);
-                }
-                t3d_anim_set_looping(character.animations[ANIM_ATTACK], false);
-            }
+            t3d_anim_set_time(character.animations[ANIM_ATTACK], 0.0f);
+            t3d_anim_set_looping(character.animations[ANIM_ATTACK], false);
+            t3d_anim_set_playing(character.animations[ANIM_ATTACK], true);
         }
     }
     
@@ -1087,7 +1064,6 @@ void character_delete(void)
         if (character.animations[i]) 
         {
             t3d_anim_destroy(character.animations[i]);
-            free(character.animations[i]);
         }
         }
         free(character.animations);

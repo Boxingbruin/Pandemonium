@@ -673,7 +673,6 @@ void boss_free(Boss* boss) {
         for (int i = 0; i < boss->animationCount; i++) {
             if (anims[i]) {
                 t3d_anim_destroy(anims[i]);
-                free(anims[i]);
             }
         }
         free(boss->animations);

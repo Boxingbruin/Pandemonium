@@ -1552,7 +1552,6 @@ void boss_delete(void)
 		if (boss.animations[i]) 
 		{
 			t3d_anim_destroy(boss.animations[i]);
-			free(boss.animations[i]);
 		}
 		}
 		free(boss.animations);
