@@ -64,6 +64,7 @@ static const float SPEED_BUILDUP_RATE = 1.5f;    // How fast speed builds up to 
 static const float SPEED_DECAY_RATE = 4.0f;      // How fast speed decays when slowing  
 
 static const float ROLL_DURATION = 0.9f;
+static const float ROLL_ANIM_SPEED = 1.0f;
 static const float ATTACK_DURATION = 0.9f;
 static const float STRONG_ATTACK_DURATION = 1.2f;
 static const float STRONG_ATTACK_HOLD_THRESHOLD = 0.4f;
@@ -469,6 +470,7 @@ static inline void update_animations(float speedRatio, CharacterState state, flo
     if (state == CHAR_STATE_ROLLING) {
         if (character.animations && character.animations[ANIM_ROLL]) {
             t3d_anim_set_playing(character.animations[ANIM_ROLL], true);
+            t3d_anim_set_speed(character.animations[ANIM_ROLL], ROLL_ANIM_SPEED);
             t3d_anim_update(character.animations[ANIM_ROLL], dt);
         }
     } else if (state == CHAR_STATE_JUMPING) {

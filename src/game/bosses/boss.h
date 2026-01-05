@@ -19,9 +19,10 @@ typedef enum {
     BOSS_STATE_CHARGE,
     BOSS_STATE_POWER_JUMP,
     BOSS_STATE_COMBO_ATTACK,
-    BOSS_STATE_CHAIN_SWORD,
+    BOSS_STATE_COMBO_STARTER,
     BOSS_STATE_ROAR_STOMP,
-    BOSS_STATE_TRACKING_SLAM
+    BOSS_STATE_TRACKING_SLAM,
+    BOSS_STATE_FLIP_ATTACK
 } BossState;
 
 typedef enum {
@@ -32,16 +33,20 @@ typedef enum {
     BOSS_ANIM_STRAFE_RIGHT = 4,
     BOSS_ANIM_COMBO_ATTACK = 5,
     BOSS_ANIM_JUMP_FORWARD = 6,
-    BOSS_ANIM_COUNT = 7
+    BOSS_ANIM_COMBO_LUNGE = 7,
+    BOSS_ANIM_COMBO_STARTER = 8,
+    BOSS_ANIM_FLIP_ATTACK = 9,
+    BOSS_ANIM_COUNT = 10
 } BossAnimState;
 
 typedef enum {
     BOSS_ATTACK_CHARGE,
     BOSS_ATTACK_POWER_JUMP,
     BOSS_ATTACK_COMBO,
-    BOSS_ATTACK_CHAIN_SWORD,
+    BOSS_ATTACK_COMBO_STARTER,
     BOSS_ATTACK_ROAR_STOMP,
     BOSS_ATTACK_TRACKING_SLAM,
+    BOSS_ATTACK_FLIP_ATTACK,
     BOSS_ATTACK_COUNT
 } BossAttackId;
 
@@ -120,9 +125,10 @@ typedef struct Boss {
     // Attack-specific cooldowns
     float powerJumpCooldown;
     float comboCooldown;
-    float chainSwordCooldown;
+    float comboStarterCooldown;
     float roarStompCooldown;
     float trackingSlamCooldown;
+    float flipAttackCooldown;
     
     // Attack state tracking
     bool isAttacking;
@@ -135,11 +141,12 @@ typedef struct Boss {
     bool comboInterrupted;
     float comboVulnerableTimer;
     
-    // Chain sword state
+    // Combo starter state
     float swordProjectilePos[3];
     bool swordThrown;
-    bool chainSwordSlamHasHit;
-    float chainSwordTargetPos[3];
+    bool comboStarterSlamHasHit;
+    float comboStarterTargetPos[3];
+    bool comboStarterCompleted; // Flag to track if combo starter has finished
     
     // Tracking slam state
     float trackingSlamTargetAngle;
@@ -148,6 +155,11 @@ typedef struct Boss {
     float powerJumpStartPos[3];
     float powerJumpTargetPos[3];
     float powerJumpHeight;
+    
+    // Flip attack state
+    float flipAttackStartPos[3];
+    float flipAttackTargetPos[3];
+    float flipAttackHeight;
     
     // Targeting system
     float debugTargetingPos[3];
