@@ -232,7 +232,7 @@ static void boss_update_movement(Boss* boss, float dt) {
     //         boss->capsuleCollider.localCapB.v[0], boss->capsuleCollider.localCapB.v[1], boss->capsuleCollider.localCapB.v[2],
     //         boss->capsuleCollider.radius, sx
     //     )) {
-    //     boss->pos[0] = nextX;
+    boss->pos[0] = nextX;
     // } else {
     //     boss->velX = 0.0f;
     // }
@@ -244,7 +244,7 @@ static void boss_update_movement(Boss* boss, float dt) {
     //         boss->capsuleCollider.localCapB.v[0], boss->capsuleCollider.localCapB.v[1], boss->capsuleCollider.localCapB.v[2],
     //         boss->capsuleCollider.radius, sx
     //     )) {
-    //     boss->pos[2] = nextZ;
+    boss->pos[2] = nextZ;
     // } else {
     //     boss->velZ = 0.0f;
     // }

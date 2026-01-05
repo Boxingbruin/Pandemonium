@@ -668,14 +668,14 @@ void character_update(void)
         float newPosX = character.pos[0] + movementVelocityX * deltaTime;
         float newPosZ = character.pos[2] + movementVelocityZ * deltaTime;
         
-        if (!scene_check_room_bounds(newPosX, character.pos[1], newPosZ)) {
+        //if (!scene_check_room_bounds(newPosX, character.pos[1], newPosZ)) {
             character.pos[0] = newPosX;
             character.pos[2] = newPosZ;
-        } else {
-            // Stop movement if collision detected
-            movementVelocityX = 0.0f;
-            movementVelocityZ = 0.0f;
-        }
+        // } else {
+        //     // Stop movement if collision detected
+        //     movementVelocityX = 0.0f;
+        //     movementVelocityZ = 0.0f;
+        // }
         
         character_update_camera();
         

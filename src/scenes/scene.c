@@ -26,8 +26,8 @@
 #include "game/bosses/boss.h"
 #include "game/bosses/boss_anim.h"
 #include "dialog_controller.h"
-#include "collision_mesh.h"
-
+//#include "collision_mesh.h"
+#include "collision_system.h"
 
 // TODO: This should not be declared in the header file, as it is only used externally (temp)
 #include "dev.h"
@@ -361,6 +361,8 @@ void scene_init(void)
 
     // Start boss intro cutscene after character and boss are loaded and positioned
     dialog_controller_speak("^A powerful enemy approaches...~\n<Prepare for battle!", 0, 3.0f, false, true);
+
+    collision_init();
 }
 
 // Returns a consistent point around the boss' midsection for lock-on targeting.
@@ -394,55 +396,6 @@ static T3DVec3 get_boss_lock_focus_point(void)
         g_boss->pos[1] + focusOffset,
         g_boss->pos[2]
     }};
-}
-
-// Draw simple letterbox bars for cinematic moments.
-static void draw_cinematic_letterbox(void) {
-    const int barHeight = SCREEN_HEIGHT / 12; // ~20px on 240p
-    rdpq_sync_pipe();
-    rdpq_set_mode_standard();
-    rdpq_mode_combiner(RDPQ_COMBINER_FLAT);
-    rdpq_mode_blender(RDPQ_BLENDER_MULTIPLY);
-    rdpq_set_prim_color(RGBA32(0, 0, 0, 255));
-    rdpq_fill_rectangle(0, 0, SCREEN_WIDTH, barHeight);
-    rdpq_fill_rectangle(0, SCREEN_HEIGHT - barHeight, SCREEN_WIDTH, SCREEN_HEIGHT);
-}
-
-// Draws a small lock-on marker over the boss when Z-targeting is active.
-static void draw_lockon_indicator(T3DViewport *viewport)
-{
-    // Only show during gameplay when the boss is alive and actually targeted
-    if (!cameraLockOnActive || scene_is_cutscene_active() || !scene_is_boss_active() || !g_boss || g_boss->health <= 0.0f) {
-        return;
-    }
-
-    // Anchor the marker to the boss' mid-body point so it aligns with lock-on aim.
-    T3DVec3 worldPos = get_boss_lock_focus_point();
-
-    // Project to screen space
-    T3DVec3 screenPos;
-    t3d_viewport_calc_viewspace_pos(viewport, &screenPos, &worldPos);
-
-    // Skip if behind the camera or outside a small margin
-    if (screenPos.v[2] >= 1.0f) {
-        return;
-    }
-    const int margin = 8;
-    int px = (int)screenPos.v[0];
-    int py = (int)screenPos.v[1];
-    if (px < -margin || px > SCREEN_WIDTH + margin || py < -margin || py > SCREEN_HEIGHT + margin) {
-        return;
-    }
-
-    // Simple white dot
-    rdpq_sync_pipe();
-    rdpq_set_mode_standard();
-    rdpq_mode_combiner(RDPQ_COMBINER_FLAT);
-    rdpq_mode_blender(RDPQ_BLENDER_MULTIPLY);
-    rdpq_set_prim_color(RGBA32(255, 255, 255, 255));
-
-    const int halfSize = 3;
-    rdpq_fill_rectangle(px - halfSize, py - halfSize, px + halfSize + 1, py + halfSize + 1);
 }
 
 void scene_reset(void)
@@ -479,10 +432,10 @@ bool scene_is_menu_active(void) {
 
 // Check if character would collide with room boundaries at the given position
 // Returns true if character would be outside room bounds (collision detected)
-bool scene_check_room_bounds(float posX, float posY, float posZ)
-{
-    return collision_mesh_check_bounds(posX, posY, posZ);
-}
+// bool scene_check_room_bounds(float posX, float posY, float posZ)
+// {
+//     return collision_mesh_check_bounds(posX, posY, posZ);
+// }
 
 void scene_restart(void)
 {
@@ -530,38 +483,8 @@ void update_dynamic_chains(int animIndex)
     }
 }
 
-void scene_update(void) 
+void scene_cutscene_update()
 {
-    // boss testing
-    scroll_update();
-    t3d_anim_update(bossAnimAnimations[0], deltaTime);
-    t3d_skeleton_update(bossAnimSkeleton);
-
-    // Check if menu was just closed - if so, reset character button state
-    bool menuActive = scene_is_menu_active();
-    if (lastMenuActive && !menuActive) {
-        // Menu was just closed - reset character button state to prevent false "just pressed"
-        character_reset_button_state();
-    }
-    lastMenuActive = menuActive;
-
-    // If player is dead or victorious, wait for restart input and halt gameplay updates
-    if (gameState == GAME_STATE_DEAD || gameState == GAME_STATE_VICTORY) {
-        bool aPressed = joypad.btn.a;
-        bool aJustPressed = aPressed && !lastAPressed;
-        lastAPressed = aPressed;
-
-        if (aJustPressed) {
-            scene_restart();
-        }
-        return;
-    }
-    
-    // Don't update game logic when menu is active
-    if (scene_is_menu_active()) {
-        return;
-    }
-    
     // Update cutscene state
     cutsceneTimer += deltaTime;
     // Update camera timer separately (doesn't reset when transitioning states)
@@ -657,16 +580,61 @@ void scene_update(void)
                 camera_mode_smooth(CAMERA_CHARACTER, 1.0f);
             }
             break;
-        
-        // Normal gameplay
-        case CUTSCENE_NONE:
-            // Normal gameplay
-            character_update();
-            if (bossActivated && g_boss) {
-                boss_update(g_boss);
-            }
-            //dialog_controller_update();
+        default:
             break;
+    }
+
+    collision_update();
+}
+
+void scene_update(void) 
+{
+    // boss testing
+    scroll_update();
+    t3d_anim_update(bossAnimAnimations[0], deltaTime);
+    t3d_skeleton_update(bossAnimSkeleton);
+
+    // Check if menu was just closed - if so, reset character button state
+    bool menuActive = scene_is_menu_active();
+    if (lastMenuActive && !menuActive) {
+        // Menu was just closed - reset character button state to prevent false "just pressed"
+        character_reset_button_state();
+    }
+    lastMenuActive = menuActive;
+
+    // If player is dead or victorious, wait for restart input and halt gameplay updates
+    if (gameState == GAME_STATE_DEAD || gameState == GAME_STATE_VICTORY) {
+        bool aPressed = joypad.btn.a;
+        bool aJustPressed = aPressed && !lastAPressed;
+        lastAPressed = aPressed;
+
+        if (aJustPressed) {
+            scene_restart();
+        }
+        return;
+    }
+    
+    // Don't update game logic when menu is active
+    if (scene_is_menu_active()) {
+        return;
+    }
+
+    if(cutsceneState == CUTSCENE_NONE) // Normal gameplay
+    {
+        
+        character_update();
+        if (bossActivated && g_boss) {
+            boss_update(g_boss);
+        }
+
+        collision_update();
+
+
+        //dialog_controller_update();
+    }
+    else // Cutscene
+    {
+        scene_cutscene_update();
     }
 
     // Z-target toggle: press Z to toggle lock-on, target updates with boss movement when active
@@ -718,6 +686,54 @@ void draw_boss_scrolling(const T3DModel* model, const T3DSkeleton* skel)
     });
 }
 
+// Draw simple letterbox bars for cinematic moments.
+static void draw_cinematic_letterbox(void) {
+    const int barHeight = SCREEN_HEIGHT / 12; // ~20px on 240p
+    rdpq_sync_pipe();
+    rdpq_set_mode_standard();
+    rdpq_mode_combiner(RDPQ_COMBINER_FLAT);
+    rdpq_mode_blender(RDPQ_BLENDER_MULTIPLY);
+    rdpq_set_prim_color(RGBA32(0, 0, 0, 255));
+    rdpq_fill_rectangle(0, 0, SCREEN_WIDTH, barHeight);
+    rdpq_fill_rectangle(0, SCREEN_HEIGHT - barHeight, SCREEN_WIDTH, SCREEN_HEIGHT);
+}
+
+// Draws a small lock-on marker over the boss when Z-targeting is active.
+static void draw_lockon_indicator(T3DViewport *viewport)
+{
+    // Only show during gameplay when the boss is alive and actually targeted
+    if (!cameraLockOnActive || scene_is_cutscene_active() || !scene_is_boss_active() || !g_boss || g_boss->health <= 0.0f) {
+        return;
+    }
+
+    // Anchor the marker to the boss' mid-body point so it aligns with lock-on aim.
+    T3DVec3 worldPos = get_boss_lock_focus_point();
+
+    // Project to screen space
+    T3DVec3 screenPos;
+    t3d_viewport_calc_viewspace_pos(viewport, &screenPos, &worldPos);
+
+    // Skip if behind the camera or outside a small margin
+    if (screenPos.v[2] >= 1.0f) {
+        return;
+    }
+    const int margin = 8;
+    int px = (int)screenPos.v[0];
+    int py = (int)screenPos.v[1];
+    if (px < -margin || px > SCREEN_WIDTH + margin || py < -margin || py > SCREEN_HEIGHT + margin) {
+        return;
+    }
+
+    // Simple white dot
+    rdpq_sync_pipe();
+    rdpq_set_mode_standard();
+    rdpq_mode_combiner(RDPQ_COMBINER_FLAT);
+    rdpq_mode_blender(RDPQ_BLENDER_MULTIPLY);
+    rdpq_set_prim_color(RGBA32(255, 255, 255, 255));
+
+    const int halfSize = 3;
+    rdpq_fill_rectangle(px - halfSize, py - halfSize, px + halfSize + 1, py + halfSize + 1);
+}
 
 void scene_draw(T3DViewport *viewport) 
 {
@@ -725,7 +741,7 @@ void scene_draw(T3DViewport *viewport)
 
     t3d_frame_start();
 
-    if(!HARDWARE_MODE)
+    if(!HARDWARE_MODE && debugDraw)
         rdpq_mode_dithering(DITHER_NONE_BAYER);
 
     t3d_viewport_attach(viewport);
@@ -784,10 +800,10 @@ void scene_draw(T3DViewport *viewport)
 
     t3d_matrix_push_pos(1);
         draw_boss_scrolling(bossAnimModel, bossAnimSkeleton);
-        // character_draw();
-        // if (g_boss) {
-        //     boss_draw(g_boss);
-        // }
+        character_draw();
+        if (g_boss) {
+            boss_draw(g_boss);
+        }
     t3d_matrix_pop(1);
 
     //Draw transparencies
@@ -799,55 +815,55 @@ void scene_draw(T3DViewport *viewport)
     // ===== DRAW 2D =====
 
     // Overlay lock-on marker above the boss
-    // draw_lockon_indicator(viewport);
+    draw_lockon_indicator(viewport);
     
-    // bool cutsceneActive = scene_is_cutscene_active();
-    // GameState state = scene_get_game_state();
-    // bool isDead = state == GAME_STATE_DEAD;
-    // bool isVictory = state == GAME_STATE_VICTORY;
-    // bool isEndScreen = isDead || isVictory;
+    bool cutsceneActive = scene_is_cutscene_active();
+    GameState state = scene_get_game_state();
+    bool isDead = state == GAME_STATE_DEAD;
+    bool isVictory = state == GAME_STATE_VICTORY;
+    bool isEndScreen = isDead || isVictory;
 
-    // // Add letterbox bars during intro cinematic.
-    // if (cutsceneActive) {
-    //     draw_cinematic_letterbox();
-    // }
+    // Add letterbox bars during intro cinematic.
+    if (cutsceneActive) {
+        draw_cinematic_letterbox();
+    }
 
-    // // Draw UI elements after 3D rendering is complete (hide during cutscenes or death)
-    // if (!cutsceneActive && !isEndScreen) {
-    //     if (scene_is_boss_active() && g_boss) {
-    //         boss_draw_ui(g_boss, viewport);
-    //     }
-    //     character_draw_ui();
-    // }
+    // Draw UI elements after 3D rendering is complete (hide during cutscenes or death)
+    if (!cutsceneActive && !isEndScreen) {
+        if (scene_is_boss_active() && g_boss) {
+            boss_draw_ui(g_boss, viewport);
+        }
+        character_draw_ui();
+    }
     
-    // if (isEndScreen) {
-    //     // Full-screen overlay with prompt to restart
-    //     rdpq_sync_pipe();
-    //     rdpq_set_mode_standard();
-    //     rdpq_set_prim_color(RGBA32(0, 0, 0, 160));
-    //     rdpq_fill_rectangle(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT);
-    //     rdpq_set_prim_color(RGBA32(255, 255, 255, 255));
+    if (isEndScreen) {
+        // Full-screen overlay with prompt to restart
+        rdpq_sync_pipe();
+        rdpq_set_mode_standard();
+        rdpq_set_prim_color(RGBA32(0, 0, 0, 160));
+        rdpq_fill_rectangle(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT);
+        rdpq_set_prim_color(RGBA32(255, 255, 255, 255));
         
-    //     const char* header = isVictory ? "Victory!" : "You Died";
-    //     const char* prompt = "Press A to restart";
-    //     rdpq_text_printf(&(rdpq_textparms_t){
-    //         .align = ALIGN_CENTER,
-    //         .width = SCREEN_WIDTH,
-    //     }, FONT_UNBALANCED, 0, SCREEN_HEIGHT / 2 - 12, "%s", header);
-    //     rdpq_text_printf(&(rdpq_textparms_t){
-    //         .align = ALIGN_CENTER,
-    //         .width = SCREEN_WIDTH,
-    //     }, FONT_UNBALANCED, 0, SCREEN_HEIGHT / 2 + 4, "%s", prompt);
-    //     return;
-    // }
+        const char* header = isVictory ? "Victory!" : "You Died";
+        const char* prompt = "Press A to restart";
+        rdpq_text_printf(&(rdpq_textparms_t){
+            .align = ALIGN_CENTER,
+            .width = SCREEN_WIDTH,
+        }, FONT_UNBALANCED, 0, SCREEN_HEIGHT / 2 - 12, "%s", header);
+        rdpq_text_printf(&(rdpq_textparms_t){
+            .align = ALIGN_CENTER,
+            .width = SCREEN_WIDTH,
+        }, FONT_UNBALANCED, 0, SCREEN_HEIGHT / 2 + 4, "%s", prompt);
+        return;
+    }
     
-    // // Draw dialog on top of everything
-    // dialog_controller_draw();
+    // Draw dialog on top of everything
+    dialog_controller_draw();
 }
 
 void scene_cleanup(void)
 {
-    collision_mesh_cleanup();
+    //collision_mesh_cleanup();
     character_delete();
     camera_reset();
     

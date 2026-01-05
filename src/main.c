@@ -14,6 +14,8 @@
 #include "menu_controller.h"
 #include "save_controller.h"
 
+#include "collision_system.h"
+
 #include "scene.h"
 #include "dev.h"
 
@@ -81,7 +83,7 @@ int main(void)
 
     rspq_syncpoint_t syncPoint = 0; // TODO: I have no idea what this does but it's needed for flipbook textures.
 
-    if(DEV_MODE)
+    if(DEV_MODE && debugDraw)
     {
         offscreenBuffer = surface_alloc(FMT_RGBA16, SCREEN_WIDTH, SCREEN_HEIGHT);
     }
@@ -95,7 +97,6 @@ int main(void)
         if(DEV_MODE && debugDraw)
         {
             rdpq_attach(&offscreenBuffer, display_get_zbuf());
-            rdpq_set_mode_standard();
         }
         else
         {
@@ -159,7 +160,9 @@ int main(void)
             // TODO: There is a reason the update comes after the draw but it shouldnt, this needs to be fixed and flipped.
             dev_draw_update(&viewport); // Draw dev tools if in dev mode
             dev_update();
-            dev_draw_debug_update(&viewport); // Draw debug lines on CPU
+
+            if(debugDraw)
+                collision_draw(&viewport);
         }
         
         // FPS for Dev
