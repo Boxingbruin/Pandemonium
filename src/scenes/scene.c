@@ -69,18 +69,11 @@ T3DModel* roomFloorModel;
 rspq_block_t* roomFloorDpl;
 T3DMat4FP* roomFloorMatrix;
 
-// Boss Anim Testing
-static sprite_t* bossScrollSprite = NULL;
-static T3DModel* bossAnimModel; 
-static rspq_block_t* bossAnimDpl; 
-static T3DMat4FP* bossAnimMatrix; 
-static T3DSkeleton* bossAnimSkeleton; 
-static T3DAnim** bossAnimAnimations = NULL;
-
 const char* DYNAMIC_CHAIN_ANIMS[NUM_DYNAMIC_CHAINS][DYNAMIC_CHAIN_ANIM_COUNT] = {
     { "Chain1Initial" },  // chain 0, anim 0
     { "Chain2Initial" },  // chain 1, anim 0
 };
+
 T3DModel* dynamicChainModel; 
 typedef struct {
     T3DModel*      model;
@@ -252,28 +245,6 @@ void scene_load_environment(){
 
     // ===== LOAD DYNAMIC CHAINS =====
     //scene_load_dynamic_chains();
-
-    // ===== LOAD BOSS FOR TESTING ===== 
-    bossScrollSprite = sprite_load("rom:/boss_room/fog.i8.sprite");
-    bossAnimModel = t3d_model_load("rom:/boss/boss_anim.t3dm"); 
-    bossAnimSkeleton = malloc_uncached(sizeof(T3DSkeleton)); 
-    *bossAnimSkeleton = t3d_skeleton_create(bossAnimModel); 
-    const char* bossAnimAnimationNames[] = {"Kneel"}; 
-    const int bossAnimAnimationCount = 1;
-
-    bossAnimAnimations = malloc_uncached(bossAnimAnimationCount * sizeof(T3DAnim*)); 
-    for (int i = 0; i < bossAnimAnimationCount; i++) { 
-        bossAnimAnimations[i] = malloc_uncached(sizeof(T3DAnim)); 
-        *bossAnimAnimations[i] = t3d_anim_create(bossAnimModel, bossAnimAnimationNames[i]); 
-        t3d_anim_set_looping(bossAnimAnimations[i], true); 
-        t3d_anim_set_playing(bossAnimAnimations[i], true); 
-        t3d_anim_attach(bossAnimAnimations[i], bossAnimSkeleton); 
-    }
-    rspq_block_begin(); 
-    t3d_model_draw_skinned(bossAnimModel, bossAnimSkeleton); 
-    bossAnimDpl = rspq_block_end(); 
-    bossAnimMatrix = malloc_uncached(sizeof(T3DMat4FP)); 
-    t3d_mat4fp_from_srt_euler(bossAnimMatrix, (float[3]){MODEL_SCALE, MODEL_SCALE, MODEL_SCALE}, (float[3]){0.0f, 0.0f, 0.0f}, (float[3]){0.0f, -5.0f, 0.0f} );
 }
 
 void scene_init(void) 
@@ -374,22 +345,23 @@ static T3DVec3 get_boss_lock_focus_point(void)
         return (T3DVec3){{0.0f, 0.0f, 0.0f}};
     }
     
-    // Safety check: ensure boss is initialized
-    if (g_boss->scale[1] <= 0.0f || g_boss->orbitRadius <= 0.0f) {
-        // Return safe default if boss data is invalid
-        return (T3DVec3){{g_boss->pos[0], g_boss->pos[1] + 10.0f, g_boss->pos[2]}};
-    }
-    
     // Default to a mid-body estimate even if the capsule data is uninitialized.
     float focusOffset = g_boss->orbitRadius * 0.6f; // roughly chest height for current tuning
 
     float capA = g_boss->capsuleCollider.localCapA.v[1];
     float capB = g_boss->capsuleCollider.localCapB.v[1];
 
-    // If a capsule is defined, use its midpoint (scaled to world space).
-    if (g_boss->scale[1] > 0.0f && (capA != 0.0f || capB != 0.0f)) {
-        focusOffset = (capA + capB) * 0.5f * g_boss->scale[1];
+    // // If a capsule is defined, use its midpoint (scaled to world space).
+    // if (g_boss->scale[1] > 0.0f && (capA != 0.0f || capB != 0.0f)) {
+    //     focusOffset = (capA + capB) * 0.5f;
+    // }
+
+    // Use point halfway between midpoint and capB (i.e. 75% from A -> B)
+    if (capA != 0.0f || capB != 0.0f) {
+        focusOffset = (capA + capB + capB + capB) * 0.25f;
     }
+
+    //focusOffset = capB;
 
     return (T3DVec3){{
         g_boss->pos[0],
@@ -589,10 +561,8 @@ void scene_cutscene_update()
 
 void scene_update(void) 
 {
-    // boss testing
+    // Update all scrolling textures
     scroll_update();
-    t3d_anim_update(bossAnimAnimations[0], deltaTime);
-    t3d_skeleton_update(bossAnimSkeleton);
 
     // Check if menu was just closed - if so, reset character button state
     bool menuActive = scene_is_menu_active();
@@ -664,28 +634,6 @@ void scene_fixed_update(void)
 {
 }
 
-void draw_boss_scrolling(const T3DModel* model, const T3DSkeleton* skel)
-{
-    ScrollDyn bossScrollDyn = {
-        .xSpeed = 0.0f,
-        .ySpeed = 8.0f,
-        .scale  = 64.0f,
-        .spr = bossScrollSprite,
-    };
-
-    t3d_matrix_set(bossAnimMatrix, true);
-
-    t3d_model_draw_custom(bossAnimModel, (T3DModelDrawConf){
-        .userData     = &bossScrollDyn,
-        .tileCb       = NULL,
-        .filterCb     = NULL,
-        .dynTextureCb = scroll_dyn_cb,
-        .matrices = bossAnimSkeleton->bufferCount == 1
-          ? bossAnimSkeleton->boneMatricesFP
-          : (const T3DMat4FP*)t3d_segment_placeholder(T3D_SEGMENT_SKELETON)
-    });
-}
-
 // Draw simple letterbox bars for cinematic moments.
 static void draw_cinematic_letterbox(void) {
     const int barHeight = SCREEN_HEIGHT / 12; // ~20px on 240p
@@ -741,8 +689,10 @@ void scene_draw(T3DViewport *viewport)
 
     t3d_frame_start();
 
-    if(!HARDWARE_MODE && debugDraw)
+    if(!HARDWARE_MODE && !debugDraw)
+    {
         rdpq_mode_dithering(DITHER_NONE_BAYER);
+    }
 
     t3d_viewport_attach(viewport);
 
@@ -799,7 +749,6 @@ void scene_draw(T3DViewport *viewport)
     rdpq_set_prim_color((color_t){0, 0, 0, 0x20});
 
     t3d_matrix_push_pos(1);
-        draw_boss_scrolling(bossAnimModel, bossAnimSkeleton);
         character_draw();
         if (g_boss) {
             boss_draw(g_boss);
@@ -815,7 +764,8 @@ void scene_draw(T3DViewport *viewport)
     // ===== DRAW 2D =====
 
     // Overlay lock-on marker above the boss
-    draw_lockon_indicator(viewport);
+    if(DEV_MODE)
+        draw_lockon_indicator(viewport);
     
     bool cutsceneActive = scene_is_cutscene_active();
     GameState state = scene_get_game_state();

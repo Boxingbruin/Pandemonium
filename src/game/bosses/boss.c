@@ -12,13 +12,14 @@
 #include <t3d/t3dmodel.h>
 #include <stdlib.h>
 #include <string.h>
+#include <math.h>
 
 #include "game_time.h"
 #include "scene.h"
 #include "character.h"
 #include "general_utility.h"
+#include "globals.h"
 #include "utilities/collision_mesh.h"
-#include <math.h>
 
 // Forward declarations for internal functions
 static void boss_apply_intent(Boss* boss, const BossIntent* intent);
@@ -398,15 +399,15 @@ void boss_init(Boss* boss) {
     if (!boss) return;
     
     // Load model
-    T3DModel* bossModel = t3d_model_load("rom:/boss/boss.t3dm");
+    T3DModel* bossModel = t3d_model_load("rom:/boss/boss_anim.t3dm"); 
     boss->model = bossModel;
     
     // Create skeletons
-    T3DSkeleton* skeleton = malloc(sizeof(T3DSkeleton));
+    T3DSkeleton* skeleton = malloc_uncached(sizeof(T3DSkeleton));
     *skeleton = t3d_skeleton_create(bossModel);
     boss->skeleton = skeleton;
     
-    T3DSkeleton* skeletonBlend = malloc(sizeof(T3DSkeleton));
+    T3DSkeleton* skeletonBlend = malloc_uncached(sizeof(T3DSkeleton));
     *skeletonBlend = t3d_skeleton_clone(skeleton, false);
     boss->skeletonBlend = skeletonBlend;
     
@@ -431,9 +432,9 @@ void boss_init(Boss* boss) {
         false  // JumpForward - one-shot
     };
     
-    T3DAnim** animations = malloc(animationCount * sizeof(T3DAnim*));
+    T3DAnim** animations = malloc_uncached(animationCount * sizeof(T3DAnim*));
     for (int i = 0; i < animationCount; i++) {
-        animations[i] = malloc(sizeof(T3DAnim));
+        animations[i] = malloc_uncached(sizeof(T3DAnim));
         *animations[i] = t3d_anim_create(bossModel, animationNames[i]);
         t3d_anim_set_looping(animations[i], animationsLooping[i]);
         t3d_anim_set_playing(animations[i], false);
@@ -465,18 +466,18 @@ void boss_init(Boss* boss) {
     boss->rot[0] = 0.0f;
     boss->rot[1] = 0.0f;
     boss->rot[2] = 0.0f;
-    boss->scale[0] = 0.2f;
-    boss->scale[1] = 0.2f;
-    boss->scale[2] = 0.2f;
+    boss->scale[0] = MODEL_SCALE;
+    boss->scale[1] = MODEL_SCALE;
+    boss->scale[2] = MODEL_SCALE;
     
     // Initialize capsule collider
     boss->capsuleCollider.localCapA.v[0] = 0.0f;
-    boss->capsuleCollider.localCapA.v[1] = 0.0f;
+    boss->capsuleCollider.localCapA.v[1] = 10.0f;
     boss->capsuleCollider.localCapA.v[2] = 0.0f;
     boss->capsuleCollider.localCapB.v[0] = 0.0f;
-    boss->capsuleCollider.localCapB.v[1] = 550.0f;
+    boss->capsuleCollider.localCapB.v[1] = 40.0f;
     boss->capsuleCollider.localCapB.v[2] = 0.0f;
-    boss->capsuleCollider.radius = 360.0f;
+    boss->capsuleCollider.radius = 14.0f;
     
     // Find Hand-Right bone index
     boss->handRightBoneIndex = t3d_skeleton_find_bone(skeleton, "Hand-Right");
@@ -593,6 +594,8 @@ void boss_init(Boss* boss) {
     
     // Initialize AI
     boss_ai_init(boss);
+
+    boss_draw_init();
 }
 
 void boss_reset(Boss* boss) {

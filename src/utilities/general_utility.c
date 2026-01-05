@@ -75,8 +75,7 @@ void dynamic_tex_cb(void* userData, const T3DMaterial* material, rdpq_texparms_t
 	rdpq_tex_upload(TILE0, surface, NULL);
 }
 
-void scroll_dyn_cb(void* userData, const T3DMaterial* material,
-                   rdpq_texparms_t* tp, rdpq_tile_t tile)
+void scroll_dyn_cb(void* userData, const T3DMaterial* material, rdpq_texparms_t* tp, rdpq_tile_t tile)
 {
     if (tile != TILE0) return;
 

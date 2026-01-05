@@ -73,7 +73,7 @@ typedef struct Boss {
     void *skeletonBlend;  // T3DSkeleton*
     void **animations;  // T3DAnim**
     int animationCount;
-    
+
     // Animation state (owned by boss_anim.c)
     int currentAnimation;
     int previousAnimation;

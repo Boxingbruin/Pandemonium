@@ -154,11 +154,11 @@ void camera_update(T3DViewport *viewport)
         
         if(joypad.btn.c_left)
         {
-            rotateX = -1.0f;
+            rotateX = 1.0f;
         }
         else if(joypad.btn.c_right)
         {
-            rotateX = 1.0f;
+            rotateX = -1.0f;
         }
         
         if(joypad.btn.c_down)
