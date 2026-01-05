@@ -46,6 +46,24 @@ float rand_custom_float_signed(void)
     return (rand_custom_float() * 2.0f) - 1.0f; // Adjust to [-1, 1]
 }
 
+// fast modulo
+static inline float wrap_mod(float v, float scale) 
+{
+    const float inv = (scale == 64.0f) ? 0.015625f : 0.03125f;
+
+    // trunc toward 0
+    float q = (float)((int)(v * inv));
+    v -= q * scale;
+    if (v < 0.f) v += scale;
+    return v;
+}
+
+surface_t sprite_to_surface(sprite_t* spr)
+{
+    tex_format_t fmt = sprite_get_format(spr);
+    return surface_make_linear((void*)spr->data, fmt, spr->width, spr->height);
+}
+
 void dynamic_tex_cb(void* userData, const T3DMaterial* material, rdpq_texparms_t *tileParams, rdpq_tile_t tile) 
 {
 	if(tile != TILE0)return;
@@ -57,16 +75,22 @@ void dynamic_tex_cb(void* userData, const T3DMaterial* material, rdpq_texparms_t
 	rdpq_tex_upload(TILE0, surface, NULL);
 }
 
-// fast modulo
-static inline float wrap_mod(float v, float scale) 
+void scroll_dyn_cb(void* userData, const T3DMaterial* material,
+                   rdpq_texparms_t* tp, rdpq_tile_t tile)
 {
-    const float inv = (scale == 64.0f) ? 0.015625f : 0.03125f;
+    if (tile != TILE0) return;
 
-    // trunc toward 0
-    float q = (float)((int)(v * inv));
-    v -= q * scale;
-    if (v < 0.f) v += scale;
-    return v;
+    ScrollDyn* s = (ScrollDyn*)userData;
+
+    tp->s.translate = wrap_mod(scrollOffset * s->xSpeed, s->scale);
+    tp->t.translate = wrap_mod(scrollOffset * s->ySpeed, s->scale);
+
+    surface_t surf = sprite_to_surface(s->spr);
+
+    rdpq_sync_tile();
+    rdpq_mode_tlut(TLUT_NONE);
+    rdpq_tex_upload(TILE0, &surf, tp);
+
 }
 
 void scroll_update(void)

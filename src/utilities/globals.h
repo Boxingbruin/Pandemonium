@@ -10,7 +10,7 @@
 #define ANIM_SPEED 1.0f
 
 #define DEV_MODE true
-#define SHOW_FPS false
+#define SHOW_FPS true
 #define HARDWARE_MODE false
 
 enum

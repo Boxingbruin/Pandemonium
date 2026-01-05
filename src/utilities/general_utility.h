@@ -9,6 +9,13 @@
 #define SCROLL_STEP 0.2f
 
 typedef struct {
+    sprite_t* spr;
+    float xSpeed, ySpeed;
+    float scale;
+    float* offset;
+} ScrollDyn;
+
+typedef struct {
   float xSpeed;
   float ySpeed;
   float scale;
@@ -28,6 +35,9 @@ typedef struct {
     ScrollParams* active;
 } ScrollCtx;
 
+surface_t sprite_to_surface(sprite_t* spr);
+
+void scroll_dyn_cb(void* userData, const T3DMaterial* material, rdpq_texparms_t* tp, rdpq_tile_t tile);
 void dynamic_tex_cb(void* userData, const T3DMaterial* material, rdpq_texparms_t *tileParams, rdpq_tile_t tile);
 
 void scroll_update(void);

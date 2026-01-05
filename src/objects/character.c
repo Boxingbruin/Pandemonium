@@ -811,28 +811,28 @@ void character_update(void)
     float newPosZ = character.pos[2] + movementVelocityZ * deltaTime;
     
     // Check room bounds collision
-    if (scene_check_room_bounds(newPosX, character.pos[1], newPosZ)) {
-        // Collision detected - try to clamp position
-        // First try X movement only
-        if (!scene_check_room_bounds(newPosX, character.pos[1], character.pos[2])) {
-            character.pos[0] = newPosX;
-            movementVelocityZ = 0.0f;  // Stop Z movement
-        }
-        // Then try Z movement only
-        else if (!scene_check_room_bounds(character.pos[0], character.pos[1], newPosZ)) {
-            character.pos[2] = newPosZ;
-            movementVelocityX = 0.0f;  // Stop X movement
-        }
-        // If both cause collision, stop movement
-        else {
-            movementVelocityX = 0.0f;
-            movementVelocityZ = 0.0f;
-        }
-    } else {
+    // if (scene_check_room_bounds(newPosX, character.pos[1], newPosZ)) {
+    //     // Collision detected - try to clamp position
+    //     // First try X movement only
+    //     if (!scene_check_room_bounds(newPosX, character.pos[1], character.pos[2])) {
+    //         character.pos[0] = newPosX;
+    //         movementVelocityZ = 0.0f;  // Stop Z movement
+    //     }
+    //     // Then try Z movement only
+    //     else if (!scene_check_room_bounds(character.pos[0], character.pos[1], newPosZ)) {
+    //         character.pos[2] = newPosZ;
+    //         movementVelocityX = 0.0f;  // Stop X movement
+    //     }
+    //     // If both cause collision, stop movement
+    //     else {
+    //         movementVelocityX = 0.0f;
+    //         movementVelocityZ = 0.0f;
+    //     }
+    // } else {
         // No collision, apply movement
         character.pos[0] = newPosX;
         character.pos[2] = newPosZ;
-    }
+    //}
 
     character_update_camera();
 

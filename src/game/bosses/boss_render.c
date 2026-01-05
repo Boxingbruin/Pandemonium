@@ -65,7 +65,7 @@ void boss_render_debug(Boss* boss, void* viewport) {
     }
     draw_boss_health_bar(boss->name, ratio, flash);
     
-    if (!debugDraw) {
+    if (!DEV_MODE || !debugDraw) {
         return;
     }
     

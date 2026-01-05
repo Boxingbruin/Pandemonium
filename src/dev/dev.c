@@ -50,7 +50,7 @@ static int sidebarSelected = 0; // Sidebar menu selection
 static int selected = 0;       // Submenu/category selection
 static int columnCount = 5;
 
-static const int sceneCount = 4;
+static const int sceneCount = 1;
 
 // New: track if we are inside a category screen
 static bool inCategoryScreen = false;

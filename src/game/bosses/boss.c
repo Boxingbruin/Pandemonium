@@ -226,28 +226,28 @@ static void boss_update_movement(Boss* boss, float dt) {
 
     float sx = boss->scale[0];
     // X axis
-    if (!collision_mesh_check_bounds_capsule(
-            nextX, boss->pos[1], boss->pos[2],
-            boss->capsuleCollider.localCapA.v[0], boss->capsuleCollider.localCapA.v[1], boss->capsuleCollider.localCapA.v[2],
-            boss->capsuleCollider.localCapB.v[0], boss->capsuleCollider.localCapB.v[1], boss->capsuleCollider.localCapB.v[2],
-            boss->capsuleCollider.radius, sx
-        )) {
-        boss->pos[0] = nextX;
-    } else {
-        boss->velX = 0.0f;
-    }
+    // if (!collision_mesh_check_bounds_capsule(
+    //         nextX, boss->pos[1], boss->pos[2],
+    //         boss->capsuleCollider.localCapA.v[0], boss->capsuleCollider.localCapA.v[1], boss->capsuleCollider.localCapA.v[2],
+    //         boss->capsuleCollider.localCapB.v[0], boss->capsuleCollider.localCapB.v[1], boss->capsuleCollider.localCapB.v[2],
+    //         boss->capsuleCollider.radius, sx
+    //     )) {
+    //     boss->pos[0] = nextX;
+    // } else {
+    //     boss->velX = 0.0f;
+    // }
 
-    // Z axis
-    if (!collision_mesh_check_bounds_capsule(
-            boss->pos[0], boss->pos[1], nextZ,
-            boss->capsuleCollider.localCapA.v[0], boss->capsuleCollider.localCapA.v[1], boss->capsuleCollider.localCapA.v[2],
-            boss->capsuleCollider.localCapB.v[0], boss->capsuleCollider.localCapB.v[1], boss->capsuleCollider.localCapB.v[2],
-            boss->capsuleCollider.radius, sx
-        )) {
-        boss->pos[2] = nextZ;
-    } else {
-        boss->velZ = 0.0f;
-    }
+    // // Z axis
+    // if (!collision_mesh_check_bounds_capsule(
+    //         boss->pos[0], boss->pos[1], nextZ,
+    //         boss->capsuleCollider.localCapA.v[0], boss->capsuleCollider.localCapA.v[1], boss->capsuleCollider.localCapA.v[2],
+    //         boss->capsuleCollider.localCapB.v[0], boss->capsuleCollider.localCapB.v[1], boss->capsuleCollider.localCapB.v[2],
+    //         boss->capsuleCollider.radius, sx
+    //     )) {
+    //     boss->pos[2] = nextZ;
+    // } else {
+    //     boss->velZ = 0.0f;
+    // }
     
     // Update facing direction
     if (boss->state == BOSS_STATE_STRAFE || boss->state == BOSS_STATE_CHASE) {

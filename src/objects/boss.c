@@ -958,29 +958,29 @@ static void boss_update_movement_and_physics(float dt) {
     float nextZ = boss.pos[2] + boss.velZ * dt;
 
     float sx = boss.scale[0];
-    // X axis
-    if (!collision_mesh_check_bounds_capsule(
-            nextX, boss.pos[1], boss.pos[2],
-            boss.capsuleCollider.localCapA.v[0], boss.capsuleCollider.localCapA.v[1], boss.capsuleCollider.localCapA.v[2],
-            boss.capsuleCollider.localCapB.v[0], boss.capsuleCollider.localCapB.v[1], boss.capsuleCollider.localCapB.v[2],
-            boss.capsuleCollider.radius, sx
-        )) {
-        boss.pos[0] = nextX;
-    } else {
-        boss.velX = 0.0f;
-    }
+    // // X axis
+    // if (!collision_mesh_check_bounds_capsule(
+    //         nextX, boss.pos[1], boss.pos[2],
+    //         boss.capsuleCollider.localCapA.v[0], boss.capsuleCollider.localCapA.v[1], boss.capsuleCollider.localCapA.v[2],
+    //         boss.capsuleCollider.localCapB.v[0], boss.capsuleCollider.localCapB.v[1], boss.capsuleCollider.localCapB.v[2],
+    //         boss.capsuleCollider.radius, sx
+    //     )) {
+    //     boss.pos[0] = nextX;
+    // } else {
+    //     boss.velX = 0.0f;
+    // }
 
-    // Z axis
-    if (!collision_mesh_check_bounds_capsule(
-            boss.pos[0], boss.pos[1], nextZ,
-            boss.capsuleCollider.localCapA.v[0], boss.capsuleCollider.localCapA.v[1], boss.capsuleCollider.localCapA.v[2],
-            boss.capsuleCollider.localCapB.v[0], boss.capsuleCollider.localCapB.v[1], boss.capsuleCollider.localCapB.v[2],
-            boss.capsuleCollider.radius, sx
-        )) {
-        boss.pos[2] = nextZ;
-    } else {
-        boss.velZ = 0.0f;
-    }
+    // // Z axis
+    // if (!collision_mesh_check_bounds_capsule(
+    //         boss.pos[0], boss.pos[1], nextZ,
+    //         boss.capsuleCollider.localCapA.v[0], boss.capsuleCollider.localCapA.v[1], boss.capsuleCollider.localCapA.v[2],
+    //         boss.capsuleCollider.localCapB.v[0], boss.capsuleCollider.localCapB.v[1], boss.capsuleCollider.localCapB.v[2],
+    //         boss.capsuleCollider.radius, sx
+    //     )) {
+    //     boss.pos[2] = nextZ;
+    // } else {
+    //     boss.velZ = 0.0f;
+    // }
     
     // Update facing direction
     float targetAngle;
@@ -1213,15 +1213,13 @@ void boss_update(void) {
 		return;
 	}
 
-	float dt = deltaTime;
-
 	// Decay telegraph timer
 	if (bossTelegraphTimer > 0.0f) {
-		bossTelegraphTimer -= dt;
+		bossTelegraphTimer -= deltaTime;
 		if (bossTelegraphTimer < 0.0f) bossTelegraphTimer = 0.0f;
 	}
 	if (bossDebugSoundTimer > 0.0f) {
-		bossDebugSoundTimer -= dt;
+		bossDebugSoundTimer -= deltaTime;
 		if (bossDebugSoundTimer < 0.0f) bossDebugSoundTimer = 0.0f;
 	}
 
@@ -1243,7 +1241,7 @@ void boss_update(void) {
 
 	// Basic AI scaffolding: chase + orbit + simple charge trigger
 	// Advance the state timer each frame so time-based transitions fire
-	boss.stateTimer += dt;
+	boss.stateTimer += deltaTime;
 
 	// Acquire target from character (centered around their focus height)
 	T3DVec3 target = {{ character.pos[0], character.pos[1] + 0.5f, character.pos[2] }};
@@ -1252,7 +1250,7 @@ void boss_update(void) {
 	float dist = sqrtf(dx*dx + dz*dz);
 
 	// Advanced targeting system with lag, delay, and anticipation
-	boss_update_targeting_system(dt);
+	boss_update_targeting_system(deltaTime);
 
 	// Phase switch at 50% HP
 	if (boss.phaseIndex == 1 && boss.health <= boss.maxHealth * 0.5f) {
@@ -1263,7 +1261,7 @@ void boss_update(void) {
 	}
 
 	// Update all cooldowns
-	boss_update_cooldowns(dt);
+	boss_update_cooldowns(deltaTime);
 	
 	// State machine logic
 	const float COMBAT_RADIUS = boss.orbitRadius;
@@ -1653,7 +1651,7 @@ void boss_draw_ui(T3DViewport *viewport)
 	}
 	draw_boss_health_bar(boss.name, ratio, flash);
 
-	if (!debugDraw) {
+	if (!DEV_MODE || !DEBUG_DRAW) {
 		return;
 	}
 
