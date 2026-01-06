@@ -29,9 +29,11 @@ extern Character character;
 // Forward declarations
 static void boss_attacks_handle_power_jump(Boss* boss, float dt);
 static void boss_attacks_handle_combo(Boss* boss, float dt);
-static void boss_attacks_handle_chain_sword(Boss* boss, float dt);
+static void boss_attacks_handle_combo_starter(Boss* boss, float dt);
 static void boss_attacks_handle_roar_stomp(Boss* boss, float dt);
 static void boss_attacks_handle_tracking_slam(Boss* boss, float dt);
+static void boss_attacks_handle_charge(Boss* boss, float dt);
+static void boss_attacks_handle_flip_attack(Boss* boss, float dt);
 static void boss_update_hand_attack_collider(Boss* boss);
 
 // Sound flags shared with AI module
@@ -44,10 +46,11 @@ void boss_attacks_update(Boss* boss, float dt) {
     // Check if boss is in an attack state and update hand collider
     bool isAttackState = (boss->state == BOSS_STATE_POWER_JUMP ||
                           boss->state == BOSS_STATE_COMBO_ATTACK ||
-                          boss->state == BOSS_STATE_CHAIN_SWORD ||
+                          boss->state == BOSS_STATE_COMBO_STARTER ||
                           boss->state == BOSS_STATE_ROAR_STOMP ||
                           boss->state == BOSS_STATE_TRACKING_SLAM ||
-                          boss->state == BOSS_STATE_CHARGE);
+                          boss->state == BOSS_STATE_CHARGE ||
+                          boss->state == BOSS_STATE_FLIP_ATTACK);
     
     // Always update collider position for debugging (even when not attacking)
     if (boss->handRightBoneIndex >= 0) {
@@ -70,8 +73,8 @@ void boss_attacks_update(Boss* boss, float dt) {
             boss_attacks_handle_combo(boss, dt);
             break;
             
-        case BOSS_STATE_CHAIN_SWORD:
-            boss_attacks_handle_chain_sword(boss, dt);
+        case BOSS_STATE_COMBO_STARTER:
+            boss_attacks_handle_combo_starter(boss, dt);
             break;
             
         case BOSS_STATE_ROAR_STOMP:
@@ -80,6 +83,14 @@ void boss_attacks_update(Boss* boss, float dt) {
             
         case BOSS_STATE_TRACKING_SLAM:
             boss_attacks_handle_tracking_slam(boss, dt);
+            break;
+            
+        case BOSS_STATE_CHARGE:
+            boss_attacks_handle_charge(boss, dt);
+            break;
+            
+        case BOSS_STATE_FLIP_ATTACK:
+            boss_attacks_handle_flip_attack(boss, dt);
             break;
             
         default:
@@ -256,6 +267,12 @@ static void boss_attacks_handle_combo(Boss* boss, float dt) {
     const float stepDuration = 0.8f; // Each combo step
     const float vulnerableWindow = 0.4f;
     
+    // Always face the locked target position (lerped player position)
+    float dx = boss->lockedTargetingPos[0] - boss->pos[0];
+    float dz = boss->lockedTargetingPos[2] - boss->pos[2];
+    // Use consistent rotation formula
+    boss->rot[1] = -atan2f(-dz, dx) + 3.14159265359f;
+    
     int targetStep = (int)(boss->stateTimer / stepDuration);
     if (targetStep != boss->comboStep && targetStep < 3) {
         boss->comboStep = targetStep;
@@ -273,9 +290,9 @@ static void boss_attacks_handle_combo(Boss* boss, float dt) {
     // Check for player interrupt during vulnerable window
     if (boss->comboVulnerableTimer > 0.0f && !boss->comboInterrupted) {
         // Check if player is attacking boss during vulnerable window
-        float dx = character.pos[0] - boss->pos[0];
-        float dz = character.pos[2] - boss->pos[2];
-        float dist = sqrtf(dx*dx + dz*dz);
+        float dx2 = character.pos[0] - boss->pos[0];
+        float dz2 = character.pos[2] - boss->pos[2];
+        float dist = sqrtf(dx2*dx2 + dz2*dz2);
         
         if (dist < 5.0f) {
             // Combo is interruptible when player gets close during vulnerable window
@@ -290,10 +307,6 @@ static void boss_attacks_handle_combo(Boss* boss, float dt) {
     // Execute combo steps
     if (boss->comboStep == 0) {
         // Step 1: Sweep attack
-        float dx = character.pos[0] - boss->pos[0];
-        float dz = character.pos[2] - boss->pos[2];
-        // Use consistent rotation formula
-        boss->rot[1] = -atan2f(-dz, dx) + 3.14159265359f;
         
         if (boss->stateTimer > 0.5f && boss->stateTimer < 0.7f && !boss->currentAttackHasHit) {
             if (boss_check_hand_attack_collision(boss)) {
@@ -336,10 +349,10 @@ static void boss_attacks_handle_combo(Boss* boss, float dt) {
     // (AI will check stateTimer > stepDuration * 3 + 0.5f and transition to STRAFE)
 }
 
-static void boss_attacks_handle_chain_sword(Boss* boss, float dt) {
+static void boss_attacks_handle_combo_starter(Boss* boss, float dt) {
     // Keep boss facing the target during the entire attack
-    float dx = boss->chainSwordTargetPos[0] - boss->pos[0];
-    float dz = boss->chainSwordTargetPos[2] - boss->pos[2];
+    float dx = boss->comboStarterTargetPos[0] - boss->pos[0];
+    float dz = boss->comboStarterTargetPos[2] - boss->pos[2];
     // Use same rotation formula as strafe/chase for consistency
     boss->rot[1] = -atan2f(-dz, dx) + 3.14159265359f;
     
@@ -353,16 +366,15 @@ static void boss_attacks_handle_chain_sword(Boss* boss, float dt) {
         boss->swordProjectilePos[0] = boss->pos[0];
         boss->swordProjectilePos[1] = boss->pos[1] + 2.0f;
         boss->swordProjectilePos[2] = boss->pos[2];
-        // boss_debug_sound("boss_chain_sword_throw");
-        // boss_debug_sound("boss_chain_rattle");
+        // boss_debug_sound("boss_combo_starter_throw");
     }
     
-    // Phase 2: Sword flight (0.5 - 1.5s)
-    if (boss->swordThrown && boss->stateTimer < 1.5f && !boss->chainSwordSlamHasHit) {
+    // Phase 2: Sword flight (0.5 - 1.0s)
+    if (boss->swordThrown && boss->stateTimer < 1.0f && !boss->comboStarterSlamHasHit) {
         // Move sword toward target
-        float t = (boss->stateTimer - 0.5f) / 1.0f; // 0 to 1
-        boss->swordProjectilePos[0] = boss->pos[0] + (boss->chainSwordTargetPos[0] - boss->pos[0]) * t;
-        boss->swordProjectilePos[2] = boss->pos[2] + (boss->chainSwordTargetPos[2] - boss->pos[2]) * t;
+        float t = (boss->stateTimer - 0.5f) / 0.5f; // 0 to 1 over 0.5s
+        boss->swordProjectilePos[0] = boss->pos[0] + (boss->comboStarterTargetPos[0] - boss->pos[0]) * t;
+        boss->swordProjectilePos[2] = boss->pos[2] + (boss->comboStarterTargetPos[2] - boss->pos[2]) * t;
         boss->swordProjectilePos[1] = boss->pos[1] + 2.0f + sinf(t * 3.14159265359f) * 5.0f; // Arc
         
         // Check for hit
@@ -373,21 +385,21 @@ static void boss_attacks_handle_chain_sword(Boss* boss, float dt) {
         
         if (hitDist < 3.0f && !boss->currentAttackHasHit) {
             character_apply_damage(20.0f);
-            // boss_debug_sound("boss_chain_sword_impact");
+            // boss_debug_sound("boss_combo_starter_impact");
             // boss_debug_sound("boss_attack_success");
             boss->currentAttackHasHit = true;
-            boss->chainSwordSlamHasHit = true;
+            boss->comboStarterSlamHasHit = true;
         }
     }
     
-    // Phase 3: Sword slam and pull back (1.5s+)
-    if (boss->stateTimer >= 1.5f && !boss->chainSwordSlamHasHit) {
-        boss->chainSwordSlamHasHit = true;
-        // boss_debug_sound("boss_chain_sword_impact");
+    // Phase 3: Sword slam (1.0s+)
+    if (boss->stateTimer >= 1.0f && !boss->comboStarterSlamHasHit) {
+        boss->comboStarterSlamHasHit = true;
+        // boss_debug_sound("boss_combo_starter_impact");
         // Sword hits ground at target
-        boss->swordProjectilePos[0] = boss->chainSwordTargetPos[0];
-        boss->swordProjectilePos[1] = boss->chainSwordTargetPos[1];
-        boss->swordProjectilePos[2] = boss->chainSwordTargetPos[2];
+        boss->swordProjectilePos[0] = boss->comboStarterTargetPos[0];
+        boss->swordProjectilePos[1] = boss->comboStarterTargetPos[1];
+        boss->swordProjectilePos[2] = boss->comboStarterTargetPos[2];
         
         // Ground impact damage
         float impactDx = character.pos[0] - boss->swordProjectilePos[0];
@@ -401,25 +413,16 @@ static void boss_attacks_handle_chain_sword(Boss* boss, float dt) {
         }
     }
     
-    // Phase 4: Pull boss toward sword (2.0s - 3.5s)
-    if (boss->stateTimer >= 2.0f && boss->stateTimer < 3.5f) {
-        // Boss gets pulled toward sword
-        float pullDx = boss->swordProjectilePos[0] - boss->pos[0];
-        float pullDz = boss->swordProjectilePos[2] - boss->pos[2];
-        float pullDist = sqrtf(pullDx*pullDx + pullDz*pullDz);
-        
-        if (pullDist > 2.0f) {
-            float pullSpeed = 200.0f;
-            boss->velX = (pullDx / pullDist) * pullSpeed;
-            boss->velZ = (pullDz / pullDist) * pullSpeed;
-        } else {
-            boss->velX *= 0.8f;
-            boss->velZ *= 0.8f;
-        }
+    // Phase 4: Boss stays in place (1.5s - 2.0s)
+    // Combo starter does not move the boss - only the charge attack moves the boss
+    if (boss->stateTimer >= 1.5f && boss->stateTimer < 2.0f) {
+        // Ensure boss doesn't move during combo starter
+        boss->velX = 0.0f;
+        boss->velZ = 0.0f;
     }
     
     // End attack - transition handled by AI
-    // (AI will check stateTimer >= 3.5f and transition to STRAFE)
+    // (AI will check stateTimer >= 2.0f and transition to charge/combo attack immediately)
 }
 
 static void boss_attacks_handle_roar_stomp(Boss* boss, float dt) {
@@ -477,5 +480,84 @@ static void boss_attacks_handle_tracking_slam(Boss* boss, float dt) {
 
     // Animation system will handle timing - attack completes when boss.isAttacking becomes false
     // Transition handled by AI based on isAttacking flag and animation blend completion
+}
+
+static void boss_attacks_handle_charge(Boss* boss, float dt) {
+    // Charge attack - boss moves toward position behind player
+    // Face the locked targeting position (behind player)
+    float dx = boss->lockedTargetingPos[0] - boss->pos[0];
+    float dz = boss->lockedTargetingPos[2] - boss->pos[2];
+    boss->rot[1] = -atan2f(-dz, dx) + 3.14159265359f;
+
+    // Check for hit during charge (check against actual character position for damage)
+    // Hit window: 0.2s to 0.5s into the charge
+    if (boss->stateTimer > 0.2f && boss->stateTimer < 0.5f && !boss->currentAttackHasHit) {
+        if (boss_check_hand_attack_collision(boss)) {
+            character_apply_damage(15.0f);
+            boss->currentAttackHasHit = true;
+        }
+    }
+
+    // Movement is handled by boss_update_movement in boss.c
+    // Transition handled by AI when charge completes
+}
+
+static void boss_attacks_handle_flip_attack(Boss* boss, float dt) {
+    // Flip attack: 2s idle, 1s jump arc, 1s recovery
+    const float idleDuration = 2.0f;      // 2.0s idle preparation
+    const float jumpDuration = 1.0f;      // 1.0s jump arc through air
+    const float recoverDuration = 1.0f;   // 1.0s recovery on ground
+    const float totalDuration = idleDuration + jumpDuration + recoverDuration;
+
+    // Phase 1: Idle preparation (0.0 - 2.0s)
+    if (boss->stateTimer < idleDuration) {
+        // Stay in place, face target direction
+        float dx = boss->flipAttackTargetPos[0] - boss->pos[0];
+        float dz = boss->flipAttackTargetPos[2] - boss->pos[2];
+        if (dx != 0.0f || dz != 0.0f) {
+            boss->rot[1] = -atan2f(-dz, dx) + 3.14159265359f; // T3D_PI
+        }
+    }
+    // Phase 2: Jump arc (2.0 - 3.0s)
+    else if (boss->stateTimer < idleDuration + jumpDuration) {
+        float t = (boss->stateTimer - idleDuration) / jumpDuration;
+        
+        // Smooth arc from start to target
+        boss->pos[0] = boss->flipAttackStartPos[0] + (boss->flipAttackTargetPos[0] - boss->flipAttackStartPos[0]) * t;
+        boss->pos[2] = boss->flipAttackStartPos[2] + (boss->flipAttackTargetPos[2] - boss->flipAttackStartPos[2]) * t;
+        
+        // Parabolic height (lower than power jump)
+        boss->pos[1] = boss->flipAttackStartPos[1] + boss->flipAttackHeight * sinf(t * 3.14159265359f);
+        
+        // Face movement direction - use consistent rotation formula
+        float dx = boss->flipAttackTargetPos[0] - boss->flipAttackStartPos[0];
+        float dz = boss->flipAttackTargetPos[2] - boss->flipAttackStartPos[2];
+        if (dx != 0.0f || dz != 0.0f) {
+            boss->rot[1] = -atan2f(-dz, dx) + 3.14159265359f;
+        }
+    }
+    // Phase 3: Landing impact + recovery (3.0 - 4.0s)
+    else if (boss->stateTimer < totalDuration) {
+        // Boss hits ground and recovers
+        boss->pos[1] = boss->flipAttackStartPos[1];
+        
+        // Check for impact damage
+        if (boss->stateTimer >= idleDuration + jumpDuration && 
+            boss->stateTimer < idleDuration + jumpDuration + 0.1f && 
+            !boss->currentAttackHasHit) {
+            // Flip attack uses ground impact, so use distance check
+            float dx = character.pos[0] - boss->pos[0];
+            float dz = character.pos[2] - boss->pos[2];
+            float dist = sqrtf(dx*dx + dz*dz);
+            
+            if (dist < 6.0f) {
+                character_apply_damage(30.0f); // Slightly less damage than power jump
+                // boss_debug_sound("boss_attack_success");
+                boss->currentAttackHasHit = true;
+            }
+        }
+    }
+    // End attack - transition handled by AI
+    // (AI will check stateTimer >= totalDuration and transition to STRAFE)
 }
 
