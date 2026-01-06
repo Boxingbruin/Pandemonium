@@ -51,7 +51,20 @@ typedef enum {
 
 static CharacterState characterState = CHAR_STATE_NORMAL;
 static float actionTimer = 0.0f;
+
+// Movement state
+static float movementVelocityX = 0.0f;
+static float movementVelocityZ = 0.0f;
+static float currentSpeed = 0.0f; // Track current movement speed for animation
+
+static const float MOVEMENT_ACCELERATION = 7.0f;
+static const float MOVEMENT_FRICTION = 12.0f;
+static const float MAX_MOVEMENT_SPEED = 60.0f;  // Slightly slower movement
+static const float SPEED_BUILDUP_RATE = 1.5f;    // How fast speed builds up to run
+static const float SPEED_DECAY_RATE = 4.0f;      // How fast speed decays when slowing  
+
 static const float ROLL_DURATION = 0.9f;
+static const float ROLL_ANIM_SPEED = 1.0f;
 static const float ATTACK_DURATION = 0.9f;
 static const float STRONG_ATTACK_DURATION = 1.2f;
 static const float STRONG_ATTACK_HOLD_THRESHOLD = 0.4f;
@@ -60,22 +73,42 @@ static const float STRONG_ATTACK_HIT_START = 0.35f;
 static const float STRONG_ATTACK_HIT_END = 0.9f;
 static const float JUMP_DURATION = 0.75f;
 static const float JUMP_HEIGHT = 40.0f;
-static const float ROLL_SPEED = 250.0f; // Speed boost during roll
+static const float ROLL_SPEED = MAX_MOVEMENT_SPEED; // Dont think we should speed boost roll, rolling becomes too stronk
 static const float STRONG_ATTACK_FRICTION_SCALE = 0.25f;
 static const float JUMP_FRICTION_SCALE = 0.0f;   // Preserve run speed while in the air
 static const float ROLL_JUMP_WINDOW_START = 0.35f; // fraction of roll duration
 static const float ROLL_JUMP_WINDOW_END   = 0.85f; // fraction of roll duration
 
-// Movement state
-static float movementVelocityX = 0.0f;
-static float movementVelocityZ = 0.0f;
-static float currentSpeed = 0.0f; // Track current movement speed for animation
+
 
 // Input state tracking for edge detection
 static bool lastBPressed = false;
 static bool lastLPressed = false;
 static bool leftTriggerHeld = false;
 static float leftTriggerHoldTime = 0.0f;
+
+// Input and tuning constants
+static const float STICK_MAX = 80.0f;
+static const float INPUT_DEADZONE = 0.12f;
+static const float TURN_RATE = 8.0f;           // rad/sec turn rate cap
+static const float IDLE_THRESHOLD = 0.001f;
+static const float WALK_THRESHOLD = 0.03f;
+static const float RUN_THRESHOLD = 0.7f;
+static const float BLEND_MARGIN = 0.2f;        // walk<->run blend zone width
+static const float ATTACK_FRICTION_SCALE = 0.3f; // Preserve momentum during attack
+
+// Animation names for recreation (used to reset action animations)
+static const char* kAnimNames[ANIM_COUNT] = {
+    "Idle", "Walk", "Run", "Roll", "Attack1"
+};
+static CharacterState prevState = CHAR_STATE_NORMAL;
+
+// ---- Local helpers ----
+typedef struct {
+    float x;
+    float y;
+    float magnitude;
+} StickInput;
 
 void character_reset(void)
 {
@@ -111,35 +144,6 @@ void character_get_velocity(float* outVelX, float* outVelZ)
     if (outVelX) *outVelX = movementVelocityX;
     if (outVelZ) *outVelZ = movementVelocityZ;
 }
-
-static const float MOVEMENT_ACCELERATION = 7.0f;
-static const float MOVEMENT_FRICTION = 12.0f;
-static const float MAX_MOVEMENT_SPEED = 160.0f;  // Slightly slower movement
-static const float SPEED_BUILDUP_RATE = 1.5f;    // How fast speed builds up to run
-static const float SPEED_DECAY_RATE = 4.0f;      // How fast speed decays when slowing  
-
-// Input and tuning constants
-static const float STICK_MAX = 80.0f;
-static const float INPUT_DEADZONE = 0.12f;
-static const float TURN_RATE = 8.0f;           // rad/sec turn rate cap
-static const float IDLE_THRESHOLD = 0.001f;
-static const float WALK_THRESHOLD = 0.03f;
-static const float RUN_THRESHOLD = 0.7f;
-static const float BLEND_MARGIN = 0.2f;        // walk<->run blend zone width
-static const float ATTACK_FRICTION_SCALE = 0.3f; // Preserve momentum during attack
-
-// Animation names for recreation (used to reset action animations)
-static const char* kAnimNames[ANIM_COUNT] = {
-    "Idle", "Walk", "Run", "Roll", "Attack1"
-};
-static CharacterState prevState = CHAR_STATE_NORMAL;
-
-// ---- Local helpers ----
-typedef struct {
-    float x;
-    float y;
-    float magnitude;
-} StickInput;
 
 static inline StickInput normalize_stick(float rawX, float rawY) {
     StickInput s;
@@ -188,6 +192,9 @@ static inline void compute_desired_velocity_lockon(float inputX, float inputY, c
     *outZ = fwdZ * inputY + rightZ * inputX;
 }
 
+
+// ===== PLEASE DONT USE THE FIXED POINT API =====  
+// NOTE: CHECK collision_system.c for a demo
 static inline bool attack_hit_test(void) {
     SCU_CapsuleFixed cc;
     float sx = character.scale[0];
@@ -225,6 +232,8 @@ static inline bool attack_hit_test(void) {
     bc.b.v[2] = TO_FIXED(boss->pos[2] + bbz);
     bc.radius = TO_FIXED(boss->capsuleCollider.radius * bs);
 
+    // ===== PLEASE DONT USE THE FIXED POINT API =====  
+    // NOTE: CHECK collision_system.c for a demo
     bool attackHit = scu_fixed_capsule_vs_capsule(&cc, &bc);
 
     // Fallback: reach check in front of the player to approximate sword length
@@ -461,6 +470,7 @@ static inline void update_animations(float speedRatio, CharacterState state, flo
     if (state == CHAR_STATE_ROLLING) {
         if (character.animations && character.animations[ANIM_ROLL]) {
             t3d_anim_set_playing(character.animations[ANIM_ROLL], true);
+            t3d_anim_set_speed(character.animations[ANIM_ROLL], ROLL_ANIM_SPEED);
             t3d_anim_update(character.animations[ANIM_ROLL], dt);
         }
     } else if (state == CHAR_STATE_JUMPING) {
@@ -582,15 +592,15 @@ void character_init(void)
     rspq_block_t* dpl = rspq_block_end();
 
     CapsuleCollider collider = {
-        .localCapA = {{0.0f, 0.0f, 0.0f}},    // Bottom at feet
-        .localCapB = {{0.0f, 20.0f, 0.0f}},  // Top at head height (reduced)
-        .radius = 15.0f                       // Smaller radius for tighter collision
+        .localCapA = {{0.0f, 4.0f, 0.0f}},    // Bottom at feet
+        .localCapB = {{0.0f, 13.0f, 0.0f}},  // Top at head height (reduced)
+        .radius = 5.0f                       // Smaller radius for tighter collision
     };
 
     Character newCharacter = {
         .pos = {0.0f, 0.0f, 0.0f},
         .rot = {0.0f, 0.0f, 0.0f},
-        .scale = {0.004f, 0.004f, 0.004f},
+        .scale = {0.0015f, 0.0015f, 0.0015f},
         .scrollParams = NULL,
         .skeleton = skeleton,
         .skeletonBlend = skeletonBlend,
@@ -668,14 +678,14 @@ void character_update(void)
         float newPosX = character.pos[0] + movementVelocityX * deltaTime;
         float newPosZ = character.pos[2] + movementVelocityZ * deltaTime;
         
-        if (!scene_check_room_bounds(newPosX, character.pos[1], newPosZ)) {
+        //if (!scene_check_room_bounds(newPosX, character.pos[1], newPosZ)) {
             character.pos[0] = newPosX;
             character.pos[2] = newPosZ;
-        } else {
-            // Stop movement if collision detected
-            movementVelocityX = 0.0f;
-            movementVelocityZ = 0.0f;
-        }
+        // } else {
+        //     // Stop movement if collision detected
+        //     movementVelocityX = 0.0f;
+        //     movementVelocityZ = 0.0f;
+        // }
         
         character_update_camera();
         
@@ -780,6 +790,8 @@ void character_update(void)
         float hitEnd = (characterState == CHAR_STATE_ATTACKING_STRONG) ? STRONG_ATTACK_HIT_END : 0.55f;
         float damage = (characterState == CHAR_STATE_ATTACKING_STRONG) ? STRONG_ATTACK_DAMAGE : 10.0f;
         if (actionTimer > hitStart && actionTimer < hitEnd) {
+
+            // TODO: CHANGE THIS TO THE FLOAT POINT API PLEASE
             if (!character.currentAttackHasHit && attack_hit_test()) {
                 Boss* boss = boss_get_instance();
                 if (boss) {
@@ -787,6 +799,7 @@ void character_update(void)
                 }
                 character.currentAttackHasHit = true; // Mark attack as having hit
             }
+
         }
     } else if (characterState == CHAR_STATE_JUMPING) {
         // Keep horizontal velocity from the takeoff; no air drag so run speed carries through jump
@@ -811,28 +824,28 @@ void character_update(void)
     float newPosZ = character.pos[2] + movementVelocityZ * deltaTime;
     
     // Check room bounds collision
-    if (scene_check_room_bounds(newPosX, character.pos[1], newPosZ)) {
-        // Collision detected - try to clamp position
-        // First try X movement only
-        if (!scene_check_room_bounds(newPosX, character.pos[1], character.pos[2])) {
-            character.pos[0] = newPosX;
-            movementVelocityZ = 0.0f;  // Stop Z movement
-        }
-        // Then try Z movement only
-        else if (!scene_check_room_bounds(character.pos[0], character.pos[1], newPosZ)) {
-            character.pos[2] = newPosZ;
-            movementVelocityX = 0.0f;  // Stop X movement
-        }
-        // If both cause collision, stop movement
-        else {
-            movementVelocityX = 0.0f;
-            movementVelocityZ = 0.0f;
-        }
-    } else {
+    // if (scene_check_room_bounds(newPosX, character.pos[1], newPosZ)) {
+    //     // Collision detected - try to clamp position
+    //     // First try X movement only
+    //     if (!scene_check_room_bounds(newPosX, character.pos[1], character.pos[2])) {
+    //         character.pos[0] = newPosX;
+    //         movementVelocityZ = 0.0f;  // Stop Z movement
+    //     }
+    //     // Then try Z movement only
+    //     else if (!scene_check_room_bounds(character.pos[0], character.pos[1], newPosZ)) {
+    //         character.pos[2] = newPosZ;
+    //         movementVelocityX = 0.0f;  // Stop X movement
+    //     }
+    //     // If both cause collision, stop movement
+    //     else {
+    //         movementVelocityX = 0.0f;
+    //         movementVelocityZ = 0.0f;
+    //     }
+    // } else {
         // No collision, apply movement
         character.pos[0] = newPosX;
         character.pos[2] = newPosZ;
-    }
+    //}
 
     character_update_camera();
 
@@ -878,8 +891,8 @@ void character_update_camera(void)
 {
     static bool lastLockOnActive = false;
 
-    float scaledDistance = cameraDistance * 0.1f;
-    float scaledHeight = cameraHeight * 0.1f;
+    float scaledDistance = cameraDistance * 0.04f;
+    float scaledHeight = cameraHeight * 0.03f;
 
     // When exiting Z-targeting, adopt the current camera offset as the new manual angle
     bool unlockingFromLockOn = lastLockOnActive && !cameraLockOnActive && cameraLockBlend > 0.001f;
@@ -923,14 +936,14 @@ void character_update_camera(void)
         // Direction from character to target
         T3DVec3 toTarget = {{
             cameraLockOnTarget.v[0] - character.pos[0],
-            cameraLockOnTarget.v[1] - (character.pos[1] + 0.5f),
+            cameraLockOnTarget.v[1] - character.pos[1],
             cameraLockOnTarget.v[2] - character.pos[2]
         }};
         t3d_vec3_norm(&toTarget);
 
         // Camera sits behind character along opposite of toTarget, plus height
         desiredCamPos.v[0] = character.pos[0] - toTarget.v[0] * scaledDistance;
-        desiredCamPos.v[1] = character.pos[1] + scaledHeight;
+        desiredCamPos.v[1] = character.pos[1] + (scaledHeight/2);
         desiredCamPos.v[2] = character.pos[2] - toTarget.v[2] * scaledDistance;
     }
     
@@ -943,7 +956,7 @@ void character_update_camera(void)
     // Default follow target (character focus point)
     T3DVec3 followTarget = {{
         character.pos[0],
-        character.pos[1] + 1.5f,
+        character.pos[1] + 15.0f,
         character.pos[2]
     }};
 

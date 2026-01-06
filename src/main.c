@@ -14,13 +14,21 @@
 #include "menu_controller.h"
 #include "save_controller.h"
 
+#include "collision_system.h"
+
 #include "scene.h"
 #include "dev.h"
 
 int main(void) 
 {
     if(DEV_MODE)
+    {
         dev_tools_init();
+    }
+    else
+    {
+        debugDraw = false;
+    }
 
     // INIT
     asset_init_compression(2);
@@ -34,13 +42,13 @@ int main(void)
     }
     else
     {
-        display_init(RESOLUTION_320x240, DEPTH_32_BPP, 3, GAMMA_NONE, FILTERS_RESAMPLE_ANTIALIAS);
+        display_init(RESOLUTION_320x240, DEPTH_32_BPP, 3, GAMMA_NONE, FILTERS_DISABLED);
     }
 
     rdpq_init();
 
-    if(DEV_MODE)
-        rspq_profile_start();
+    // if(DEV_MODE)
+    //     rspq_profile_start();
     
     audio_initialize();
 
@@ -75,9 +83,7 @@ int main(void)
 
     rspq_syncpoint_t syncPoint = 0; // TODO: I have no idea what this does but it's needed for flipbook textures.
 
-    float deltaTimeAccumulator = 0.0f;
-
-    if(DEV_MODE)
+    if(DEV_MODE && debugDraw)
     {
         offscreenBuffer = surface_alloc(FMT_RGBA16, SCREEN_WIDTH, SCREEN_HEIGHT);
     }
@@ -88,10 +94,9 @@ int main(void)
         game_time_update();
 
         joypad_update();
-        if(debugDraw)
+        if(DEV_MODE && debugDraw)
         {
             rdpq_attach(&offscreenBuffer, display_get_zbuf());
-            rdpq_set_mode_standard();
         }
         else
         {
@@ -155,7 +160,9 @@ int main(void)
             // TODO: There is a reason the update comes after the draw but it shouldnt, this needs to be fixed and flipped.
             dev_draw_update(&viewport); // Draw dev tools if in dev mode
             dev_update();
-            dev_draw_debug_update(&viewport); // Draw debug lines on CPU
+
+            if(debugDraw)
+                collision_draw(&viewport);
         }
         
         // FPS for Dev
@@ -163,10 +170,9 @@ int main(void)
         {
             rdpq_sync_pipe();
             rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 250, 225, " %.2f", display_get_fps());
-            //rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 50, 74, "ACC   : %.2f", deltaTimeAccumulator);
         }
 
-        if(debugDraw)
+        if(DEV_MODE && debugDraw)
         {
             rdpq_detach();
             rdpq_attach(display_get(), display_get_zbuf());

@@ -267,14 +267,4 @@ void debug_draw_capsule_vs_aabb_list(
 
     uint16_t capColor = anyHit ? colorHit : colorNoHit;
     debug_draw_capsule(vp, capA, capB, capRadius, capColor);
-
-    if (anyHit)
-    {
-        T3DVec3 mid = {{
-            0.5f * (capA->v[0] + capB->v[0]),
-            0.5f * (capA->v[1] + capB->v[1]),
-            0.5f * (capA->v[2] + capB->v[2]),
-        }};
-        debug_draw_cross(vp, &mid, capRadius, capColor);
-    }
 }

@@ -134,7 +134,7 @@ void camera_update(T3DViewport *viewport)
 		camDir.v[2] = camTarget.v[2] - camPos.v[2];
 		t3d_vec3_norm(&camDir);
 
-		t3d_viewport_set_projection(viewport, T3D_DEG_TO_RAD(60), CAMERA_NEAR_CLIP, CAMERA_FAR_CLIP);
+		t3d_viewport_set_projection(viewport, T3D_DEG_TO_RAD(FOV), CAMERA_NEAR_CLIP, CAMERA_FAR_CLIP);
 		t3d_viewport_look_at(viewport, &camPos, &camTarget, &up);
 
 		if (t >= 1.0f)
@@ -154,11 +154,11 @@ void camera_update(T3DViewport *viewport)
         
         if(joypad.btn.c_left)
         {
-            rotateX = -1.0f;
+            rotateX = 1.0f;
         }
         else if(joypad.btn.c_right)
         {
-            rotateX = 1.0f;
+            rotateX = -1.0f;
         }
         
         if(joypad.btn.c_down)
@@ -193,7 +193,7 @@ void camera_update(T3DViewport *viewport)
         camDir.v[2] = camTarget.v[2] - camPos.v[2];  // Z component
         t3d_vec3_norm(&camDir);
 
-        t3d_viewport_set_projection(viewport, T3D_DEG_TO_RAD(60), CAMERA_NEAR_CLIP, CAMERA_FAR_CLIP);
+        t3d_viewport_set_projection(viewport, T3D_DEG_TO_RAD(FOV), CAMERA_NEAR_CLIP, CAMERA_FAR_CLIP);
         t3d_viewport_look_at(viewport, &camPos, &camTarget, &up);
     }
     else if(cameraState == CAMERA_FREECAM)

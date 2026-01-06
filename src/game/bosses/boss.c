@@ -12,13 +12,14 @@
 #include <t3d/t3dmodel.h>
 #include <stdlib.h>
 #include <string.h>
+#include <math.h>
 
 #include "game_time.h"
 #include "scene.h"
 #include "character.h"
 #include "general_utility.h"
+#include "globals.h"
 #include "utilities/collision_mesh.h"
-#include <math.h>
 
 // Forward declarations for internal functions
 static void boss_apply_intent(Boss* boss, const BossIntent* intent);
@@ -181,12 +182,18 @@ static void boss_update_movement(Boss* boss, float dt) {
                 float targetDx = boss->lockedTargetingPos[0] - boss->pos[0];
                 float targetDz = boss->lockedTargetingPos[2] - boss->pos[2];
                 float targetDist = sqrtf(targetDx*targetDx + targetDz*targetDz);
-                if (targetDist > 0.0f) {
+                // Stop movement when very close to target to prevent oscillation
+                if (targetDist > 10.0f) {
                     desiredX = targetDx / targetDist;
                     desiredZ = targetDz / targetDist;
+                    maxSpeed = SPEED_CHARGE;
+                } else {
+                    // Close enough - stop moving
+                    desiredX = 0.0f;
+                    desiredZ = 0.0f;
+                    maxSpeed = 0.0f;
                 }
             }
-            maxSpeed = SPEED_CHARGE;
             break;
             
         case BOSS_STATE_RECOVER:
@@ -200,9 +207,10 @@ static void boss_update_movement(Boss* boss, float dt) {
     }
     
     // Apply movement for non-attack states
-    // Attack states (POWER_JUMP, CHAIN_SWORD, TRACKING_SLAM, COMBO_ATTACK, ROAR_STOMP) handle their own movement
+    // Attack states (POWER_JUMP, FLIP_ATTACK, COMBO_STARTER, TRACKING_SLAM, COMBO_ATTACK, ROAR_STOMP) handle their own movement
     if (boss->state != BOSS_STATE_POWER_JUMP && 
-        boss->state != BOSS_STATE_CHAIN_SWORD && 
+        boss->state != BOSS_STATE_FLIP_ATTACK &&
+        boss->state != BOSS_STATE_COMBO_STARTER && 
         boss->state != BOSS_STATE_TRACKING_SLAM && 
         boss->state != BOSS_STATE_COMBO_ATTACK && 
         boss->state != BOSS_STATE_ROAR_STOMP) {
@@ -226,28 +234,28 @@ static void boss_update_movement(Boss* boss, float dt) {
 
     float sx = boss->scale[0];
     // X axis
-    if (!collision_mesh_check_bounds_capsule(
-            nextX, boss->pos[1], boss->pos[2],
-            boss->capsuleCollider.localCapA.v[0], boss->capsuleCollider.localCapA.v[1], boss->capsuleCollider.localCapA.v[2],
-            boss->capsuleCollider.localCapB.v[0], boss->capsuleCollider.localCapB.v[1], boss->capsuleCollider.localCapB.v[2],
-            boss->capsuleCollider.radius, sx
-        )) {
-        boss->pos[0] = nextX;
-    } else {
-        boss->velX = 0.0f;
-    }
+    // if (!collision_mesh_check_bounds_capsule(
+    //         nextX, boss->pos[1], boss->pos[2],
+    //         boss->capsuleCollider.localCapA.v[0], boss->capsuleCollider.localCapA.v[1], boss->capsuleCollider.localCapA.v[2],
+    //         boss->capsuleCollider.localCapB.v[0], boss->capsuleCollider.localCapB.v[1], boss->capsuleCollider.localCapB.v[2],
+    //         boss->capsuleCollider.radius, sx
+    //     )) {
+    boss->pos[0] = nextX;
+    // } else {
+    //     boss->velX = 0.0f;
+    // }
 
-    // Z axis
-    if (!collision_mesh_check_bounds_capsule(
-            boss->pos[0], boss->pos[1], nextZ,
-            boss->capsuleCollider.localCapA.v[0], boss->capsuleCollider.localCapA.v[1], boss->capsuleCollider.localCapA.v[2],
-            boss->capsuleCollider.localCapB.v[0], boss->capsuleCollider.localCapB.v[1], boss->capsuleCollider.localCapB.v[2],
-            boss->capsuleCollider.radius, sx
-        )) {
-        boss->pos[2] = nextZ;
-    } else {
-        boss->velZ = 0.0f;
-    }
+    // // Z axis
+    // if (!collision_mesh_check_bounds_capsule(
+    //         boss->pos[0], boss->pos[1], nextZ,
+    //         boss->capsuleCollider.localCapA.v[0], boss->capsuleCollider.localCapA.v[1], boss->capsuleCollider.localCapA.v[2],
+    //         boss->capsuleCollider.localCapB.v[0], boss->capsuleCollider.localCapB.v[1], boss->capsuleCollider.localCapB.v[2],
+    //         boss->capsuleCollider.radius, sx
+    //     )) {
+    boss->pos[2] = nextZ;
+    // } else {
+    //     boss->velZ = 0.0f;
+    // }
     
     // Update facing direction
     if (boss->state == BOSS_STATE_STRAFE || boss->state == BOSS_STATE_CHASE) {
@@ -275,25 +283,31 @@ static void boss_update_movement(Boss* boss, float dt) {
         // During charge, smoothly face the locked targeting position
         float faceDx = boss->lockedTargetingPos[0] - boss->pos[0];
         float faceDz = boss->lockedTargetingPos[2] - boss->pos[2];
-        float targetAngle = -atan2f(-faceDz, faceDx) + 3.14159265359f;
+        float faceDist = sqrtf(faceDx*faceDx + faceDz*faceDz);
         
-        // Smoothly rotate toward target angle
-        float currentAngle = boss->rot[1];
-        float angleDelta = targetAngle - currentAngle;
-        
-        // Normalize angle delta to [-PI, PI]
-        while (angleDelta > 3.14159265359f) angleDelta -= 2.0f * 3.14159265359f;
-        while (angleDelta < -3.14159265359f) angleDelta += 2.0f * 3.14159265359f;
-        
-        // Apply smooth rotation with turn rate
-        float maxTurnRate = boss->turnRate * dt;
-        if (angleDelta > maxTurnRate) angleDelta = maxTurnRate;
-        else if (angleDelta < -maxTurnRate) angleDelta = -maxTurnRate;
-        
-        boss->rot[1] = currentAngle + angleDelta;
-    } else if (boss->state >= BOSS_STATE_POWER_JUMP) {
+        // Only rotate if we're not too close to the target (prevents oscillation)
+        if (faceDist > 10.0f) {
+            float targetAngle = -atan2f(-faceDz, faceDx) + 3.14159265359f;
+            
+            // Smoothly rotate toward target angle
+            float currentAngle = boss->rot[1];
+            float angleDelta = targetAngle - currentAngle;
+            
+            // Normalize angle delta to [-PI, PI]
+            while (angleDelta > 3.14159265359f) angleDelta -= 2.0f * 3.14159265359f;
+            while (angleDelta < -3.14159265359f) angleDelta += 2.0f * 3.14159265359f;
+            
+            // Apply smooth rotation with turn rate
+            float maxTurnRate = boss->turnRate * dt;
+            if (angleDelta > maxTurnRate) angleDelta = maxTurnRate;
+            else if (angleDelta < -maxTurnRate) angleDelta = -maxTurnRate;
+            
+            boss->rot[1] = currentAngle + angleDelta;
+        }
+        // If too close, stop rotating (keep current rotation)
+    } else if (boss->state >= BOSS_STATE_POWER_JUMP && boss->state != BOSS_STATE_CHARGE) {
         // Attack states handle their own rotation
-        // (handled by attack handlers)
+        // (handled by attack handlers, except charge which is handled above)
     } else {
         // Default: face movement direction (for other states)
         float targetAngle = atan2f(-boss->velX, boss->velZ);
@@ -398,20 +412,20 @@ void boss_init(Boss* boss) {
     if (!boss) return;
     
     // Load model
-    T3DModel* bossModel = t3d_model_load("rom:/boss/boss.t3dm");
+    T3DModel* bossModel = t3d_model_load("rom:/boss/boss_anim.t3dm"); 
     boss->model = bossModel;
     
     // Create skeletons
-    T3DSkeleton* skeleton = malloc(sizeof(T3DSkeleton));
+    T3DSkeleton* skeleton = malloc_uncached(sizeof(T3DSkeleton));
     *skeleton = t3d_skeleton_create(bossModel);
     boss->skeleton = skeleton;
     
-    T3DSkeleton* skeletonBlend = malloc(sizeof(T3DSkeleton));
+    T3DSkeleton* skeletonBlend = malloc_uncached(sizeof(T3DSkeleton));
     *skeletonBlend = t3d_skeleton_clone(skeleton, false);
     boss->skeletonBlend = skeletonBlend;
     
     // Create animations
-    const int animationCount = 7;
+    const int animationCount = 10;
     const char* animationNames[] = {
         "Idle1",
         "Walk1",
@@ -419,7 +433,10 @@ void boss_init(Boss* boss) {
         "StrafeLeft1",
         "StrafeRight1",
         "ComboAttack1",
-        "JumpForwardAttack1"
+        "JumpForwardAttack1",
+        "ComboLunge1",
+        "ComboStarter1",
+        "FlipAttack1"
     };
     const bool animationsLooping[] = {
         true,  // Idle - loop
@@ -428,12 +445,15 @@ void boss_init(Boss* boss) {
         true,  // StrafeLeft - loop
         true,  // StrafeRight - loop
         false, // ComboAttack - one-shot
-        false  // JumpForward - one-shot
+        false, // JumpForward - one-shot
+        false, // ComboLunge - one-shot
+        false, // ComboStarter - one-shot
+        false  // FlipAttack - one-shot
     };
     
-    T3DAnim** animations = malloc(animationCount * sizeof(T3DAnim*));
+    T3DAnim** animations = malloc_uncached(animationCount * sizeof(T3DAnim*));
     for (int i = 0; i < animationCount; i++) {
-        animations[i] = malloc(sizeof(T3DAnim));
+        animations[i] = malloc_uncached(sizeof(T3DAnim));
         *animations[i] = t3d_anim_create(bossModel, animationNames[i]);
         t3d_anim_set_looping(animations[i], animationsLooping[i]);
         t3d_anim_set_playing(animations[i], false);
@@ -465,18 +485,18 @@ void boss_init(Boss* boss) {
     boss->rot[0] = 0.0f;
     boss->rot[1] = 0.0f;
     boss->rot[2] = 0.0f;
-    boss->scale[0] = 0.2f;
-    boss->scale[1] = 0.2f;
-    boss->scale[2] = 0.2f;
+    boss->scale[0] = MODEL_SCALE;
+    boss->scale[1] = MODEL_SCALE;
+    boss->scale[2] = MODEL_SCALE;
     
     // Initialize capsule collider
     boss->capsuleCollider.localCapA.v[0] = 0.0f;
-    boss->capsuleCollider.localCapA.v[1] = 0.0f;
+    boss->capsuleCollider.localCapA.v[1] = 10.0f;
     boss->capsuleCollider.localCapA.v[2] = 0.0f;
     boss->capsuleCollider.localCapB.v[0] = 0.0f;
-    boss->capsuleCollider.localCapB.v[1] = 550.0f;
+    boss->capsuleCollider.localCapB.v[1] = 40.0f;
     boss->capsuleCollider.localCapB.v[2] = 0.0f;
-    boss->capsuleCollider.radius = 360.0f;
+    boss->capsuleCollider.radius = 14.0f;
     
     // Find Hand-Right bone index
     boss->handRightBoneIndex = t3d_skeleton_find_bone(skeleton, "Hand-Right");
@@ -551,7 +571,7 @@ void boss_init(Boss* boss) {
     // Initialize cooldowns
     boss->powerJumpCooldown = 0.0f;
     boss->comboCooldown = 0.0f;
-    boss->chainSwordCooldown = 0.0f;
+    boss->comboStarterCooldown = 0.0f;
     boss->roarStompCooldown = 0.0f;
     boss->trackingSlamCooldown = 0.0f;
     
@@ -560,15 +580,16 @@ void boss_init(Boss* boss) {
     boss->comboInterrupted = false;
     boss->comboVulnerableTimer = 0.0f;
     
-    // Initialize chain sword state
+    // Initialize combo starter state
     boss->swordThrown = false;
-    boss->chainSwordSlamHasHit = false;
+    boss->comboStarterSlamHasHit = false;
+    boss->comboStarterCompleted = false;
     boss->swordProjectilePos[0] = 0.0f;
     boss->swordProjectilePos[1] = 0.0f;
     boss->swordProjectilePos[2] = 0.0f;
-    boss->chainSwordTargetPos[0] = 0.0f;
-    boss->chainSwordTargetPos[1] = 0.0f;
-    boss->chainSwordTargetPos[2] = 0.0f;
+    boss->comboStarterTargetPos[0] = 0.0f;
+    boss->comboStarterTargetPos[1] = 0.0f;
+    boss->comboStarterTargetPos[2] = 0.0f;
     
     // Initialize targeting
     boss->debugTargetingPos[0] = 0.0f;
@@ -585,6 +606,15 @@ void boss_init(Boss* boss) {
     boss->lastPlayerVel[0] = 0.0f;
     boss->lastPlayerVel[1] = 0.0f;
     
+    // Initialize flip attack state
+    boss->flipAttackStartPos[0] = 0.0f;
+    boss->flipAttackStartPos[1] = 0.0f;
+    boss->flipAttackStartPos[2] = 0.0f;
+    boss->flipAttackTargetPos[0] = 0.0f;
+    boss->flipAttackTargetPos[1] = 0.0f;
+    boss->flipAttackTargetPos[2] = 0.0f;
+    boss->flipAttackHeight = 0.0f;
+    
     boss->visible = true;
     boss->pendingRequests = 0;
     
@@ -593,6 +623,8 @@ void boss_init(Boss* boss) {
     
     // Initialize AI
     boss_ai_init(boss);
+
+    boss_draw_init();
 }
 
 void boss_reset(Boss* boss) {
@@ -607,9 +639,12 @@ void boss_reset(Boss* boss) {
     boss->attackCooldown = 0.0f;
     boss->powerJumpCooldown = 0.0f;
     boss->comboCooldown = 0.0f;
-    boss->chainSwordCooldown = 0.0f;
+    boss->comboStarterCooldown = 0.0f;
     boss->roarStompCooldown = 0.0f;
     boss->trackingSlamCooldown = 0.0f;
+    
+    // Reset combo starter state
+    boss->comboStarterCompleted = false;
     
     // Reset attack state
     boss->currentAttackHasHit = false;

@@ -22,24 +22,49 @@
 #include "scene.h"
 #include "game_time.h"
 #include "globals.h"
+#include "general_utility.h"
+
+ScrollDyn bossScrollDyn = {
+    .xSpeed = 0.0f,
+    .ySpeed = 30.0f,
+    .scale  = 64.0f,
+    .spr = NULL,
+};
+
+void boss_draw_init(void)
+{
+    bossScrollDyn.spr = sprite_load("rom:/boss_room/fog.i8.sprite");
+}
+
+static void boss_draw_scrolling(Boss* boss)
+{
+    T3DSkeleton* skel = (T3DSkeleton*)boss->skeleton;
+
+    t3d_matrix_set(boss->modelMat, true);
+    t3d_model_draw_custom(boss->model, (T3DModelDrawConf){
+        .userData     = &bossScrollDyn,
+        .tileCb       = NULL,
+        .filterCb     = NULL,
+        .dynTextureCb = scroll_dyn_cb,
+        .matrices = (skel && skel->bufferCount == 1)
+          ? skel->boneMatricesFP
+          : (const T3DMat4FP*)t3d_segment_placeholder(T3D_SEGMENT_SKELETON)
+    });
+}
 
 void boss_render_draw(Boss* boss) {
-    if (!boss || !boss->visible || !boss->modelMat || !boss->dpl) return;
+    if (!boss || !boss->visible) return;
     
-    T3DMat4FP* mat = (T3DMat4FP*)boss->modelMat;
-    rspq_block_t* dpl = (rspq_block_t*)boss->dpl;
-    
-    t3d_matrix_set(mat, true);
-    rspq_block_run(dpl);
+    boss_draw_scrolling(boss);
     
     // Draw sword attached to Hand-Right bone
     if (boss->handRightBoneIndex >= 0 && boss->swordDpl && boss->swordMatFP) {
         T3DSkeleton* skel = (T3DSkeleton*)boss->skeleton;
         if (skel) {
             // Push bone matrix, then sword's local transform matrix
-            t3d_matrix_push(&skel->boneMatricesFP[boss->handRightBoneIndex]);
-            t3d_matrix_push((T3DMat4FP*)boss->swordMatFP);
-            rspq_block_run((rspq_block_t*)boss->swordDpl);
+            t3d_matrix_push(&skel->boneMatricesFP[boss->handRightBoneIndex]); // double matrix push and pop, it's already in a push pop.
+                t3d_matrix_push((T3DMat4FP*)boss->swordMatFP);
+                rspq_block_run((rspq_block_t*)boss->swordDpl);
             t3d_matrix_pop(2);
         }
     }
@@ -65,7 +90,7 @@ void boss_render_debug(Boss* boss, void* viewport) {
     }
     draw_boss_health_bar(boss->name, ratio, flash);
     
-    if (!debugDraw) {
+    if (!DEV_MODE || !debugDraw) {
         return;
     }
     
@@ -81,9 +106,9 @@ void boss_render_debug(Boss* boss, void* viewport) {
     
     const char* stateNames[] = {
         "Intro", "Neutral", "Chase", "Strafe", "Recover", "Stagger", "Dead",
-        "Charge", "Power Jump", "Combo", "Chain Sword", "Roar Stomp", "Tracking Slam"
+        "Charge", "Power Jump", "Combo", "Combo Starter", "Roar Stomp", "Tracking Slam", "Flip Attack"
     };
-    const char* stateName = (boss->state < 13) ? stateNames[boss->state] : "Unknown";
+    const char* stateName = (boss->state < 14) ? stateNames[boss->state] : "Unknown";
     
     rdpq_text_printf(NULL, FONT_UNBALANCED, 20, y, "Boss State: %s", stateName);
     y += listSpacing;

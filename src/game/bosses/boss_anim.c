@@ -162,17 +162,16 @@ void boss_anim_update(Boss* boss) {
     // Use a minimum threshold to prevent denormal floating point values
     const float MIN_DELTA_TIME = 0.0001f;
     const float MAX_DELTA_TIME = 1.0f;  // Cap at 1 second to prevent huge jumps
-    float dt = deltaTime;
     // Check for invalid values: zero, negative, too large, or NaN/Inf
-    if (dt < MIN_DELTA_TIME || dt > MAX_DELTA_TIME || dt != dt) {
+    if (deltaTime < MIN_DELTA_TIME || deltaTime > MAX_DELTA_TIME || deltaTime != deltaTime) {
         // Invalid deltaTime - use a safe default (60 FPS)
-        dt = 1.0f / 60.0f;
+        deltaTime = 1.0f / 60.0f;
     }
     
     // Update attack animation timer
     // This manages the isAttacking flag for attacks that use it (like tracking slam)
     if (boss->isAttacking) {
-        boss->attackAnimTimer += dt;
+        boss->attackAnimTimer += deltaTime;
         // Use longer duration for tracking slam to allow animation to complete
         const float attackDuration = (boss->state == BOSS_STATE_TRACKING_SLAM) ? 6.0f : 0.9f;
         if (boss->attackAnimTimer >= attackDuration) {
@@ -202,17 +201,13 @@ void boss_anim_update(Boss* boss) {
         boss->lockFrames--;
     }
     
-    // Update all animations
     T3DAnim** anims = (T3DAnim**)boss->animations;
-    for (int i = 0; i < boss->animationCount; i++) {
-        if (anims[i]) {
-            t3d_anim_update(anims[i], dt);
-        }
-    }
+    // Update animation
+    t3d_anim_update(anims[boss->currentAnimation], deltaTime);
     
     // Update blending
     if (boss->isBlending) {
-        boss->blendTimer += dt;
+        boss->blendTimer += deltaTime;
         
         // Safety check: ensure blendDuration is valid to prevent division by zero or denormal results
         // Use a minimum threshold (0.001f) to prevent denormal floating point values
