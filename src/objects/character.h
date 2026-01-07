@@ -8,6 +8,26 @@
 
 #include "general_utility.h"
 
+// Animation states - these correspond to the animation indices
+typedef enum {
+    ANIM_IDLE = 0,
+    ANIM_WALK = 1, 
+    ANIM_RUN = 2,
+    ANIM_ROLL = 3,
+    ANIM_ATTACK = 4,
+    ANIM_WALK_THROUGH_FOG = 5,
+    ANIM_COUNT = 6,
+} CharacterAnimState;
+
+// Character state for action mechanics
+typedef enum {
+    CHAR_STATE_NORMAL,
+    CHAR_STATE_ROLLING,
+    CHAR_STATE_ATTACKING,
+    CHAR_STATE_ATTACKING_STRONG,
+    CHAR_STATE_JUMPING
+} CharacterState;
+
 typedef struct {
     T3DVec3 localCapA;
     T3DVec3 localCapB;

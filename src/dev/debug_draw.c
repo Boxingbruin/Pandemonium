@@ -51,10 +51,22 @@ static void debug_draw_line(int px0, int py0, int px1, int py1, uint16_t color)
 
 static inline void debug_draw_line_vec3(const T3DVec3 *p0, const T3DVec3 *p1, uint16_t color)
 {
-    if(p0->v[2] < 1.0 && p1->v[2] < 1.0) 
-    {
-        debug_draw_line((int)p0->v[0], (int)p0->v[1], (int)p1->v[0], (int)p1->v[1], color);
-    }
+    // must be finite before any comparisons/casts
+    if (!isfinite(p0->v[0]) || !isfinite(p0->v[1]) || !isfinite(p0->v[2]) ||
+        !isfinite(p1->v[0]) || !isfinite(p1->v[1]) || !isfinite(p1->v[2]))
+        return;
+
+    // draw only if both points are in a reasonable projected depth range
+    if (p0->v[2] <= 0.0f || p0->v[2] >= 1.0f ||
+        p1->v[2] <= 0.0f || p1->v[2] >= 1.0f)
+        return;
+
+    // avoid float->int overflow
+    if (fabsf(p0->v[0]) > 1e6f || fabsf(p0->v[1]) > 1e6f ||
+        fabsf(p1->v[0]) > 1e6f || fabsf(p1->v[1]) > 1e6f)
+        return;
+
+    debug_draw_line((int)p0->v[0], (int)p0->v[1], (int)p1->v[0], (int)p1->v[1], color);
 }
 
 void debug_draw_aabb(
@@ -267,4 +279,14 @@ void debug_draw_capsule_vs_aabb_list(
 
     uint16_t capColor = anyHit ? colorHit : colorNoHit;
     debug_draw_capsule(vp, capA, capB, capRadius, capColor);
+
+    if (anyHit)
+    {
+        T3DVec3 mid = {{
+            0.5f * (capA->v[0] + capB->v[0]),
+            0.5f * (capA->v[1] + capB->v[1]),
+            0.5f * (capA->v[2] + capB->v[2]),
+        }};
+        debug_draw_cross(vp, &mid, capRadius, capColor);
+    }
 }

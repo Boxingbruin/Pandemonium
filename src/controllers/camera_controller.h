@@ -10,6 +10,7 @@ typedef enum {
     CAMERA_NOCLIP,
     CAMERA_CUSTOM,
     CAMERA_FIXED,
+    CAMERA_TITLE,
     // Add other audio channels as needed
 } CameraState;
 

@@ -42,7 +42,7 @@ int main(void)
     }
     else
     {
-        display_init(RESOLUTION_320x240, DEPTH_32_BPP, 3, GAMMA_NONE, FILTERS_DISABLED);
+        display_init(RESOLUTION_320x240, DEPTH_32_BPP, 3, GAMMA_NONE, FILTERS_RESAMPLE_ANTIALIAS);
     }
 
     rdpq_init();

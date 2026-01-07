@@ -43,7 +43,7 @@ float camRotX = 0.0f;
 float camRotY = 0.0f;
 float camAngle = 0.0f;
 float camRoll = 0.0f;
-float FOV = 50.0f;
+float FOV = 60.0f;
 float distanceInFrontOfCamera = 100.0f;
 
 // Clipping planes (raised far clip to keep distant geometry visible)
@@ -317,6 +317,37 @@ void camera_update(T3DViewport *viewport)
         // Pass the rolled-up vector to the camera look-at function
         t3d_viewport_set_projection(viewport, T3D_DEG_TO_RAD(FOV), CAMERA_NEAR_CLIP, CAMERA_FAR_CLIP);
         t3d_viewport_look_at(viewport, &camPos, &camTarget, &rolledUp);
+    }
+    else if(cameraState == CAMERA_TITLE)
+    {
+        customCamDir.v[0] = customCamTarget.v[0] - customCamPos.v[0];  // X component
+        customCamDir.v[1] = customCamTarget.v[1] - customCamPos.v[1];  // Y component
+        customCamDir.v[2] = customCamTarget.v[2] - customCamPos.v[2];  // Z component
+        t3d_vec3_norm(&customCamDir);
+
+        T3DVec3 rolledUp;  // Keep this as a T3DVec3 for the final output
+
+        if (camRoll != 0.0f)
+        {
+            T3DMat4 rollMat;
+            t3d_mat4_rotate(&rollMat, &customCamDir, camRoll);  // Rotate around camDir (camera forward)
+        
+            // World Up remains a T3DVec3 as expected
+            T3DVec3 worldUp = {{0.0f, 1.0f, 0.0f}};  // World Up as a 3D vector
+        
+            // Perform the multiplication with the 3x3 portion of the matrix
+            t3d_mat3_mul_vec3(&rolledUp, &rollMat, &worldUp);  // Now using 3x3 matrix multiplication
+        
+        }
+        else
+        {
+            // No roll, use default world-up vector
+            rolledUp = (T3DVec3){{0.0f, 1.0f, 0.0f}};  // No rotation, use default world up
+        }
+        
+        // Pass the rolled-up vector to the camera look-at function
+        t3d_viewport_set_projection(viewport, T3D_DEG_TO_RAD(FOV), CAMERA_NEAR_CLIP, CAMERA_FAR_CLIP);
+        t3d_viewport_look_at(viewport, &customCamPos, &customCamTarget, &rolledUp);
     }
 }
 

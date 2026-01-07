@@ -8,7 +8,9 @@ typedef enum {
     GAME_STATE_PLAYING,
     GAME_STATE_MENU,
     GAME_STATE_DEAD,
-    GAME_STATE_VICTORY
+    GAME_STATE_VICTORY,
+    GAME_STATE_TITLE,
+    GAME_STATE_TITLE_TRANSITION,
 } GameState;
 
 void scene_init(void);

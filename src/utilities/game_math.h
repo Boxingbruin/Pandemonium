@@ -38,4 +38,11 @@ void vec3_to_fixed(FixedVec3* out, const T3DVec3* in);
 void vec3_sub_fixed(FixedVec3* out, const FixedVec3* a, const FixedVec3* b);
 void vec3_mad_fixed(FixedVec3* out, const FixedVec3* a, const FixedVec3* b, int32_t t);
 
+
+void mat4fp_get_translation_row3_f32(const T3DMat4FP *m, float out[3]);
+
+void mat4fp_mul_point_f32_row3_colbasis(const T3DMat4FP *m, const float in[3], float out[3]);
+void mat4fp_get_axis_colbasis_f32(const T3DMat4FP *m, int axisCol, float out[3]);
+void mat4fp_mul_dir_f32_colbasis(const T3DMat4FP *m, const float in[3], float out[3]);
+void normalize3(float v[3]);
 #endif

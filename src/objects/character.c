@@ -30,25 +30,6 @@
 T3DModel* characterModel;
 Character character;
 
-// Animation states - these correspond to the animation indices
-typedef enum {
-    ANIM_IDLE = 0,
-    ANIM_WALK = 1, 
-    ANIM_RUN = 2,
-    ANIM_ROLL = 3,
-    ANIM_ATTACK = 4,
-    ANIM_COUNT = 5
-} CharacterAnimState;
-
-// Character state for action mechanics
-typedef enum {
-    CHAR_STATE_NORMAL,
-    CHAR_STATE_ROLLING,
-    CHAR_STATE_ATTACKING,
-    CHAR_STATE_ATTACKING_STRONG,
-    CHAR_STATE_JUMPING
-} CharacterState;
-
 static CharacterState characterState = CHAR_STATE_NORMAL;
 static float actionTimer = 0.0f;
 
@@ -96,6 +77,8 @@ static const float RUN_THRESHOLD = 0.7f;
 static const float BLEND_MARGIN = 0.2f;        // walk<->run blend zone width
 static const float ATTACK_FRICTION_SCALE = 0.3f; // Preserve momentum during attack
 
+static bool walkThroughFog = false;
+
 // Animation names for recreation (used to reset action animations)
 static const char* kAnimNames[ANIM_COUNT] = {
     "Idle", "Walk", "Run", "Roll", "Attack1"
@@ -126,6 +109,7 @@ void character_reset(void)
     character.isBlending = false;
     character.blendFactor = 0.0f;
     character.blendTimer = 0.0f;
+    walkThroughFog = false;
 }
 
 void character_reset_button_state(void)
@@ -550,7 +534,7 @@ static inline void update_animations(float speedRatio, CharacterState state, flo
 /* Initialize character model, skeletons, animations, and camera. */
 void character_init(void)
 {
-    characterModel = t3d_model_load("rom:/catherine/catherine.t3dm");
+    characterModel = t3d_model_load("rom:/knight/knight.t3dm");
 
     T3DSkeleton* skeleton = malloc(sizeof(T3DSkeleton));
     *skeleton = t3d_skeleton_create(characterModel);
@@ -560,16 +544,17 @@ void character_init(void)
 
     T3DAnim** animations = NULL;
 
-    const int animationCount = 5;
+    const int animationCount = 6;
     const char* animationNames[] = {
         "Idle",
         "Walk",
         "Run",
         "Roll",
-        "Attack1"
+        "Attack1",
+        "FogOfWar"
     };
     const bool animationsLooping[] = {
-        true, true, true, false, false
+        false, true, true, true, false, false
     };
 
     if (animationCount > 0)
@@ -580,7 +565,7 @@ void character_init(void)
             animations[i] = malloc(sizeof(T3DAnim));
             *animations[i] = t3d_anim_create(characterModel, animationNames[i]);
             t3d_anim_set_looping(animations[i], animationsLooping[i]);
-            t3d_anim_set_playing(animations[i], true);
+            // t3d_anim_set_playing(animations[i], true);
             t3d_anim_attach(animations[i], skeleton);
         }
     }
@@ -598,7 +583,7 @@ void character_init(void)
     Character newCharacter = {
         .pos = {0.0f, 0.0f, 0.0f},
         .rot = {0.0f, 0.0f, 0.0f},
-        .scale = {0.0015f, 0.0015f, 0.0015f},
+        .scale = {MODEL_SCALE, MODEL_SCALE, MODEL_SCALE},
         .scrollParams = NULL,
         .skeleton = skeleton,
         .skeletonBlend = skeletonBlend,
@@ -664,7 +649,58 @@ void character_update(void)
         return;
     }
 
-    // Disable player input during cutscenes
+    if(scene_get_game_state() == GAME_STATE_TITLE || scene_get_game_state() == GAME_STATE_TITLE_TRANSITION)
+    {
+        apply_friction(deltaTime, 1.0f);
+        update_current_speed(0.0f, deltaTime); // No input magnitude during cutscenes
+        float animationSpeedRatio = currentSpeed;
+
+        if(scene_get_game_state() == GAME_STATE_TITLE_TRANSITION && walkThroughFog == false){
+            t3d_anim_set_playing(character.animations[ANIM_WALK_THROUGH_FOG], true);
+            walkThroughFog = true;
+        }
+        else
+        {
+            update_animations(animationSpeedRatio, characterState, deltaTime);
+        }
+
+        //t3d_anim_set_playing(character.animations[ANIM_IDLE], true);
+
+        // Update position with current velocity (with collision check)
+        float newPosX = character.pos[0] + movementVelocityX * deltaTime;
+        float newPosZ = character.pos[2] + movementVelocityZ * deltaTime;
+    
+        character.pos[0] = newPosX;
+        character.pos[2] = newPosZ;
+
+        if (character.skeleton) {
+            // Blend skeletons if blending is active (matches boss pattern)
+            // Note: We blend BEFORE updating the skeleton, and we never update the blend skeleton directly
+            // The blend skeleton's state comes from its attached animation being updated
+            if (character.isBlending && character.skeletonBlend && character.blendTimer > 0.0f) {
+                bool canBlend = (character.previousAnimation >= 0 && 
+                                character.previousAnimation < character.animationCount && 
+                                character.animations && character.animations[character.previousAnimation] != NULL &&
+                                character.animations[character.previousAnimation]->isPlaying &&
+                                character.blendFactor >= 0.0f && 
+                                character.blendFactor <= 1.0f);
+                if (canBlend) {
+                    // Blend skeletons: blend from skeletonBlend (old) to skeleton (new), store result in skeleton
+                    // IMPORTANT: We do NOT update the blend skeleton - only blend it into the main skeleton
+                    // The blend skeleton's state comes from its attached animation
+                    t3d_skeleton_blend(character.skeletonBlend, character.skeleton, character.skeleton, character.blendFactor);
+                } else {
+                    character.isBlending = false;
+                }
+            }
+            // Update main skeleton (ONLY the main skeleton, never the blend skeleton)
+            t3d_skeleton_update(character.skeleton);
+        }
+
+        t3d_mat4fp_from_srt_euler(character.modelMat, character.scale, character.rot, character.pos);
+        return;
+    }
+    // Disable player input during cutscenes & title screen
     if (scene_is_cutscene_active()) {
         // Still update animations and apply friction, but no player input
         apply_friction(deltaTime, 1.0f);

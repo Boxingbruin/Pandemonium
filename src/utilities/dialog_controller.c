@@ -27,6 +27,9 @@ static float dialogActiveTime = 5.0f;
 static sprite_t *dialogBox;
 static surface_t dialogBoxSurf;
 
+static sprite_t *dialogVerticalBox;
+static surface_t dialogVerticalBoxSurf;
+
 static const char *dialogText = "meep.";
 
 static bool showDialog = false;
@@ -114,6 +117,9 @@ void dialog_controller_init(void)
 {
     dialogBox = sprite_load("rom:/dialog.ia8.sprite");
     dialogBoxSurf = sprite_get_pixels(dialogBox);
+
+    dialogVerticalBox = sprite_load("rom:/dialog_vertical.ia8.sprite");
+    dialogVerticalBoxSurf = sprite_get_pixels(dialogVerticalBox);
     // Font is already registered in main.c, so we don't need to load it again
 
     // TODO: TEMP
@@ -121,24 +127,33 @@ void dialog_controller_init(void)
     // dialog4TextSurf = sprite_get_pixels(dialog4Text);
 }
 
-void dialog_controller_draw_dialog(bool bottom, int width, int height) 
+void dialog_controller_draw_dialog(bool isVertical, int x, int y, int width, int height) 
 {
-
-    int x = (SCREEN_WIDTH - width) / 2;
-    int y = (SCREEN_HEIGHT - height) / 2;
     int paddingX = 20;
     int paddingY = 10;
 
-    if (bottom) 
-    {
-        // bottom positioning
-        y = 240 - height - 10;
+    if(isVertical){
+        paddingY = 20;
     }
-    else
-    {
-        // top positioning
-        y = 10;
+
+    rdpq_sync_pipe();
+    rdpq_set_mode_standard();
+    rdpq_mode_alphacompare(1);
+    rdpq_mode_blender(RDPQ_BLENDER_MULTIPLY);
+
+    // source (texture) dimensions
+    int src_w = dialogBoxSurf.width;
+    int src_h = dialogBoxSurf.height;
+
+    if(isVertical){
+        src_w = dialogVerticalBoxSurf.width;
+        src_h = dialogVerticalBoxSurf.height;
     }
+
+    // destination (requested) dimensions -> scale factors
+    const float sx = (src_w > 0) ? ((float)width  / (float)src_w) : 1.0f;
+    const float sy = (src_h > 0) ? ((float)height / (float)src_h) : 1.0f;
+
 
     rdpq_sync_pipe(); // possibly needed for hardware
     rdpq_set_mode_standard();
@@ -151,12 +166,21 @@ void dialog_controller_draw_dialog(bool bottom, int width, int height)
     rdpq_mode_blender(RDPQ_BLENDER_MULTIPLY);
     //rdpq_mode_combiner(RDPQ_COMBINER1((0,0,0,0),(0,0,0, TEX0)));
 
-    // Blit the sprite with scale applied
-    rdpq_tex_blit(&dialogBoxSurf, x, y, &(rdpq_blitparms_t)
+    if(isVertical){
+        // Blit the sprite with scale applied
+        rdpq_tex_blit(&dialogVerticalBoxSurf, x, y, &(rdpq_blitparms_t){
+            .scale_x = sx,
+            .scale_y = sy,
+        });
+    }
+    else
     {
-        .scale_x = 1.0f,
-        .scale_y = 1.0f,
-    });
+        // Blit the sprite with scale applied
+        rdpq_tex_blit(&dialogBoxSurf, x, y, &(rdpq_blitparms_t){
+            .scale_x = sx,
+            .scale_y = sy,
+        });
+    }
 
     int src_index = 0;
     int dst_index = 0;
@@ -182,23 +206,7 @@ void dialog_controller_draw_dialog(bool bottom, int width, int height)
             currentSpeed = FAST_SPEED;  // Set fast speed
             src_index++;  // Skip the > character
             continue;  // Skip this iteration and check the next character
-        } 
-        else if (c == '@') { // TODO: TEMP
-            if (dialog4Text) {
-                rdpq_set_mode_copy(true);
-                rdpq_mode_alphacompare(128);
-                //rdpq_sync_load(); // possibly needed for hardware
-                rdpq_tex_blit(&dialog4TextSurf, x, y, &(rdpq_blitparms_t)
-                {
-                    .scale_x = 1.0f,
-                    .scale_y = 1.0f,
-                });
-            }
-
-            src_index++;  // Skip the @ character
-            continue;  // Skip this iteration and check the next character
         }
-        
         
         // Skip the '~' character (which indicates a pause or special effect)
         if (c == '~') {
@@ -270,14 +278,11 @@ void dialog_controller_update(void)
     }
 }
 
-void dialog_controller_draw(void) 
+void dialog_controller_draw(bool isVertical, int x, int y, int width, int height) 
 {
     if(showDialog)
     {
-        int box_width = 220;
-        int box_height = 70;
-
-        dialog_controller_draw_dialog(true, box_width, box_height);
+        dialog_controller_draw_dialog(isVertical, x, y, width, height);
     }
 }
 

@@ -114,6 +114,7 @@ void collision_draw(T3DViewport *viewport)
         return;
 
     rspq_wait();
+
     debug_draw_capsule(viewport, &charCapA, &charCapB, charRadius, DEBUG_COLORS[1]);
     debug_draw_capsule(viewport, &bossCapA, &bossCapB, bossRadius, DEBUG_COLORS[3]);
 

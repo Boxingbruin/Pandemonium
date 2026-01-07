@@ -56,6 +56,11 @@ T3DMat4FP* chainsMatrix;
 T3DModel* fogDoorModel;
 rspq_block_t* fogDoorDpl;
 T3DMat4FP* fogDoorMatrix;
+ScrollParams fogScrollParams = {
+    .xSpeed = 0.0f,
+    .ySpeed = 10.0f,
+    .scale  = 64
+};
 
 T3DModel* windowsModel;
 rspq_block_t* windowsDpl;
@@ -68,6 +73,24 @@ T3DMat4FP* roomLedgeMatrix;
 T3DModel* roomFloorModel;
 rspq_block_t* roomFloorDpl;
 T3DMat4FP* roomFloorMatrix;
+
+// Dynamic Banner (Title Screen)
+static T3DModel* dynamicBannerModel; 
+static rspq_block_t* dynamicBannerDpl; 
+static T3DMat4FP* dynamicBannerMatrix; 
+static T3DSkeleton* dynamicBannerSkeleton; 
+static T3DAnim** dynamicBannerAnimations = NULL;
+
+static int currentTitleDialog = 0;
+static float titleTextActivationTimer = 0.0f;
+static float titleTextActivationTime = 50.0f;
+static const char *titleDialogs[] = {
+    ">The Demon\nking cast\nthe land\ninto a\ncentury long\ndarkness.",
+    ">He's trained a legion\nof powerful\nknights\nsworn to\nprotect the\nthrone.",
+    ">These\nbattle born\nknights are\ntaken from\ntheir\nfamilies and\ncast into\nservitude.",
+    ">Enduring\nblade and\ntorment\nuntil nothing\nremains but\nhollow armor."
+};
+#define TITLE_DIALOG_COUNT (sizeof(titleDialogs) / sizeof(titleDialogs[0]))
 
 const char* DYNAMIC_CHAIN_ANIMS[NUM_DYNAMIC_CHAINS][DYNAMIC_CHAIN_ANIM_COUNT] = {
     { "Chain1Initial" },  // chain 0, anim 0
@@ -100,7 +123,7 @@ static T3DVec3 cutsceneCamPosStart;  // Initial camera position (further back)
 static T3DVec3 cutsceneCamPosEnd;    // Final camera position (closer to boss)
 
 // Game state management
-static GameState gameState = GAME_STATE_PLAYING;
+static GameState gameState = GAME_STATE_TITLE;
 static bool lastMenuActive = false;
 
 // Input state tracking
@@ -229,7 +252,14 @@ void scene_load_environment(){
     rspq_block_begin();
     t3d_model_draw(fogDoorModel);
     fogDoorDpl = rspq_block_end();
-    
+
+    fogDoorMatrix = malloc_uncached(sizeof(T3DMat4FP));
+    t3d_mat4fp_from_srt_euler(fogDoorMatrix, 
+        (float[3]){MODEL_SCALE, MODEL_SCALE, MODEL_SCALE},
+        (float[3]){0.0f, 0.0f, 0.0f},
+        (float[3]){0.0f, -5.0f, 0.0f}
+    );
+
     // ===== LOAD FLOOR =====
     roomFloorModel = t3d_model_load("rom:/boss_room/floor.t3dm");
     rspq_block_begin();
@@ -245,26 +275,102 @@ void scene_load_environment(){
 
     // ===== LOAD DYNAMIC CHAINS =====
     //scene_load_dynamic_chains();
+    
+}
+
+void scene_init_cinematic_camera()
+{
+    // Set up camera to focus on boss for intro cutscene
+    // Start position: further back for dramatic reveal
+    if (g_boss) {
+        cutsceneCamPosStart = (T3DVec3){{g_boss->pos[0]+0.0f, g_boss->pos[1] + 250.0f, g_boss->pos[2] + 250.0f}};
+        // End position: closer to boss (slowly move towards during cutscene)
+        cutsceneCamPosEnd = (T3DVec3){{g_boss->pos[0]+700.0f, g_boss->pos[1] + 50.0f, g_boss->pos[2] + 0.0f}};
+        camera_initialize(
+            &cutsceneCamPosStart, 
+            &(T3DVec3){{0,0,1}}, 
+            1.544792654048f, 
+            4.05f
+        );
+        customCamTarget = (T3DVec3){{g_boss->pos[0], g_boss->pos[1] + 15.0f, g_boss->pos[2]}};  // Look at boss center/chest area
+    }
+    camera_mode(CAMERA_CUSTOM);
+
+    character.pos[0] = 0.0f;
+    character.pos[1] = 0.0f;
+    character.pos[2] = 0.0f;
+
+    character.scale[0] = 0.0015f;
+    character.scale[1] = 0.0015f;
+    character.scale[2] = 0.0015f;
+
+    character.rot[1] = 0.0f;
+
+    character_update_position();
+}
+
+void scene_title_init()
+{
+    audio_play_music("rom:/audio/music/_DEMONOUS.wav64", true);
+
+    // Init to title screen position
+    camera_initialize(
+        &(T3DVec3){{-580.6f, 75.0f, 0.0f}}, 
+        &(T3DVec3){{-1,0,0}}, 
+        1.544792654048f, 
+        4.05f
+    );
+
+    customCamTarget.v[1] = 90.0f;
+
+    character.pos[0] = -650.0f;
+    character.pos[1] = 44.0f;
+    character.pos[2] = 0.0f;
+
+    character.scale[0] = MODEL_SCALE * 1.5f;
+    character.scale[1] = MODEL_SCALE * 1.5f;
+    character.scale[2] = MODEL_SCALE * 1.5f;
+
+    character.rot[1] = 0.0f;
+
+    character_update_position();
+
+
+    // ===== LOAD Dynamic Banner =====
+    dynamicBannerModel = t3d_model_load("rom:/title_screen/dynamic_banners.t3dm"); 
+    dynamicBannerSkeleton = malloc_uncached(sizeof(T3DSkeleton)); 
+    *dynamicBannerSkeleton = t3d_skeleton_create(dynamicBannerModel); 
+    const char* dynamicBannerAnimationNames[] = {"Wind"}; 
+    const int dynamicBannerAnimationCount = 1;
+
+    dynamicBannerAnimations = malloc_uncached(dynamicBannerAnimationCount * sizeof(T3DAnim*)); 
+    for (int i = 0; i < dynamicBannerAnimationCount; i++) { 
+        dynamicBannerAnimations[i] = malloc_uncached(sizeof(T3DAnim)); 
+        *dynamicBannerAnimations[i] = t3d_anim_create(dynamicBannerModel, dynamicBannerAnimationNames[i]); 
+        t3d_anim_set_looping(dynamicBannerAnimations[i], true); 
+        t3d_anim_set_playing(dynamicBannerAnimations[i], true); 
+        t3d_anim_attach(dynamicBannerAnimations[i], dynamicBannerSkeleton); 
+    }
+    rspq_block_begin(); 
+    t3d_model_draw_skinned(dynamicBannerModel, dynamicBannerSkeleton); 
+    dynamicBannerDpl = rspq_block_end(); 
+    dynamicBannerMatrix = malloc_uncached(sizeof(T3DMat4FP)); 
+    t3d_mat4fp_from_srt_euler(dynamicBannerMatrix, (float[3]){MODEL_SCALE, MODEL_SCALE, MODEL_SCALE}, (float[3]){0.0f, 0.0f, 0.0f}, (float[3]){0.0f, -5.0f, 0.0f} );
+
+    dialog_controller_speak(titleDialogs[0], 0, 10.0f, false, true);
 }
 
 void scene_init(void) 
 {
-    cameraState = CAMERA_CHARACTER;
-    lastCameraState = CAMERA_CHARACTER;
-
-    camera_initialize(
-        &(T3DVec3){{16.0656f, 11.3755f, -1.6229f}}, 
-        &(T3DVec3){{0,0,1}}, 
-        1.544792654048f, 
-        4.05f
-    );
+    cameraState = CAMERA_CUSTOM;
+    lastCameraState = CAMERA_CUSTOM;
     
     // ==== Lighting ====
     game_lighting_initialize();
     colorAmbient[2] = 0xFF;
     colorAmbient[1] = 0xFF;
     colorAmbient[0] = 0xFF;
-    colorAmbient[3] = 50;
+    colorAmbient[3] = 255;
 
     // Currently not using dir lights so ignore
     // colorDir[2] = 0xFF;
@@ -283,16 +389,6 @@ void scene_init(void)
 
     scene_load_environment();
     
-    // Initialize character
-    character_init();
-    
-    // Set character initial position to be on the ground
-    character.pos[0] = 150.0f;
-    character.pos[1] = -4.8f;  // Position character feet on map surface
-    // Spawn inside the collision volume.
-    character.pos[2] = 0.0f;
-    character_update_position();  // Ensure matrix is updated
-
     // Initialize boss model (imported from boss.glb -> boss.t3dm)
     g_boss = boss_spawn();
     if (!g_boss) {
@@ -309,31 +405,32 @@ void scene_init(void)
     // Make character face the boss
     float dx = g_boss->pos[0] - character.pos[0];
     float dz = g_boss->pos[2] - character.pos[2];
-    character.rot[1] = -atan2f(dx, dz);
-    character_update_position();  // Update transform matrix with new rotation
+
+    // Initialize character
+    character_init();
+    
+    // // Set character initial position to be on the ground
+    // character.pos[0] = 150.0f;
+    // character.pos[1] = -4.8f;  // Position character feet on map surface
+    // // Spawn inside the collision volume.
+    // character.pos[2] = 0.0f;
+    // character.rot[1] = -atan2f(dx, dz);
+    // character_update_position();  // Update transform matrix with new rotation
 
     // Initialize dialog controller
     dialog_controller_init();
 
+    //scene_init_cinematic_camera();
     // Start boss music
     // TODO: Its turned off for now as it gets annoying to listen to and it crackles
     // audio_play_music("rom:/audio/music/boss_final_phase.wav64", true);
 
-    // Set up camera to focus on boss for intro cutscene
-    // Start position: further back for dramatic reveal
-    if (g_boss) {
-        cutsceneCamPosStart = (T3DVec3){{g_boss->pos[0]+0.0f, g_boss->pos[1] + 250.0f, g_boss->pos[2] + 250.0f}};
-        // End position: closer to boss (slowly move towards during cutscene)
-        cutsceneCamPosEnd = (T3DVec3){{g_boss->pos[0]+700.0f, g_boss->pos[1] + 50.0f, g_boss->pos[2] + 0.0f}};
-        customCamPos = cutsceneCamPosStart;  // Start at initial position
-        customCamTarget = (T3DVec3){{g_boss->pos[0], g_boss->pos[1] + 15.0f, g_boss->pos[2]}};  // Look at boss center/chest area
-    }
-    camera_mode(CAMERA_CUSTOM);
-
     // Start boss intro cutscene after character and boss are loaded and positioned
-    dialog_controller_speak("^A powerful enemy approaches...~\n<Prepare for battle!", 0, 3.0f, false, true);
+    //dialog_controller_speak("^A powerful enemy approaches...~\n<Prepare for battle!", 0, 3.0f, false, true);
 
     collision_init();
+
+    scene_title_init();
 }
 
 // Returns a consistent point around the boss' midsection for lock-on targeting.
@@ -376,7 +473,7 @@ void scene_reset(void)
     cutsceneTimer = 0.0f;
     cutsceneCameraTimer = 0.0f;
     bossActivated = false;
-    gameState = GAME_STATE_PLAYING;
+    gameState = GAME_STATE_TITLE;
     lastMenuActive = false;
     lastAPressed = false;
     lastZPressed = false;
@@ -555,14 +652,53 @@ void scene_cutscene_update()
         default:
             break;
     }
+}
 
-    collision_update();
+void scene_update_title(void)
+{
+    if(btn.start)
+    {
+        scene_init_cinematic_camera();
+        gameState = GAME_STATE_PLAYING;
+        //gameState = GAME_STATE_TITLE_TRANSITION;
+
+    }
+
+    if(titleTextActivationTimer >= titleTextActivationTime){
+        dialog_controller_update();
+        if(!dialog_controller_speaking())
+        {
+            currentTitleDialog ++;
+            if(currentTitleDialog >= TITLE_DIALOG_COUNT)
+            {
+                titleTextActivationTimer = 0;
+                currentTitleDialog = -1;
+            }
+            else
+            {
+                dialog_controller_speak(titleDialogs[currentTitleDialog], 0, 10.0f, false, true);
+            }
+        }
+    }
+    else
+    {
+        titleTextActivationTimer += deltaTime;
+    }
 }
 
 void scene_update(void) 
 {
     // Update all scrolling textures
     scroll_update();
+
+    if(gameState == GAME_STATE_TITLE || gameState == GAME_STATE_TITLE_TRANSITION)
+    {
+        scene_update_title();
+        character_update();
+        t3d_anim_update(dynamicBannerAnimations[0], deltaTime);
+        t3d_skeleton_update(dynamicBannerSkeleton);
+        return;
+    }
 
     // Check if menu was just closed - if so, reset character button state
     bool menuActive = scene_is_menu_active();
@@ -683,9 +819,58 @@ static void draw_lockon_indicator(T3DViewport *viewport)
     rdpq_fill_rectangle(px - halfSize, py - halfSize, px + halfSize + 1, py + halfSize + 1);
 }
 
-void scene_draw(T3DViewport *viewport) 
+void scene_draw_title(T3DViewport *viewport)
 {
     // ===== DRAW 3D =====
+    rdpq_sync_pipe();
+    rdpq_mode_zbuf(false, false);
+
+    // Draw no depth environment first
+    t3d_matrix_push_pos(1);
+        t3d_matrix_set(mapMatrix, true);
+        rspq_block_run(mapDpl);
+
+        t3d_matrix_set(dynamicBannerMatrix, true);
+        rspq_block_run(dynamicBannerDpl);
+    t3d_matrix_pop(1);
+
+        // Draw depth environment
+    rdpq_sync_pipe();
+    rdpq_mode_zbuf(true, true);
+
+    t3d_matrix_push_pos(1);
+        character_draw();
+
+        t3d_matrix_set(fogDoorMatrix, true);
+        // Create a struct to pass the scrolling parameters to the tile callback
+        t3d_model_draw_custom(fogDoorModel, (T3DModelDrawConf){
+            .userData = &fogScrollParams,
+            .tileCb = tile_scroll,
+        });
+    t3d_matrix_pop(1);
+
+    // ======== Draw 2D ======== //
+    //Title text
+
+    rdpq_sync_pipe();
+    rdpq_set_mode_standard();
+    rdpq_mode_blender(RDPQ_BLENDER_MULTIPLY);
+    rdpq_set_prim_color(RGBA32(0,0,0,120));
+    rdpq_mode_combiner(RDPQ_COMBINER_FLAT);
+    rdpq_fill_rectangle(15, 35, 75, 58);
+
+    rdpq_set_prim_color(RGBA32(255, 255, 255, 255));
+    rdpq_text_printf(NULL, FONT_UNBALANCED, 35, 50, "Play");
+
+    if(titleTextActivationTimer >= titleTextActivationTime)
+    {
+        dialog_controller_draw(true, 190, 20, 120, 180);
+    }
+
+}
+
+void scene_draw(T3DViewport *viewport) 
+{
 
     t3d_frame_start();
 
@@ -714,10 +899,17 @@ void scene_draw(T3DViewport *viewport)
     // t3d_light_set_directional(0, (uint8_t[4]){0x00, 0x00, 0x00, 0xFF}, &negCamDir);
     // t3d_light_set_count(1);
 
+    if(gameState == GAME_STATE_TITLE || gameState == GAME_STATE_TITLE_TRANSITION)
+    {
+        scene_draw_title(viewport);
+        return;
+    }
+    // ===== DRAW 3D =====
+
     rdpq_sync_pipe();
     rdpq_mode_zbuf(false, false);
 
-    // Draw no depth environment
+    // Draw no depth environment first
     t3d_matrix_push_pos(1);
         t3d_matrix_set(windowsMatrix, true);
         rspq_block_run(windowsDpl);
@@ -725,10 +917,17 @@ void scene_draw(T3DViewport *viewport)
         t3d_matrix_set(mapMatrix, true);
         rspq_block_run(mapDpl);
 
+        t3d_matrix_set(fogDoorMatrix, true);
+        // Create a struct to pass the scrolling parameters to the tile callback
+        t3d_model_draw_custom(fogDoorModel, (T3DModelDrawConf){
+            .userData = &fogScrollParams,
+            .tileCb = tile_scroll,
+        });
+
         t3d_matrix_set(chainsMatrix, true);
         rspq_block_run(chainsDpl);
     t3d_matrix_pop(1);
-
+    
     // Draw depth environment
     rdpq_sync_pipe();
     rdpq_mode_zbuf(true, true);
@@ -745,8 +944,8 @@ void scene_draw(T3DViewport *viewport)
     t3d_matrix_pop(1); 
 
     // Draw characters
-    rdpq_sync_pipe();
-    rdpq_set_prim_color((color_t){0, 0, 0, 0x20});
+    // rdpq_sync_pipe();
+    // rdpq_set_prim_color((color_t){0, 0, 0, 0x20});
 
     t3d_matrix_push_pos(1);
         character_draw();
@@ -755,7 +954,7 @@ void scene_draw(T3DViewport *viewport)
         }
     t3d_matrix_pop(1);
 
-    //Draw transparencies
+    //Draw transparencies last
     t3d_matrix_push_pos(1);    
         t3d_matrix_set(sunshaftsMatrix, true);
         rspq_block_run(sunshaftsDpl);
@@ -808,32 +1007,60 @@ void scene_draw(T3DViewport *viewport)
     }
     
     // Draw dialog on top of everything
-    dialog_controller_draw();
+    int height = 70;
+    int width = 220;
+    int x = (SCREEN_WIDTH - width) / 2;
+    // bottom positioning
+    int y = 240 - height - 10; 
+    dialog_controller_draw(false, x, y, width, height);
+
+}
+
+void scene_delete_environment(void)
+{
+    // --- DPLs ---
+    if (mapDpl)        { rspq_block_free(mapDpl);        mapDpl = NULL; }
+    if (pillarsDpl)    { rspq_block_free(pillarsDpl);    pillarsDpl = NULL; }
+    if (roomLedgeDpl)  { rspq_block_free(roomLedgeDpl);  roomLedgeDpl = NULL; }
+    if (windowsDpl)    { rspq_block_free(windowsDpl);    windowsDpl = NULL; }
+    if (chainsDpl)     { rspq_block_free(chainsDpl);     chainsDpl = NULL; }
+    if (sunshaftsDpl)  { rspq_block_free(sunshaftsDpl);  sunshaftsDpl = NULL; }
+    if (fogDoorDpl)    { rspq_block_free(fogDoorDpl);    fogDoorDpl = NULL; }
+    if (roomFloorDpl)  { rspq_block_free(roomFloorDpl);  roomFloorDpl = NULL; }
+
+    // --- Models ---
+    if (mapModel)       { t3d_model_free(mapModel);       mapModel = NULL; }
+    if (pillarsModel)   { t3d_model_free(pillarsModel);   pillarsModel = NULL; }
+    if (roomLedgeModel) { t3d_model_free(roomLedgeModel); roomLedgeModel = NULL; }
+    if (windowsModel)   { t3d_model_free(windowsModel);   windowsModel = NULL; }
+    if (chainsModel)    { t3d_model_free(chainsModel);    chainsModel = NULL; }
+    if (sunshaftsModel) { t3d_model_free(sunshaftsModel); sunshaftsModel = NULL; }
+    if (fogDoorModel)   { t3d_model_free(fogDoorModel);   fogDoorModel = NULL; }
+    if (roomFloorModel) { t3d_model_free(roomFloorModel); roomFloorModel = NULL; }
+
+    // --- Matrices (malloc_uncached) ---
+    if (mapMatrix)       { free_uncached(mapMatrix);       mapMatrix = NULL; }
+    if (pillarsMatrix)   { free_uncached(pillarsMatrix);   pillarsMatrix = NULL; }
+    if (roomLedgeMatrix) { free_uncached(roomLedgeMatrix); roomLedgeMatrix = NULL; }
+    if (windowsMatrix)   { free_uncached(windowsMatrix);   windowsMatrix = NULL; }
+    if (chainsMatrix)    { free_uncached(chainsMatrix);    chainsMatrix = NULL; }
+    if (sunshaftsMatrix) { free_uncached(sunshaftsMatrix); sunshaftsMatrix = NULL; }
+    if (fogDoorMatrix)   { free_uncached(fogDoorMatrix);   fogDoorMatrix = NULL; }
+    if (roomFloorMatrix) { free_uncached(roomFloorMatrix); roomFloorMatrix = NULL; }
 }
 
 void scene_cleanup(void)
 {
     //collision_mesh_cleanup();
-    character_delete();
+    scene_delete_environment();
     camera_reset();
     
-    // Clean up map
-    if (mapModel) {
-        t3d_model_free(mapModel);
-        mapModel = NULL;
-    }
-    if (mapDpl) {
-        rspq_block_free(mapDpl);
-        mapDpl = NULL;
-    }
-    if (mapMatrix) {
-        free_uncached(mapMatrix);
-        mapMatrix = NULL;
-    }
+    character_delete();
     if (g_boss) {
         boss_free(g_boss);
         free(g_boss);
         g_boss = NULL;
     }
+
     dialog_controller_free();
 }
