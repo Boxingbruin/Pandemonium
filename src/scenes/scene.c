@@ -301,9 +301,9 @@ void scene_init_cinematic_camera()
     character.pos[1] = 0.0f;
     character.pos[2] = 0.0f;
 
-    character.scale[0] = 0.0015f;
-    character.scale[1] = 0.0015f;
-    character.scale[2] = 0.0015f;
+    character.scale[0] = MODEL_SCALE * 0.5f;
+    character.scale[1] = MODEL_SCALE * 0.5f;
+    character.scale[2] = MODEL_SCALE * 0.5f;
 
     character.rot[1] = 0.0f;
 
