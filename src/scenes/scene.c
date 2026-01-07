@@ -28,6 +28,7 @@
 #include "dialog_controller.h"
 //#include "collision_mesh.h"
 #include "collision_system.h"
+#include "letterbox_utility.h"
 
 // TODO: This should not be declared in the header file, as it is only used externally (temp)
 #include "dev.h"
@@ -428,6 +429,10 @@ void scene_init(void)
     // Start boss intro cutscene after character and boss are loaded and positioned
     //dialog_controller_speak("^A powerful enemy approaches...~\n<Prepare for battle!", 0, 3.0f, false, true);
 
+    // Initialize and show letterbox bars for intro
+    letterbox_init();
+    letterbox_show(false);  // Show immediately without animation
+
     collision_init();
 
     scene_title_init();
@@ -477,6 +482,8 @@ void scene_reset(void)
     lastMenuActive = false;
     lastAPressed = false;
     lastZPressed = false;
+    // Reset letterbox to show state for intro
+    letterbox_show(false);
 }
 
 bool scene_is_cutscene_active(void) {
@@ -607,6 +614,8 @@ void scene_cutscene_update()
                 cutsceneState = CUTSCENE_NONE;
                 cutsceneCameraTimer = 0.0f;
                 bossActivated = true;
+                // Hide letterbox bars with animation
+                letterbox_hide();
                 // Return camera control to the player
                 camera_mode_smooth(CAMERA_CHARACTER, 1.0f);
                 break;
@@ -645,6 +654,8 @@ void scene_cutscene_update()
                 cutsceneState = CUTSCENE_NONE;
                 cutsceneCameraTimer = 0.0f;
                 bossActivated = true;
+                // Hide letterbox bars with animation
+                letterbox_hide();
                 // Return camera control to the player
                 camera_mode_smooth(CAMERA_CHARACTER, 1.0f);
             }
@@ -742,6 +753,9 @@ void scene_update(void)
     {
         scene_cutscene_update();
     }
+    
+    // Update letterbox animation
+    letterbox_update();
 
     // Z-target toggle: press Z to toggle lock-on, target updates with boss movement when active
     bool zPressed = btn.z;
@@ -768,18 +782,6 @@ void scene_update(void)
 
 void scene_fixed_update(void) 
 {
-}
-
-// Draw simple letterbox bars for cinematic moments.
-static void draw_cinematic_letterbox(void) {
-    const int barHeight = SCREEN_HEIGHT / 12; // ~20px on 240p
-    rdpq_sync_pipe();
-    rdpq_set_mode_standard();
-    rdpq_mode_combiner(RDPQ_COMBINER_FLAT);
-    rdpq_mode_blender(RDPQ_BLENDER_MULTIPLY);
-    rdpq_set_prim_color(RGBA32(0, 0, 0, 255));
-    rdpq_fill_rectangle(0, 0, SCREEN_WIDTH, barHeight);
-    rdpq_fill_rectangle(0, SCREEN_HEIGHT - barHeight, SCREEN_WIDTH, SCREEN_HEIGHT);
 }
 
 // Draws a small lock-on marker over the boss when Z-targeting is active.
@@ -972,10 +974,8 @@ void scene_draw(T3DViewport *viewport)
     bool isVictory = state == GAME_STATE_VICTORY;
     bool isEndScreen = isDead || isVictory;
 
-    // Add letterbox bars during intro cinematic.
-    if (cutsceneActive) {
-        draw_cinematic_letterbox();
-    }
+    // Draw letterbox bars (they handle their own visibility and animation)
+    letterbox_draw();
 
     // Draw UI elements after 3D rendering is complete (hide during cutscenes or death)
     if (!cutsceneActive && !isEndScreen) {
