@@ -6,6 +6,7 @@
 #include "game_time.h"
 #include "joypad_utility.h"
 #include "character.h"
+#include "game_math.h"
 
 CameraState cameraState = CAMERA_NONE;
 CameraState lastCameraState = CAMERA_NONE;
@@ -58,11 +59,31 @@ static float cameraTransitionDuration = 0.0f;
 static T3DVec3 cameraTransitionStartPos;
 static T3DVec3 cameraTransitionStartTarget;
 
+static bool  breathEnabled = false;
+
+static float breathT = 0.0f;
+static float breathHz = 0.1f;
+static float breathAmpY = 1.0f;
+static float breathAmpX = 1.0f;
+static float breathSmooth = 1.0f;
+
+static float breathY = 0.0f;
+static float breathX = 0.0f;
+
+static bool  breathBaseValid = false;
+static float breathBasePos[3];
+static float breathBaseTarget[3];
+
 static void vec3_lerp_local(T3DVec3 *out, const T3DVec3 *a, const T3DVec3 *b, float t)
 {
 	out->v[0] = a->v[0] + (b->v[0] - a->v[0]) * t;
 	out->v[1] = a->v[1] + (b->v[1] - a->v[1]) * t;
 	out->v[2] = a->v[2] + (b->v[2] - a->v[2]) * t;
+}
+
+static inline float tri_wave(float x) {
+    // triangle in [-1,1], period 2π, based on sine -> asin
+    return (2.0f / 3.14159265f) * asinf(sinf(x));
 }
 
 static void camera_get_view_for_state(CameraState state, T3DVec3 *outPos, T3DVec3 *outTarget)
@@ -112,6 +133,72 @@ void camera_initialize(T3DVec3 *pos, T3DVec3 *dir, float rotX, float rotY)
     customCamTarget = camTarget;
 }
 
+void camera_breath_active(bool enabled)
+{
+    breathEnabled = enabled;
+
+    if (enabled) {
+        breathBasePos[0] = customCamPos.v[0];
+        breathBasePos[1] = customCamPos.v[1];
+        breathBasePos[2] = customCamPos.v[2];
+
+        breathBaseTarget[0] = customCamTarget.v[0];
+        breathBaseTarget[1] = customCamTarget.v[1];
+        breathBaseTarget[2] = customCamTarget.v[2];
+
+        breathBaseValid = true;
+
+        breathT = 0.0f;
+        breathY = 0.0f;
+        breathX = 0.0f;
+    } else {
+        breathBaseValid = false;
+    }
+}
+
+void camera_breath_update(float dt)
+{
+    if (!breathEnabled) return;
+
+    if (!breathBaseValid) {
+        breathBasePos[0] = customCamPos.v[0];
+        breathBasePos[1] = customCamPos.v[1];
+        breathBasePos[2] = customCamPos.v[2];
+
+        breathBaseTarget[0] = customCamTarget.v[0];
+        breathBaseTarget[1] = customCamTarget.v[1];
+        breathBaseTarget[2] = customCamTarget.v[2];
+
+        breathBaseValid = true;
+    }
+
+    breathT += dt;
+
+    const float TAU = 6.2832f;
+    float x = breathT * TAU * breathHz;
+
+    float sinw = sinf(x);
+    float tri  = tri_wave(x);
+
+    // 0.0 = pure sine (most hang), 1.0 = pure triangle (least hang)
+    const float triMix = 0.65f;
+    float w = (1.0f - triMix) * sinw + triMix * tri;
+
+    float rawY = breathAmpY * w;
+
+    // You can honestly set this to 0 (or remove entirely) since triangle is already smooth-ish
+    float k = 1.0f - expf(-breathSmooth * dt);
+    k = clampf(k, 0.0f, 1.0f);
+    breathY += (rawY - breathY) * k;
+
+    customCamPos.v[0]    = breathBasePos[0];
+    customCamPos.v[1]    = breathBasePos[1] + breathY;
+    customCamPos.v[2]    = breathBasePos[2];
+
+    customCamTarget.v[0] = breathBaseTarget[0];
+    customCamTarget.v[1] = breathBaseTarget[1] + breathY * 0.95f;
+    customCamTarget.v[2] = breathBaseTarget[2];
+}
 void camera_update(T3DViewport *viewport)
 {
 	if (cameraTransitionActive)

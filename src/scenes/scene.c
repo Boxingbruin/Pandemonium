@@ -26,6 +26,7 @@
 #include "game/bosses/boss.h"
 #include "game/bosses/boss_anim.h"
 #include "dialog_controller.h"
+#include "display_utility.h"
 //#include "collision_mesh.h"
 #include "collision_system.h"
 #include "letterbox_utility.h"
@@ -88,6 +89,10 @@ static float titleTextActivationTime = 50.0f;
 
 static float titleStartGameTimer = 0.0f;
 static float titleStartGameTime = 10.0f;
+static float titleFadeTime = 7.0f;
+
+static bool screenTransition = false;
+static bool screenBreath = false;
 
 static const char *titleDialogs[] = {
     ">The Demon\nking has\nforced\nthe land\ninto a\ncentury long\ndarkness.",
@@ -363,6 +368,8 @@ void scene_title_init()
     t3d_mat4fp_from_srt_euler(dynamicBannerMatrix, (float[3]){MODEL_SCALE, MODEL_SCALE, MODEL_SCALE}, (float[3]){0.0f, 0.0f, 0.0f}, (float[3]){0.0f, -5.0f, 0.0f} );
 
     dialog_controller_speak(titleDialogs[0], 0, 9.0f, false, true);
+
+    startScreenFade = true;
 }
 
 void scene_init(void) 
@@ -690,15 +697,44 @@ void scene_update_title(void)
                 return;
             }
             titleStartGameTimer += deltaTime;
+
+            float forwardSpeed = 15.0f;
+            float targetDropSpeed = 1.0f;
+
+            // compute forward dir
+            customCamDir.v[0] = customCamTarget.v[0] - customCamPos.v[0];
+            customCamDir.v[1] = customCamTarget.v[1] - customCamPos.v[1];
+            customCamDir.v[2] = customCamTarget.v[2] - customCamPos.v[2];
+            t3d_vec3_norm(&customCamDir);
+
+            // move forward
+            for (int i = 0; i < 3; i++) {
+                customCamPos.v[i]    += customCamDir.v[i] * forwardSpeed * deltaTime;
+                customCamTarget.v[i] += customCamDir.v[i] * forwardSpeed * deltaTime;
+            }
+
+            // gently lower target
+            customCamTarget.v[1] -= targetDropSpeed * deltaTime;
         }
         return;
     }
-    if(btn.start)
+
+    if(btn.start || btn.a)
     {
-        //scene_init_cinematic_camera();
-        //gameState = GAME_STATE_PLAYING;
         gameState = GAME_STATE_TITLE_TRANSITION;
+
+        camera_breath_active(false); 
+        screenBreath = false; 
+        return;
     }
+
+    if (!screenBreath) 
+    { 
+        camera_breath_active(true); 
+        screenBreath = true; 
+    }
+
+    camera_breath_update(deltaTime);
 
     if(titleTextActivationTimer >= titleTextActivationTime){
         dialog_controller_update();
@@ -877,23 +913,40 @@ void scene_draw_title(T3DViewport *viewport)
     t3d_matrix_pop(1);
 
     // ======== Draw 2D ======== //
-    //Title text
-
     rdpq_sync_pipe();
-    rdpq_set_mode_standard();
-    rdpq_mode_blender(RDPQ_BLENDER_MULTIPLY);
-    rdpq_set_prim_color(RGBA32(0,0,0,120));
-    rdpq_mode_combiner(RDPQ_COMBINER_FLAT);
-    rdpq_fill_rectangle(15, 35, 75, 58);
-
-    rdpq_set_prim_color(RGBA32(255, 255, 255, 255));
-    rdpq_text_printf(NULL, FONT_UNBALANCED, 35, 50, "Play");
-
-    if(titleTextActivationTimer >= titleTextActivationTime)
+    //Title text
+    if(gameState != GAME_STATE_TITLE_TRANSITION)
     {
-        dialog_controller_draw(true, 190, 20, 120, 180);
-    }
+        rdpq_set_mode_standard();
+        rdpq_mode_blender(RDPQ_BLENDER_MULTIPLY);
+        rdpq_set_prim_color(RGBA32(0,0,0,120));
+        rdpq_mode_combiner(RDPQ_COMBINER_FLAT);
+        rdpq_fill_rectangle(15, 35, 75, 58);
 
+        rdpq_set_prim_color(RGBA32(255, 255, 255, 255));
+        rdpq_text_printf(NULL, FONT_UNBALANCED, 35, 50, "Play");
+
+        if(titleTextActivationTimer >= titleTextActivationTime)
+        {
+            dialog_controller_draw(true, 190, 20, 120, 180);
+        }
+
+        display_utility_solid_black_transition(true, 200.0f);
+
+    }
+    else
+    {
+        if (titleStartGameTimer >= titleFadeTime && !screenTransition)
+        {
+            startScreenFade = true; // this is set in the display utility. Must not update this value.
+            screenTransition = true; // this is to toggle off setting the display utility.
+        }
+
+        if(screenTransition)
+        {
+            display_utility_solid_black_transition(false, 200.0f);
+        }
+    }
 }
 
 void scene_draw(T3DViewport *viewport) 

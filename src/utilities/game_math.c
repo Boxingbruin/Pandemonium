@@ -46,6 +46,11 @@ int64_t clamp_fixed64(int64_t val, int64_t minVal, int64_t maxVal) {
     return (val < minVal) ? minVal : (val > maxVal) ? maxVal : val;
 }
 
+float clampf(float v, float lo, float hi)
+{
+    return v < lo ? lo : (v > hi ? hi : v);
+}
+
 void vec3_normalize_fixed(FixedVec3* out, const FixedVec3* in) {
     int64_t len2 = 0;
     for (int i = 0; i < 3; i++)
