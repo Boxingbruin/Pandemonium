@@ -24,6 +24,11 @@
 #include "globals.h"
 #include "general_utility.h"
 
+// Shadow tuning (duplicated from boss.c for rendering alpha)
+static const float BOSS_SHADOW_GROUND_Y = 0.0f;
+static const float BOSS_JUMP_REF_HEIGHT = 120.0f;
+static const float BOSS_SHADOW_BASE_ALPHA = 120.0f;
+
 ScrollDyn bossScrollDyn = {
     .xSpeed = 0.0f,
     .ySpeed = 30.0f,
@@ -33,11 +38,33 @@ ScrollDyn bossScrollDyn = {
 
 void boss_draw_init(void)
 {
-    bossScrollDyn.spr = sprite_load("rom:/boss_room/fog.i8.sprite");
+    // This texture is only needed for the scrolling/fog material. If it isn't
+    // available yet (e.g. different scene), keep it NULL and fall back to
+    // regular drawing.
+    if (!bossScrollDyn.spr) {
+        bossScrollDyn.spr = sprite_load("rom:/boss_room/fog.i8.sprite");
+    }
 }
 
 static void boss_draw_scrolling(Boss* boss)
 {
+    // If the scrolling texture wasn't loaded, avoid the custom draw path.
+    // This prevents startup crashes if the sprite isn't present in the current ROM.
+    if (!bossScrollDyn.spr) {
+        T3DSkeleton* skel = (T3DSkeleton*)boss->skeleton;
+        t3d_matrix_set(boss->modelMat, true);
+        t3d_model_draw_custom(boss->model, (T3DModelDrawConf){
+            .userData     = NULL,
+            .tileCb       = NULL,
+            .filterCb     = NULL,
+            .dynTextureCb = NULL,
+            .matrices = (skel && skel->bufferCount == 1)
+              ? skel->boneMatricesFP
+              : (const T3DMat4FP*)t3d_segment_placeholder(T3D_SEGMENT_SKELETON)
+        });
+        return;
+    }
+
     T3DSkeleton* skel = (T3DSkeleton*)boss->skeleton;
 
     t3d_matrix_set(boss->modelMat, true);
@@ -54,7 +81,26 @@ static void boss_draw_scrolling(Boss* boss)
 
 void boss_render_draw(Boss* boss) {
     if (!boss || !boss->visible) return;
-    
+
+    // Be defensive: render might be called before init is fully complete.
+    if (!boss->model || !boss->modelMat) return;
+    // --- Shadow (ground-locked) ---
+    if (boss->dpl_shadow && boss->shadowMat) {
+        // Compute alpha like character: fade with height
+        float h = boss->pos[1] - BOSS_SHADOW_GROUND_Y;
+        if (h < 0.0f) h = 0.0f;
+        float t = (BOSS_JUMP_REF_HEIGHT > 0.0f) ? (h / BOSS_JUMP_REF_HEIGHT) : 0.0f;
+        if (t > 1.0f) t = 1.0f;
+        float fade = 1.0f - t; fade *= fade;
+        uint8_t a = (uint8_t)(BOSS_SHADOW_BASE_ALPHA * fade);
+
+        if (a > 0) {
+            rdpq_set_prim_color(RGBA32(0, 0, 0, a));
+            t3d_matrix_set((T3DMat4FP*)boss->shadowMat, true);
+            rspq_block_run((rspq_block_t*)boss->dpl_shadow);
+        }
+    }
+
     boss_draw_scrolling(boss);
     
     // Draw sword attached to Hand-Right bone
