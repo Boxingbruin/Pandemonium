@@ -29,8 +29,8 @@ Pandemonium is an N64 game built using LibDragon and the T3D 3D engine. The proj
 - ✅ Audio controller for music and SFX
 - ✅ Input handling via joypad utility
 - ✅ Development tools and debug overlay
-- ✅ Character object system (catherine model placeholder)
-- ✅ Boss object system (catherine model placeholder)
+- ✅ Character object system
+- ✅ Boss object system
 
 ### Scene System
 - `scene_init()` - Initialize game objects and systems
