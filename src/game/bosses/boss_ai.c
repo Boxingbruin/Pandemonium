@@ -208,6 +208,9 @@ static void boss_ai_select_attack(Boss* boss, float dist) {
         boss->state = BOSS_STATE_POWER_JUMP;
         boss->stateTimer = 0.0f;
         boss->powerJumpCooldown = 12.0f;
+        boss->isAttacking = true;
+        boss->attackAnimTimer = 0.0f;
+        boss->animationTransitionTimer = 0.0f;
         boss->currentAttackHasHit = false;
         boss->powerJumpStartPos[0] = boss->pos[0];
         boss->powerJumpStartPos[1] = boss->pos[1];
@@ -598,20 +601,26 @@ void boss_ai_update(Boss* boss, BossIntent* out_intent) {
             
         // Attack states - these handle their own transitions
         case BOSS_STATE_POWER_JUMP:
-            // Power jump: 3 phases over 4.533s
-            // Phase 1: Idle preparation (0.0 - 1.367s)
-            // Phase 2: Jump arc (1.367 - 2.767s)
-            // Phase 3: Landing impact + recovery (2.767 - 4.533s)
-            // End: Transition to strafe (4.533s+)
-            {
-                const float idleDuration = 41.0f / 25.0f;      // 1.367s
-                const float jumpDuration = 42.0f / 25.0f;      // 1.4s
-                const float recoverDuration = 53.0f / 25.0f;   // 1.767s
-                const float totalDuration = idleDuration + jumpDuration + recoverDuration;
-                
-                if (boss->stateTimer >= totalDuration) {
-                    // When under 50 distance, boss should only attack, not chase or strafe
+            // Power jump: Transitions when animation completes (isAttacking becomes false)
+            // and animation blend completes
+            if (!boss->isAttacking) {
+                // Wait for blend to complete before changing state
+                boss->animationTransitionTimer += dt;
+                if (boss->animationTransitionTimer >= boss->blendDuration) {
+                    // Check if we should attack before transitioning to movement states
+                    // This prevents a 1-frame STRAFE state that immediately transitions to an attack
+                    bool shouldAttack = false;
                     if (dist < 50.0f) {
+                        // Close range - always attack
+                        shouldAttack = true;
+                    } else if ((dist >= 70.0f && dist <= 80.0f && boss->comboStarterCooldown <= 0.0f) ||
+                               (dist >= 100.0f && dist < 200.0f && boss->flipAttackCooldown <= 0.0f) ||
+                               (dist >= 250.0f && boss->powerJumpCooldown <= 0.0f)) {
+                        // In range for an attack and cooldown is ready
+                        shouldAttack = true;
+                    }
+                    
+                    if (shouldAttack) {
                         boss_ai_select_attack(boss, dist);
                     } else if (dist >= 50.0f) {
                         boss->state = BOSS_STATE_STRAFE;
@@ -619,6 +628,7 @@ void boss_ai_update(Boss* boss, BossIntent* out_intent) {
                         boss->state = BOSS_STATE_CHASE;
                     }
                     boss->stateTimer = 0.0f;
+                    boss->animationTransitionTimer = 0.0f;
                     bossPowerJumpImpactPlayed = false; // Reset for next time
                 }
             }
