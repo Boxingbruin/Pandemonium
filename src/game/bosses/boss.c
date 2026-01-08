@@ -264,15 +264,15 @@ static void boss_update_movement(Boss* boss, float dt) {
         extern Character character;
         float faceDx = character.pos[0] - boss->pos[0];
         float faceDz = character.pos[2] - boss->pos[2];
-        float targetAngle = -atan2f(-faceDz, faceDx) + 3.14159265359f; // T3D_PI
+        float targetAngle = -atan2f(-faceDz, faceDx) + T3D_PI; // T3D_PI
         
         // Smoothly rotate toward target angle
         float currentAngle = boss->rot[1];
         float angleDelta = targetAngle - currentAngle;
         
         // Normalize angle delta to [-PI, PI]
-        while (angleDelta > 3.14159265359f) angleDelta -= 2.0f * 3.14159265359f;
-        while (angleDelta < -3.14159265359f) angleDelta += 2.0f * 3.14159265359f;
+        while (angleDelta > T3D_PI) angleDelta -= 2.0f * T3D_PI;
+        while (angleDelta < -T3D_PI) angleDelta += 2.0f * T3D_PI;
         
         // Apply smooth rotation with turn rate
         float maxTurnRate = boss->turnRate * dt;
@@ -288,15 +288,15 @@ static void boss_update_movement(Boss* boss, float dt) {
         
         // Only rotate if we're not too close to the target (prevents oscillation)
         if (faceDist > 10.0f) {
-            float targetAngle = -atan2f(-faceDz, faceDx) + 3.14159265359f;
+            float targetAngle = -atan2f(-faceDz, faceDx) + T3D_PI;
             
             // Smoothly rotate toward target angle
             float currentAngle = boss->rot[1];
             float angleDelta = targetAngle - currentAngle;
             
             // Normalize angle delta to [-PI, PI]
-            while (angleDelta > 3.14159265359f) angleDelta -= 2.0f * 3.14159265359f;
-            while (angleDelta < -3.14159265359f) angleDelta += 2.0f * 3.14159265359f;
+            while (angleDelta > T3D_PI) angleDelta -= 2.0f * T3D_PI;
+            while (angleDelta < -T3D_PI) angleDelta += 2.0f * T3D_PI;
             
             // Apply smooth rotation with turn rate
             float maxTurnRate = boss->turnRate * dt;
@@ -314,8 +314,8 @@ static void boss_update_movement(Boss* boss, float dt) {
         float targetAngle = atan2f(-boss->velX, boss->velZ);
         float currentAngle = boss->rot[1];
         float angleDelta = targetAngle - currentAngle;
-        while (angleDelta > 3.14159265359f) angleDelta -= 2.0f * 3.14159265359f;
-        while (angleDelta < -3.14159265359f) angleDelta += 2.0f * 3.14159265359f;
+        while (angleDelta > T3D_PI) angleDelta -= 2.0f * T3D_PI;
+        while (angleDelta < -T3D_PI) angleDelta += 2.0f * T3D_PI;
         
         float maxTurnRate = boss->turnRate * dt;
         if (angleDelta > maxTurnRate) angleDelta = maxTurnRate;
@@ -546,6 +546,9 @@ void boss_init(Boss* boss) {
     
     // Find Hand-Right bone index
     boss->handRightBoneIndex = t3d_skeleton_find_bone(skeleton, "Hand-Right");
+    
+    // Find Spine1 bone index (for z-targeting)
+    boss->spine1BoneIndex = t3d_skeleton_find_bone(skeleton, "Spine1");
     
     // Initialize hand attack collider (local space, will be updated during attacks)
     boss->handAttackCollider.localCapA.v[0] = 0.0f;

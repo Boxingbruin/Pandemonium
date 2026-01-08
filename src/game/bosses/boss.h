@@ -99,6 +99,9 @@ typedef struct Boss {
     float handAttackColliderWorldPos[3];
     bool handAttackColliderActive;
     
+    // Spine1 bone index (for z-targeting)
+    int spine1BoneIndex;
+    
     // Sword model (attached to Hand-Right bone)
     void* swordModel;  // T3DModel*
     void* swordDpl;  // rspq_block_t*
