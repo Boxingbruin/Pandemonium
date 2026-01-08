@@ -85,9 +85,13 @@ static T3DAnim** dynamicBannerAnimations = NULL;
 static int currentTitleDialog = 0;
 static float titleTextActivationTimer = 0.0f;
 static float titleTextActivationTime = 50.0f;
+
+static float titleStartGameTimer = 0.0f;
+static float titleStartGameTime = 10.0f;
+
 static const char *titleDialogs[] = {
-    ">The Demon\nking cast\nthe land\ninto a\ncentury long\ndarkness.",
-    ">He's trained a legion\nof powerful\nknights\nsworn to\nprotect the\nthrone.",
+    ">The Demon\nking has\nforced\nthe land\ninto a\ncentury long\ndarkness.",
+    ">The King\nhas trained\na legion\nof powerful\nknights\nsworn to\nprotect the\nthrone.",
     ">These\nbattle born\nknights are\ntaken from\ntheir\nfamilies and\ncast into\nservitude.",
     ">Enduring\nblade and\ntorment\nuntil nothing\nremains but\nhollow armor."
 };
@@ -358,7 +362,7 @@ void scene_title_init()
     dynamicBannerMatrix = malloc_uncached(sizeof(T3DMat4FP)); 
     t3d_mat4fp_from_srt_euler(dynamicBannerMatrix, (float[3]){MODEL_SCALE, MODEL_SCALE, MODEL_SCALE}, (float[3]){0.0f, 0.0f, 0.0f}, (float[3]){0.0f, -5.0f, 0.0f} );
 
-    dialog_controller_speak(titleDialogs[0], 0, 10.0f, false, true);
+    dialog_controller_speak(titleDialogs[0], 0, 9.0f, false, true);
 }
 
 void scene_init(void) 
@@ -667,12 +671,33 @@ void scene_cutscene_update()
 
 void scene_update_title(void)
 {
+    if(gameState == GAME_STATE_TITLE_TRANSITION)
+    {
+        if(titleStartGameTimer >= titleStartGameTime){
+            titleStartGameTimer = 0.0f;
+            scene_init_cinematic_camera();
+            gameState = GAME_STATE_PLAYING;
+            character_reset();
+        }
+        else
+        {
+            if(btn.start || btn.a || btn.b)
+            {
+                titleStartGameTimer = 0.0f;
+                scene_init_cinematic_camera();
+                gameState = GAME_STATE_PLAYING;
+                character_reset();
+                return;
+            }
+            titleStartGameTimer += deltaTime;
+        }
+        return;
+    }
     if(btn.start)
     {
-        scene_init_cinematic_camera();
-        gameState = GAME_STATE_PLAYING;
-        //gameState = GAME_STATE_TITLE_TRANSITION;
-
+        //scene_init_cinematic_camera();
+        //gameState = GAME_STATE_PLAYING;
+        gameState = GAME_STATE_TITLE_TRANSITION;
     }
 
     if(titleTextActivationTimer >= titleTextActivationTime){
@@ -687,7 +712,7 @@ void scene_update_title(void)
             }
             else
             {
-                dialog_controller_speak(titleDialogs[currentTitleDialog], 0, 10.0f, false, true);
+                dialog_controller_speak(titleDialogs[currentTitleDialog], 0, 9.0f, false, true);
             }
         }
     }

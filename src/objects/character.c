@@ -359,7 +359,7 @@ static inline void update_animations(float speedRatio, CharacterState state, flo
     
     // Determine target animation
     int targetAnim = get_target_animation(state, speedRatio);
-    
+
     if (state == CHAR_STATE_ROLLING && prevState != CHAR_STATE_ROLLING) {
         if (character.animations && character.animations[ANIM_ROLL]) {
             t3d_anim_set_time(character.animations[ANIM_ROLL], 0.0f);
@@ -475,6 +475,14 @@ static inline void update_animations(float speedRatio, CharacterState state, flo
                 t3d_anim_set_speed(character.animations[ANIM_ATTACK], 1.0f);
             }
             t3d_anim_update(character.animations[ANIM_ATTACK], dt);
+        }
+    } else if(state == CHAR_STATE_FOG_WALK){
+        if (character.animations && character.animations[ANIM_WALK_THROUGH_FOG]) {
+            t3d_anim_update(character.animations[ANIM_WALK_THROUGH_FOG], dt);
+        }
+    } else if(state == CHAR_STATE_TITLE_IDLE){
+        if (character.animations && character.animations[ANIM_IDLE]) {
+            t3d_anim_update(character.animations[ANIM_IDLE], dt);
         }
     } else {
         // Normal state: update based on speed
@@ -613,6 +621,8 @@ void character_init(void)
 
     camera_reset_third_person();
     character_update_camera();
+
+    characterState = CHAR_STATE_TITLE_IDLE;
 }
 
 /* Main per-frame update: input, actions, movement, rotation, animation, camera. */
@@ -657,8 +667,10 @@ void character_update(void)
         update_current_speed(0.0f, deltaTime); // No input magnitude during cutscenes
         float animationSpeedRatio = currentSpeed;
 
-        if(scene_get_game_state() == GAME_STATE_TITLE_TRANSITION && walkThroughFog == false){
+        if(scene_get_game_state() == GAME_STATE_TITLE_TRANSITION && walkThroughFog == false)
+        {
             t3d_anim_set_playing(character.animations[ANIM_WALK_THROUGH_FOG], true);
+            characterState = CHAR_STATE_FOG_WALK;
             walkThroughFog = true;
         }
         else
