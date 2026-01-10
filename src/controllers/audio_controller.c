@@ -43,16 +43,16 @@ void audio_set_loading_mode(bool loading) {
 
 void audio_initialize(void) 
 {
-    int ret = dfs_init(DFS_DEFAULT_LOCATION);
-    assert(ret == DFS_ESUCCESS);
+    // int ret = dfs_init(DFS_DEFAULT_LOCATION);
+    // assert(ret == DFS_ESUCCESS);
 
-    audio_init(22050, 4);
+    audio_init(44100, 4);
     mixer_init(16);
     wav64_init_compression(1);
 
     // Maximum frequency of music channel is 128k
     // Set the limits of the music channel to 0 and 48000
-    mixer_ch_set_limits(CHANNEL_MUSIC, 0, 48000, 0);
+    mixer_ch_set_limits(CHANNEL_MUSIC, 0, 128000, 0);
 }
 
 void audio_play_music(const char *path, bool loop) 
@@ -68,6 +68,7 @@ void audio_play_music(const char *path, bool loop)
 
     // Load the new music file
     wav64_open(&currentMusic, path);
+    mixer_ch_set_freq(CHANNEL_MUSIC, currentMusic.wave.frequency);
     wav64_set_loop(&currentMusic, loop);
 
     // Apply volume settings

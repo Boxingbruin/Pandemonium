@@ -321,7 +321,7 @@ void scene_init_cinematic_camera()
 
 void scene_title_init()
 {
-    audio_play_music("rom:/audio/music/_DEMONOUS.wav64", true);
+    audio_play_music("rom:/audio/music/demonous2.wav64", true);
 
     // Init to title screen position
     camera_initialize(

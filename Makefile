@@ -117,7 +117,7 @@ $(FILESYSTEMDIR)/bossroom/bossroom.collision: $(ASSDIR)/bossroom/bossroom.glb to
 $(FILESYSTEMDIR)/%.wav64: $(ASSDIR)/%.wav
 	@mkdir -p $(dir $@)
 	@echo "    [AUDIO] $@"
-	@$(N64_AUDIOCONV) --wav-compress 1,bits=2 --wav-resample 22050 -v -o $(dir $@) $<
+	@$(N64_AUDIOCONV) -o $(dir $@) $<
 
 $(FILESYSTEMDIR)/%.xm64: $(ASSDIR)/%.xm
 	@mkdir -p $(dir $@)

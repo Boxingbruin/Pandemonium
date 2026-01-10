@@ -42,6 +42,7 @@ int main(void)
     }
     else
     {
+        //display_init(RESOLUTION_320x240, DEPTH_32_BPP, 3, GAMMA_NONE, FILTERS_DISABLED);
         display_init(RESOLUTION_320x240, DEPTH_32_BPP, 3, GAMMA_NONE, FILTERS_RESAMPLE_ANTIALIAS);
     }
 
@@ -78,7 +79,7 @@ int main(void)
 
     scene_init();
 
-    // Initialize menu controller
+    // // Initialize menu controller
     menu_controller_init();
 
     rspq_syncpoint_t syncPoint = 0; // TODO: I have no idea what this does but it's needed for flipbook textures.
