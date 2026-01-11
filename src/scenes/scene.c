@@ -83,6 +83,13 @@ static T3DMat4FP* dynamicBannerMatrix;
 static T3DSkeleton* dynamicBannerSkeleton; 
 static T3DAnim** dynamicBannerAnimations = NULL;
 
+// Cinematic Chains
+static T3DModel* cinematicChainsModel; 
+static rspq_block_t* cinematicChainsDpl; 
+static T3DMat4FP* cinematicChainsMatrix; 
+static T3DSkeleton* cinematicChainsSkeleton; 
+static T3DAnim** cinematicChainsAnimations = NULL;
+
 static int currentTitleDialog = 0;
 static float titleTextActivationTimer = 0.0f;
 static float titleTextActivationTime = 50.0f;
@@ -101,21 +108,6 @@ static const char *titleDialogs[] = {
     ">Enduring\nblade and\ntorment\nuntil nothing\nremains but\nhollow armor."
 };
 #define TITLE_DIALOG_COUNT (sizeof(titleDialogs) / sizeof(titleDialogs[0]))
-
-const char* DYNAMIC_CHAIN_ANIMS[NUM_DYNAMIC_CHAINS][DYNAMIC_CHAIN_ANIM_COUNT] = {
-    { "Chain1Initial" },  // chain 0, anim 0
-    { "Chain2Initial" },  // chain 1, anim 0
-};
-
-T3DModel* dynamicChainModel; 
-typedef struct {
-    T3DModel*      model;
-    rspq_block_t*  dpl;
-    T3DMat4FP*     matrix;
-    T3DSkeleton*   skeleton;
-    T3DAnim**      anims;
-} DynamicChain;
-DynamicChain gDynamicChains[NUM_DYNAMIC_CHAINS];
 
 // Cutscene state management
 typedef enum {
@@ -139,42 +131,6 @@ static bool lastMenuActive = false;
 // Input state tracking
 static bool lastAPressed = false;
 static bool lastZPressed = false;
-
-void scene_load_dynamic_chains(void)
-{
-    dynamicChainModel = t3d_model_load("rom:/boss_room/dynamic_chain.t3dm");
-    for (int i = 0; i < NUM_DYNAMIC_CHAINS; i++) {
-        DynamicChain* chain = &gDynamicChains[i];
-
-        chain->skeleton = malloc_uncached(sizeof(T3DSkeleton));
-        *chain->skeleton = t3d_skeleton_create(dynamicChainModel);
-
-        chain->anims = malloc_uncached(DYNAMIC_CHAIN_ANIM_COUNT * sizeof(T3DAnim*));
-
-        for (int a = 0; a < DYNAMIC_CHAIN_ANIM_COUNT; a++) {
-            const char* animName = DYNAMIC_CHAIN_ANIMS[i][a];
-
-            chain->anims[a] = malloc_uncached(sizeof(T3DAnim));
-            *chain->anims[a] = t3d_anim_create(dynamicChainModel, animName);
-
-            t3d_anim_set_looping(chain->anims[a], true);
-            t3d_anim_set_playing(chain->anims[a], true);
-            t3d_anim_attach(chain->anims[a], chain->skeleton);
-        }
-
-        rspq_block_begin();
-            t3d_model_draw_skinned(dynamicChainModel, chain->skeleton);
-        chain->dpl = rspq_block_end();
-
-        chain->matrix = malloc_uncached(sizeof(T3DMat4FP));
-
-        float scale[3] = { MODEL_SCALE, MODEL_SCALE, MODEL_SCALE };
-        float rot[3]   = { 0.0f, 0.0f, 0.0f };
-        float pos[3]   = { 0.0f, -5.0f, 0.0f };
-
-        t3d_mat4fp_from_srt_euler(chain->matrix, scale, rot, pos);
-    }
-}
 
 void scene_load_environment(){
 
@@ -282,10 +238,30 @@ void scene_load_environment(){
         (float[3]){0.0f, 0.0f, 0.0f},
         (float[3]){0.0f, -5.0f, 0.0f}
     );
+   
+    // ===== LOAD Cinematic Chains =====
+    cinematicChainsModel = t3d_model_load("rom:/boss_room/chains.t3dm"); 
+    cinematicChainsSkeleton = malloc_uncached(sizeof(T3DSkeleton)); 
+    *cinematicChainsSkeleton = t3d_skeleton_create(cinematicChainsModel); 
+    const char* cinematicChainsAnimationNames[] = {"ChainsInitial"}; 
+    const int cinematicChainsAnimationCount = 1;
 
-    // ===== LOAD DYNAMIC CHAINS =====
-    //scene_load_dynamic_chains();
-    
+    cinematicChainsAnimations = malloc_uncached(cinematicChainsAnimationCount * sizeof(T3DAnim*)); 
+    for (int i = 0; i < cinematicChainsAnimationCount; i++) { 
+        cinematicChainsAnimations[i] = malloc_uncached(sizeof(T3DAnim)); 
+        *cinematicChainsAnimations[i] = t3d_anim_create(cinematicChainsModel, cinematicChainsAnimationNames[i]); 
+        t3d_anim_set_looping(cinematicChainsAnimations[i], true); 
+        t3d_anim_set_playing(cinematicChainsAnimations[i], true); 
+        t3d_anim_attach(cinematicChainsAnimations[i], cinematicChainsSkeleton); 
+    }
+
+    rspq_block_begin(); 
+    t3d_model_draw_skinned(cinematicChainsModel, cinematicChainsSkeleton); 
+    cinematicChainsDpl = rspq_block_end(); 
+    cinematicChainsMatrix = malloc_uncached(sizeof(T3DMat4FP)); 
+    t3d_mat4fp_from_srt_euler(cinematicChainsMatrix, (float[3]){MODEL_SCALE, MODEL_SCALE, MODEL_SCALE}, (float[3]){0.0f, 0.0f, 0.0f}, (float[3]){0.0f, -5.0f, 0.0f} );
+
+
 }
 
 void scene_init_cinematic_camera()
@@ -361,12 +337,14 @@ void scene_title_init()
         t3d_anim_set_playing(dynamicBannerAnimations[i], true); 
         t3d_anim_attach(dynamicBannerAnimations[i], dynamicBannerSkeleton); 
     }
+
     rspq_block_begin(); 
     t3d_model_draw_skinned(dynamicBannerModel, dynamicBannerSkeleton); 
     dynamicBannerDpl = rspq_block_end(); 
     dynamicBannerMatrix = malloc_uncached(sizeof(T3DMat4FP)); 
     t3d_mat4fp_from_srt_euler(dynamicBannerMatrix, (float[3]){MODEL_SCALE, MODEL_SCALE, MODEL_SCALE}, (float[3]){0.0f, 0.0f, 0.0f}, (float[3]){0.0f, -5.0f, 0.0f} );
 
+    // Start Dialog
     dialog_controller_speak(titleDialogs[0], 0, 9.0f, false, true);
 
     startScreenFade = true;
@@ -555,18 +533,19 @@ void scene_restart(void)
            cameraState, dialog_controller_speaking() ? "true" : "false");
 }
 
-void update_dynamic_chains(int animIndex)
+void scene_init_cutscene()
 {
-    for (int i = 0; i < NUM_DYNAMIC_CHAINS; i++) 
+    switch (cutsceneState) 
     {
-        t3d_anim_update(gDynamicChains[i].anims[animIndex], deltaTime);
-        t3d_skeleton_update(gDynamicChains[i].skeleton);
-
-        t3d_mat4fp_from_srt_euler(gDynamicChains[i].matrix, 
-            (float[3]){MODEL_SCALE, MODEL_SCALE, MODEL_SCALE},
-            (float[3]){0.0f, 0.0f, 0.0f},
-            (float[3]){0.0f, -5.0f, 0.0f}
-        );
+        case CUTSCENE_BOSS_INTRO:
+            scene_init_cinematic_camera();
+            gameState = GAME_STATE_PLAYING;
+            character_reset();
+            audio_stop_music();
+            audio_play_music("rom:/audio/music/boss_mixed2.wav64", true);
+            break;
+        default:
+            break;
     }
 }
 
@@ -586,8 +565,9 @@ void scene_cutscene_update()
     
     switch (cutsceneState) {
         case CUTSCENE_BOSS_INTRO:
-            // During intro cutscene, update character and boss for rendering but disable AI
-            character_update();
+            t3d_anim_update(cinematicChainsAnimations[0], deltaTime);
+            t3d_skeleton_update(cinematicChainsSkeleton);
+
             if (g_boss) {
                 boss_anim_update(g_boss);
                 // Update transforms for rendering
@@ -681,21 +661,19 @@ void scene_update_title(void)
     if(gameState == GAME_STATE_TITLE_TRANSITION)
     {
         if(titleStartGameTimer >= titleStartGameTime){
+            scene_init_cutscene();
             titleStartGameTimer = 0.0f;
-            scene_init_cinematic_camera();
-            gameState = GAME_STATE_PLAYING;
-            character_reset();
         }
         else
         {
             if(btn.start || btn.a || btn.b)
             {
+                scene_init_cutscene();
                 titleStartGameTimer = 0.0f;
-                scene_init_cinematic_camera();
-                gameState = GAME_STATE_PLAYING;
-                character_reset();
                 return;
             }
+
+            audio_update_fade(deltaTime);
             titleStartGameTimer += deltaTime;
 
             float forwardSpeed = 15.0f;
@@ -725,6 +703,7 @@ void scene_update_title(void)
 
         camera_breath_active(false); 
         screenBreath = false; 
+        audio_stop_music_fade(6); // duration
         return;
     }
 
