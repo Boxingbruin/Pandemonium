@@ -46,7 +46,7 @@ ASSETSCONV = $(patsubst $(ASSDIR)/%.png,$(FILESYSTEMDIR)/%.sprite,$(assets_png))
 # Collision export (single-file workflow):
 # - Put an Object named "COLLISION" inside assets/bossroom.glb
 # - This rule exports only that node into filesystem/bossroom.collision (uncompressed)
-ASSETSCONV += $(FILESYSTEMDIR)/bossroom/bossroom.collision
+# ASSETSCONV += $(FILESYSTEMDIR)/bossroom/bossroom.collision
 
 CODEFILES   =  $(shell find $(SRCDIR) -name "*.c" ! -path "$(SRCDIR)/objects/boss.c")
 CODEOBJECTS = $(patsubst $(SRCDIR)/%.c,$(OBJDIR)/%.o,$(CODEFILES))
@@ -76,14 +76,6 @@ $(FILESYSTEMDIR)/%.sprite: $(ASSDIR)/%.png
 	@echo "    [SPRITE] $@"
 	$(N64_MKSPRITE) $(MKSPRITE_FLAGS) -o $(dir $@) "$<"
 
-# Bossroom texture must fit in TMEM when used by Tiny3D.
-# The source is a 64x64 RGBA PNG; AUTO would pick RGBA16/32 which does NOT fit in TMEM.
-# Force CI4 so it uploads safely.
-$(FILESYSTEMDIR)/bossroom/bossroom.sprite: $(ASSDIR)/bossroom/bossroom.png
-	@mkdir -p $(dir $@)
-	@echo "    [SPRITE] $@ (CI4)"
-	$(N64_MKSPRITE) -f CI4 -o $(dir $@) "$<"
-
 $(FILESYSTEMDIR)/%.font64: $(ASSDIR)/%.ttf
 	@mkdir -p $(dir $@)
 	@echo "    [FONT] $@"
@@ -102,22 +94,22 @@ $(COLLISION_STAMP): $(COLLISION_DEPS)
 	@$(COLLISION_PY) -m pip install -r $(COLLISION_DEPS)
 	@touch $(COLLISION_STAMP)
 
-$(FILESYSTEMDIR)/bossroom/bossroom.collision: $(ASSDIR)/bossroom/bossroom.glb tools/export_collision.py
-	@mkdir -p $(dir $@)
-	@echo "    [COLLISION] $@"
-	@$(MAKE) $(COLLISION_STAMP)
-	@$(COLLISION_PY) tools/export_collision.py "$<" "$@" || ( \
-		echo "    [COLLISION] WARNING: No COLLISION node found in $< (or exporter failed)."; \
-		echo "    [COLLISION] Writing placeholder $@ so the build can continue."; \
-		echo "# exported collision mesh" > "$@"; \
-		echo "# EMPTY - add an Object named COLLISION to assets/bossroom/bossroom.glb" >> "$@"; \
-		true \
-	)
+# $(FILESYSTEMDIR)/bossroom/bossroom.collision: $(ASSDIR)/bossroom/bossroom.glb tools/export_collision.py
+# 	@mkdir -p $(dir $@)
+# 	@echo "    [COLLISION] $@"
+# 	@$(MAKE) $(COLLISION_STAMP)
+# 	@$(COLLISION_PY) tools/export_collision.py "$<" "$@" || ( \
+# 		echo "    [COLLISION] WARNING: No COLLISION node found in $< (or exporter failed)."; \
+# 		echo "    [COLLISION] Writing placeholder $@ so the build can continue."; \
+# 		echo "# exported collision mesh" > "$@"; \
+# 		echo "# EMPTY - add an Object named COLLISION to assets/bossroom/bossroom.glb" >> "$@"; \
+# 		true \
+# 	)
 
 $(FILESYSTEMDIR)/%.wav64: $(ASSDIR)/%.wav
 	@mkdir -p $(dir $@)
 	@echo "    [AUDIO] $@"
-	@$(N64_AUDIOCONV) --wav-compress 1,bits=2 --wav-resample 22050 -v -o $(dir $@) $<
+	@$(N64_AUDIOCONV) -o $(dir $@) $<
 
 $(FILESYSTEMDIR)/%.xm64: $(ASSDIR)/%.xm
 	@mkdir -p $(dir $@)

@@ -46,9 +46,9 @@ void boss_anim_init(Boss* boss) {
     }
     
     // Initialize animation state
-    boss->currentAnimation = 0;
+    boss->currentAnimation = 10;
     boss->previousAnimation = -1;
-    boss->currentAnimState = BOSS_ANIM_IDLE;
+    boss->currentAnimState = BOSS_ANIM_KNEEL;
     boss->currentPriority = BOSS_ANIM_PRIORITY_NORMAL;
     boss->lockFrames = 0;
     boss->blendFactor = 0.0f;
@@ -61,15 +61,14 @@ void boss_anim_init(Boss* boss) {
         T3DAnim** anims = (T3DAnim**)boss->animations;
         T3DSkeleton* skeleton = (T3DSkeleton*)boss->skeleton;
         if (anims[0]) {
-            t3d_anim_attach(anims[0], skeleton);
-            t3d_anim_set_playing(anims[0], true);
-            t3d_anim_set_time(anims[0], 0.0f);
+            t3d_anim_attach(anims[BOSS_ANIM_KNEEL], skeleton);
+            t3d_anim_set_playing(anims[BOSS_ANIM_KNEEL], true);
+            t3d_anim_set_time(anims[BOSS_ANIM_KNEEL], 0.0f);
         }
     }
 }
 
-void boss_anim_request(Boss* boss, BossAnimState target, float start_time, 
-                      bool force_restart, BossAnimPriority priority) {
+void boss_anim_request(Boss* boss, BossAnimState target, float start_time, bool force_restart, BossAnimPriority priority) {
     if (!boss || !boss->animations) return;
     
     // Check if locked (higher priority can interrupt)
@@ -77,7 +76,6 @@ void boss_anim_request(Boss* boss, BossAnimState target, float start_time,
         // Lower or equal priority request ignored while locked
         return;
     }
-    
     // Check if we need to change animation
     bool needsChange = false;
     if (boss->currentAnimState != target) {
@@ -157,7 +155,6 @@ void boss_anim_request(Boss* boss, BossAnimState target, float start_time,
 
 void boss_anim_update(Boss* boss) {
     if (!boss || !boss->skeleton || !boss->animations || !boss->skeletonBlend) return;
-    
     // Safety check: ensure deltaTime is valid (not zero, negative, or denormal)
     // Use a minimum threshold to prevent denormal floating point values
     const float MIN_DELTA_TIME = 0.0001f;
@@ -169,11 +166,18 @@ void boss_anim_update(Boss* boss) {
     }
     
     // Update attack animation timer
-    // This manages the isAttacking flag for attacks that use it (like tracking slam)
+    // This manages the isAttacking flag for attacks that use it (like tracking slam, power jump, flip attack)
     if (boss->isAttacking) {
         boss->attackAnimTimer += deltaTime;
-        // Use longer duration for tracking slam to allow animation to complete
-        const float attackDuration = (boss->state == BOSS_STATE_TRACKING_SLAM) ? 6.0f : 0.9f;
+        // Use longer duration for attacks that need to complete their animation
+        float attackDuration = 0.9f; // Default duration
+        if (boss->state == BOSS_STATE_TRACKING_SLAM) {
+            attackDuration = 6.0f;
+        } else if (boss->state == BOSS_STATE_POWER_JUMP) {
+            attackDuration = 6.0f; // Allow power jump animation to complete and blend properly
+        } else if (boss->state == BOSS_STATE_FLIP_ATTACK) {
+            attackDuration = 5.5f; // Allow flip attack animation to complete
+        }
         if (boss->attackAnimTimer >= attackDuration) {
             boss->isAttacking = false;
             boss->attackAnimTimer = 0.0f;
@@ -185,11 +189,11 @@ void boss_anim_update(Boss* boss) {
     if (boss->currentAnimation < 0 || boss->currentAnimation >= boss->animationCount) {
         T3DAnim** anims = (T3DAnim**)boss->animations;
         T3DSkeleton* skeleton = (T3DSkeleton*)boss->skeleton;
-        if (anims && anims[0] && skeleton) {
+        if (anims && anims[BOSS_ANIM_IDLE] && skeleton) {
             t3d_skeleton_reset(skeleton);
-            t3d_anim_attach(anims[0], skeleton);
-            t3d_anim_set_playing(anims[0], true);
-            boss->currentAnimation = 0;
+            t3d_anim_attach(anims[BOSS_ANIM_IDLE], skeleton);
+            t3d_anim_set_playing(anims[BOSS_ANIM_IDLE], true);
+            boss->currentAnimation = BOSS_ANIM_IDLE;
             boss->currentAnimState = BOSS_ANIM_IDLE;
         } else {
             return;  // Can't proceed without valid animation
@@ -204,7 +208,7 @@ void boss_anim_update(Boss* boss) {
     T3DAnim** anims = (T3DAnim**)boss->animations;
     // Update animation
     t3d_anim_update(anims[boss->currentAnimation], deltaTime);
-    
+
     // Update blending
     if (boss->isBlending) {
         boss->blendTimer += deltaTime;

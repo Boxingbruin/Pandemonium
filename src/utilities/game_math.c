@@ -46,6 +46,11 @@ int64_t clamp_fixed64(int64_t val, int64_t minVal, int64_t maxVal) {
     return (val < minVal) ? minVal : (val > maxVal) ? maxVal : val;
 }
 
+float clampf(float v, float lo, float hi)
+{
+    return v < lo ? lo : (v > hi ? hi : v);
+}
+
 void vec3_normalize_fixed(FixedVec3* out, const FixedVec3* in) {
     int64_t len2 = 0;
     for (int i = 0; i < 3; i++)
@@ -120,4 +125,45 @@ int is_finite_vec3(const T3DVec3* v) {
 void vec3_to_fixed(FixedVec3* out, const T3DVec3* in) {
     for (int i = 0; i < 3; i++)
         out->v[i] = TO_FIXED(in->v[i] * 16.0f);
+}
+
+static inline float fp16_16_to_f32(int16_t i, uint16_t f) {
+    return (float)i + (float)f * (1.0f / 65536.0f);
+}
+
+static inline float mat4fp_elem_f32(const T3DMat4FP *m, int r, int c) {
+    return fp16_16_to_f32(m->m[r].i[c], m->m[r].f[c]);
+}
+
+void mat4fp_get_translation_row3_f32(const T3DMat4FP *m, float out[3]) {
+    out[0] = fp16_16_to_f32(m->m[3].i[0], m->m[3].f[0]);
+    out[1] = fp16_16_to_f32(m->m[3].i[1], m->m[3].f[1]);
+    out[2] = fp16_16_to_f32(m->m[3].i[2], m->m[3].f[2]);
+}
+
+void mat4fp_mul_point_f32_row3_colbasis(const T3DMat4FP *m, const float in[3], float out[3]) {
+    const float x = in[0], y = in[1], z = in[2];
+
+    // rotation uses columns (basis vectors), translation still from row 3
+    out[0] = mat4fp_elem_f32(m,0,0)*x + mat4fp_elem_f32(m,1,0)*y + mat4fp_elem_f32(m,2,0)*z + mat4fp_elem_f32(m,3,0);
+    out[1] = mat4fp_elem_f32(m,0,1)*x + mat4fp_elem_f32(m,1,1)*y + mat4fp_elem_f32(m,2,1)*z + mat4fp_elem_f32(m,3,1);
+    out[2] = mat4fp_elem_f32(m,0,2)*x + mat4fp_elem_f32(m,1,2)*y + mat4fp_elem_f32(m,2,2)*z + mat4fp_elem_f32(m,3,2);
+}
+
+void mat4fp_get_axis_colbasis_f32(const T3DMat4FP *m, int axisCol, float out[3]) {
+    out[0] = mat4fp_elem_f32(m, 0, axisCol);
+    out[1] = mat4fp_elem_f32(m, 1, axisCol);
+    out[2] = mat4fp_elem_f32(m, 2, axisCol);
+}
+
+void mat4fp_mul_dir_f32_colbasis(const T3DMat4FP *m, const float in[3], float out[3]) {
+    const float x = in[0], y = in[1], z = in[2];
+    out[0] = mat4fp_elem_f32(m,0,0)*x + mat4fp_elem_f32(m,1,0)*y + mat4fp_elem_f32(m,2,0)*z;
+    out[1] = mat4fp_elem_f32(m,0,1)*x + mat4fp_elem_f32(m,1,1)*y + mat4fp_elem_f32(m,2,1)*z;
+    out[2] = mat4fp_elem_f32(m,0,2)*x + mat4fp_elem_f32(m,1,2)*y + mat4fp_elem_f32(m,2,2)*z;
+}
+
+void normalize3(float v[3]) {
+    float len = sqrtf(v[0]*v[0] + v[1]*v[1] + v[2]*v[2]);
+    if (len > 1e-8f) { v[0]/=len; v[1]/=len; v[2]/=len; }
 }

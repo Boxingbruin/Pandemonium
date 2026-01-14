@@ -36,7 +36,9 @@ typedef enum {
     BOSS_ANIM_COMBO_LUNGE = 7,
     BOSS_ANIM_COMBO_STARTER = 8,
     BOSS_ANIM_FLIP_ATTACK = 9,
-    BOSS_ANIM_COUNT = 10
+    BOSS_ANIM_KNEEL = 10,
+    BOSS_ANIM_KNEEL_CUTSCENE = 11,
+    BOSS_ANIM_COUNT = 12
 } BossAnimState;
 
 typedef enum {
@@ -71,6 +73,8 @@ typedef struct Boss {
     void *model;  // T3DModel* (avoiding header dependency)
     void *modelMat;  // T3DMat4FP* 
     void *dpl;  // rspq_block_t*
+    void *shadowMat; // T3DMat4FP*
+    void *dpl_shadow; // rspq_block_t*
     bool visible;
     
     // Animation system (owned by boss_anim.c - ONLY boss_anim.c touches these)
@@ -98,6 +102,9 @@ typedef struct Boss {
     CapsuleCollider handAttackCollider;
     float handAttackColliderWorldPos[3];
     bool handAttackColliderActive;
+    
+    // Spine1 bone index (for z-targeting)
+    int spine1BoneIndex;
     
     // Sword model (attached to Hand-Right bone)
     void* swordModel;  // T3DModel*

@@ -40,4 +40,8 @@ void audio_pause_music(void);
 void audio_resume_music(void);
 bool audio_is_music_playing(void);
 
+// Fade out
+void audio_stop_music_fade(float durationSec);
+void audio_update_fade(float dt);
+
 #endif

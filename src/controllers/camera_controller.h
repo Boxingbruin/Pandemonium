@@ -10,6 +10,7 @@ typedef enum {
     CAMERA_NOCLIP,
     CAMERA_CUSTOM,
     CAMERA_FIXED,
+    CAMERA_TITLE,
     // Add other audio channels as needed
 } CameraState;
 
@@ -63,4 +64,7 @@ void camera_reset_third_person(void);
 void camera_roll_camera(void);
 void camera_mode(CameraState state);
 void camera_mode_smooth(CameraState state, float duration);
+
+void camera_breath_active(bool enabled);
+void camera_breath_update(float dt);
 #endif

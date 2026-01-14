@@ -8,6 +8,8 @@
 #include "game_time.h"
 
 surface_t offscreenBuffer;
+static int fadeBlackAlpha = 255; // Default alpha value for the rectangle
+bool startScreenFade = false;
 
 void draw_boss_health_bar(const char *name, float ratio, float flash)
 {
@@ -46,15 +48,15 @@ void draw_boss_health_bar(const char *name, float ratio, float flash)
 	rdpq_fill_rectangle(left, top, fillEnd, bottom);
 	
 	// Center the boss name text
-	const char* displayName = name ? name : "Enemy";
-	float barCenter = (left + right) * 0.5f;
+	//const char* displayName = name ? name : "Enemy";
+	//float barCenter = (left + right) * 0.5f;
 
 	// Estimate character width (approximately 6 pixels for debug font)
-	float estimatedTextWidth = strlen(displayName) * 6.0f;
-	float textX = barCenter - (estimatedTextWidth * 0.5f);
+	// float estimatedTextWidth = strlen(displayName) * 6.0f;
+	// float textX = barCenter - (estimatedTextWidth * 0.5f);
 	
-	// Use rdpq_text_printf with proper text rendering setup
-	rdpq_text_printf(NULL, FONT_UNBALANCED, (int)textX, (int)(bottom + 12.0f), "%s", displayName);
+	// // Use rdpq_text_printf with proper text rendering setup
+	// rdpq_text_printf(NULL, FONT_UNBALANCED, (int)textX, (int)(bottom + 12.0f), "%s", displayName);
 }
 
 void draw_player_health_bar(const char *name, float ratio, float flash)
@@ -125,4 +127,55 @@ void draw_player_health_bar(const char *name, float ratio, float flash)
 	
 	// Use rdpq_text_printf with proper text rendering setup
 	// rdpq_text_printf(NULL, FONT_UNBALANCED, (int)textX, (int)(bottom + 4.0f), "%s", displayName);
+}
+
+void display_manager_draw_rectangle(int x, int y, int width, int height, color_t color)
+{
+
+    rdpq_set_mode_standard();
+    rdpq_mode_blender(RDPQ_BLENDER_MULTIPLY);
+
+    rdpq_set_prim_color(color);
+    rdpq_mode_combiner(RDPQ_COMBINER_FLAT);
+    
+    rdpq_sync_pipe();
+
+    rdpq_fill_rectangle(x, y, width, height);
+}
+
+
+void display_utility_solid_black_transition(bool fadeIn, float speed)
+{
+    if(startScreenFade)
+    {
+        if(fadeIn)
+            fadeBlackAlpha = 255;
+        else
+            fadeBlackAlpha = 0;
+
+        startScreenFade = false;
+    }
+    
+    if(fadeIn)
+    {
+		fadeBlackAlpha -= deltaTime * speed;
+		if (fadeBlackAlpha <= 0.0f)
+			return;
+
+		display_manager_draw_rectangle(0, 0, display_get_width(), display_get_height(), RGBA32(0, 0, 0, fadeBlackAlpha));
+
+    }
+    else
+    {
+		fadeBlackAlpha += deltaTime * speed;
+		
+		if(fadeBlackAlpha >= 255.0f)
+		{
+			display_manager_draw_rectangle(0, 0, display_get_width(), display_get_height(), RGBA32(0, 0, 0, 255));
+		}
+		else
+		{
+			display_manager_draw_rectangle(0, 0, display_get_width(), display_get_height(), RGBA32(0, 0, 0, fadeBlackAlpha));
+		}
+    }
 }

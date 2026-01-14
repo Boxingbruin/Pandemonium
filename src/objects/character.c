@@ -17,6 +17,7 @@
 #include "game/bosses/boss.h"
 #include "scene.h"
 #include "simple_collision_utility.h"
+#include "collision_mesh.h"
 #include "game_math.h"
 #include "display_utility.h"
 
@@ -28,26 +29,14 @@
 */
 
 T3DModel* characterModel;
+T3DModel* characterShadowModel;
 Character character;
 
-// Animation states - these correspond to the animation indices
-typedef enum {
-    ANIM_IDLE = 0,
-    ANIM_WALK = 1, 
-    ANIM_RUN = 2,
-    ANIM_ROLL = 3,
-    ANIM_ATTACK = 4,
-    ANIM_COUNT = 5
-} CharacterAnimState;
-
-// Character state for action mechanics
-typedef enum {
-    CHAR_STATE_NORMAL,
-    CHAR_STATE_ROLLING,
-    CHAR_STATE_ATTACKING,
-    CHAR_STATE_ATTACKING_STRONG,
-    CHAR_STATE_JUMPING
-} CharacterState;
+// Shadow tuning
+static const float SHADOW_GROUND_Y = 0.0f;
+static const float SHADOW_Y_OFFSET = 0.2f;     // prevent z-fighting with the ground
+static const float SHADOW_BASE_ALPHA = 120.0f; // alpha when on the ground
+static const float SHADOW_SHRINK_AMOUNT = 0.45f; // 0=no shrink, 0.45 -> 55% size at peak
 
 static CharacterState characterState = CHAR_STATE_NORMAL;
 static float actionTimer = 0.0f;
@@ -97,11 +86,34 @@ static const float RUN_THRESHOLD = 0.7f;
 static const float BLEND_MARGIN = 0.2f;        // walk<->run blend zone width
 static const float ATTACK_FRICTION_SCALE = 0.3f; // Preserve momentum during attack
 
+static bool walkThroughFog = false;
+
 // Animation names for recreation (used to reset action animations)
 static const char* kAnimNames[ANIM_COUNT] = {
     "Idle", "Walk", "Run", "Roll", "Attack1"
 };
 static CharacterState prevState = CHAR_STATE_NORMAL;
+
+static inline void character_update_shadow_mat(void)
+{
+    if (!character.shadowMat) return;
+
+    // Height above the ground plane
+    float h = character.pos[1] - SHADOW_GROUND_Y;
+    if (h < 0.0f) h = 0.0f;
+
+    float t = h / JUMP_HEIGHT;
+    if (t > 1.0f) t = 1.0f;
+
+    // Optional: shrink as you rise
+    float shrink = 1.0f - SHADOW_SHRINK_AMOUNT * t;
+
+    float shadowPos[3]   = { character.pos[0], SHADOW_GROUND_Y + SHADOW_Y_OFFSET, character.pos[2] };
+    float shadowRot[3]   = { 0.0f, 0.0f, 0.0f };
+    float shadowScale[3] = { character.scale[0] * 2.0f * shrink, character.scale[1], character.scale[2] * 2.0f * shrink };
+
+    t3d_mat4fp_from_srt_euler(character.shadowMat, shadowScale, shadowRot, shadowPos);
+}
 
 // ---- Local helpers ----
 typedef struct {
@@ -121,12 +133,12 @@ void character_reset(void)
     lastLPressed = false;
     leftTriggerHeld = false;
     leftTriggerHoldTime = 0.0f;
-    character.pos[1] = 0.0f;
     character.currentAnimation = 0;
     character.previousAnimation = -1;
     character.isBlending = false;
     character.blendFactor = 0.0f;
     character.blendTimer = 0.0f;
+    walkThroughFog = false;
 }
 
 void character_reset_button_state(void)
@@ -191,7 +203,6 @@ static inline void compute_desired_velocity_lockon(float inputX, float inputY, c
     *outX = fwdX * inputY + rightX * inputX;
     *outZ = fwdZ * inputY + rightZ * inputX;
 }
-
 
 // ===== PLEASE DONT USE THE FIXED POINT API =====  
 // NOTE: CHECK collision_system.c for a demo
@@ -375,7 +386,7 @@ static inline void update_animations(float speedRatio, CharacterState state, flo
     
     // Determine target animation
     int targetAnim = get_target_animation(state, speedRatio);
-    
+
     if (state == CHAR_STATE_ROLLING && prevState != CHAR_STATE_ROLLING) {
         if (character.animations && character.animations[ANIM_ROLL]) {
             t3d_anim_set_time(character.animations[ANIM_ROLL], 0.0f);
@@ -492,6 +503,14 @@ static inline void update_animations(float speedRatio, CharacterState state, flo
             }
             t3d_anim_update(character.animations[ANIM_ATTACK], dt);
         }
+    } else if(state == CHAR_STATE_FOG_WALK){
+        if (character.animations && character.animations[ANIM_WALK_THROUGH_FOG]) {
+            t3d_anim_update(character.animations[ANIM_WALK_THROUGH_FOG], dt);
+        }
+    } else if(state == CHAR_STATE_TITLE_IDLE){
+        if (character.animations && character.animations[ANIM_IDLE]) {
+            t3d_anim_update(character.animations[ANIM_IDLE], dt);
+        }
     } else {
         // Normal state: update based on speed
         if (speedRatio < IDLE_THRESHOLD) {
@@ -552,7 +571,8 @@ static inline void update_animations(float speedRatio, CharacterState state, flo
 /* Initialize character model, skeletons, animations, and camera. */
 void character_init(void)
 {
-    characterModel = t3d_model_load("rom:/catherine/catherine.t3dm");
+    characterModel = t3d_model_load("rom:/knight/knight.t3dm");
+    characterShadowModel = t3d_model_load("rom:/blob_shadow/shadow.t3dm");
 
     T3DSkeleton* skeleton = malloc(sizeof(T3DSkeleton));
     *skeleton = t3d_skeleton_create(characterModel);
@@ -562,16 +582,17 @@ void character_init(void)
 
     T3DAnim** animations = NULL;
 
-    const int animationCount = 5;
+    const int animationCount = 6;
     const char* animationNames[] = {
         "Idle",
         "Walk",
         "Run",
         "Roll",
-        "Attack1"
+        "Attack1",
+        "FogOfWar"
     };
     const bool animationsLooping[] = {
-        true, true, true, false, false
+        false, true, true, true, false, false
     };
 
     if (animationCount > 0)
@@ -582,14 +603,21 @@ void character_init(void)
             animations[i] = malloc(sizeof(T3DAnim));
             *animations[i] = t3d_anim_create(characterModel, animationNames[i]);
             t3d_anim_set_looping(animations[i], animationsLooping[i]);
-            t3d_anim_set_playing(animations[i], true);
+            // t3d_anim_set_playing(animations[i], true);
             t3d_anim_attach(animations[i], skeleton);
         }
     }
 
+    // model block
     rspq_block_begin();
+    rdpq_set_prim_color(RGBA32(255, 255, 255, 255));
     t3d_model_draw_skinned(characterModel, skeleton);
-    rspq_block_t* dpl = rspq_block_end();
+    rspq_block_t* dpl_model = rspq_block_end();
+
+    // shadow block (no prim color here; we’ll set it per-frame as we need to change the alpha
+    rspq_block_begin();
+    t3d_model_draw(characterShadowModel);
+    rspq_block_t* dpl_shadow = rspq_block_end();
 
     CapsuleCollider collider = {
         .localCapA = {{0.0f, 4.0f, 0.0f}},    // Bottom at feet
@@ -600,7 +628,7 @@ void character_init(void)
     Character newCharacter = {
         .pos = {0.0f, 0.0f, 0.0f},
         .rot = {0.0f, 0.0f, 0.0f},
-        .scale = {0.0015f, 0.0015f, 0.0015f},
+        .scale = {MODEL_SCALE, MODEL_SCALE, MODEL_SCALE},
         .scrollParams = NULL,
         .skeleton = skeleton,
         .skeletonBlend = skeletonBlend,
@@ -614,7 +642,9 @@ void character_init(void)
         .isBlending = false,
         .capsuleCollider = collider,
         .modelMat = malloc_uncached(sizeof(T3DMat4FP)),
-        .dpl = dpl,
+        .shadowMat = malloc_uncached(sizeof(T3DMat4FP)),
+        .dpl_model = dpl_model,
+        .dpl_shadow = dpl_shadow,
         .visible = true,
         .maxHealth = 100.0f,
         .health = 100.0f,
@@ -623,11 +653,14 @@ void character_init(void)
     };
 
     t3d_mat4fp_identity(newCharacter.modelMat);
+    t3d_mat4fp_identity(newCharacter.shadowMat);
 
     character = newCharacter;
 
     camera_reset_third_person();
     character_update_camera();
+
+    characterState = CHAR_STATE_TITLE_IDLE;
 }
 
 /* Main per-frame update: input, actions, movement, rotation, animation, camera. */
@@ -663,10 +696,65 @@ void character_update(void)
             t3d_skeleton_update(character.skeleton);
         }
         t3d_mat4fp_from_srt_euler(character.modelMat, character.scale, character.rot, character.pos);
+        character_update_shadow_mat();
         return;
     }
 
-    // Disable player input during cutscenes
+    if(scene_get_game_state() == GAME_STATE_TITLE || scene_get_game_state() == GAME_STATE_TITLE_TRANSITION)
+    {
+        apply_friction(deltaTime, 1.0f);
+        update_current_speed(0.0f, deltaTime); // No input magnitude during cutscenes
+        float animationSpeedRatio = currentSpeed;
+
+        if(scene_get_game_state() == GAME_STATE_TITLE_TRANSITION && walkThroughFog == false)
+        {
+            t3d_anim_set_playing(character.animations[ANIM_WALK_THROUGH_FOG], true);
+            characterState = CHAR_STATE_FOG_WALK;
+            walkThroughFog = true;
+        }
+        else
+        {
+            update_animations(animationSpeedRatio, characterState, deltaTime);
+        }
+
+        //t3d_anim_set_playing(character.animations[ANIM_IDLE], true);
+
+        // Update position with current velocity (with collision check)
+        float newPosX = character.pos[0] + movementVelocityX * deltaTime;
+        float newPosZ = character.pos[2] + movementVelocityZ * deltaTime;
+    
+        character.pos[0] = newPosX;
+        character.pos[2] = newPosZ;
+
+        if (character.skeleton) {
+            // Blend skeletons if blending is active (matches boss pattern)
+            // Note: We blend BEFORE updating the skeleton, and we never update the blend skeleton directly
+            // The blend skeleton's state comes from its attached animation being updated
+            if (character.isBlending && character.skeletonBlend && character.blendTimer > 0.0f) {
+                bool canBlend = (character.previousAnimation >= 0 && 
+                                character.previousAnimation < character.animationCount && 
+                                character.animations && character.animations[character.previousAnimation] != NULL &&
+                                character.animations[character.previousAnimation]->isPlaying &&
+                                character.blendFactor >= 0.0f && 
+                                character.blendFactor <= 1.0f);
+                if (canBlend) {
+                    // Blend skeletons: blend from skeletonBlend (old) to skeleton (new), store result in skeleton
+                    // IMPORTANT: We do NOT update the blend skeleton - only blend it into the main skeleton
+                    // The blend skeleton's state comes from its attached animation
+                    t3d_skeleton_blend(character.skeletonBlend, character.skeleton, character.skeleton, character.blendFactor);
+                } else {
+                    character.isBlending = false;
+                }
+            }
+            // Update main skeleton (ONLY the main skeleton, never the blend skeleton)
+            t3d_skeleton_update(character.skeleton);
+        }
+
+        t3d_mat4fp_from_srt_euler(character.modelMat, character.scale, character.rot, character.pos);
+        character_update_shadow_mat();
+        return;
+    }
+    // Disable player input during cutscenes & title screen
     if (scene_is_cutscene_active()) {
         // Still update animations and apply friction, but no player input
         apply_friction(deltaTime, 1.0f);
@@ -714,6 +802,7 @@ void character_update(void)
         }
         
         t3d_mat4fp_from_srt_euler(character.modelMat, character.scale, character.rot, character.pos);
+        character_update_shadow_mat();
         return;
     }
 
@@ -801,18 +890,18 @@ void character_update(void)
             }
 
         }
-    } else if (characterState == CHAR_STATE_JUMPING) {
-        // Keep horizontal velocity from the takeoff; no air drag so run speed carries through jump
-        apply_friction(deltaTime, JUMP_FRICTION_SCALE);
-        float jumpPhase = fminf(1.0f, actionTimer / JUMP_DURATION);
-        character.pos[1] = fm_sinf(jumpPhase * T3D_PI) * JUMP_HEIGHT;
+    // } else if (characterState == CHAR_STATE_JUMPING) {
+    //     // Keep horizontal velocity from the takeoff; no air drag so run speed carries through jump
+    //     apply_friction(deltaTime, JUMP_FRICTION_SCALE);
+    //     float jumpPhase = fminf(1.0f, actionTimer / JUMP_DURATION);
+    //     character.pos[1] = fm_sinf(jumpPhase * T3D_PI) * JUMP_HEIGHT;
     } else if (characterState != CHAR_STATE_ROLLING) {
         apply_friction(deltaTime, 1.0f);
     }
 
-    if (characterState != CHAR_STATE_JUMPING) {
-        character.pos[1] = 0.0f;
-    }
+    // if (characterState != CHAR_STATE_JUMPING) {
+    //     character.pos[1] = 0.0f;
+    // }
 
     update_current_speed(stick.magnitude, deltaTime);
     float animationSpeedRatio = currentSpeed;
@@ -874,6 +963,7 @@ void character_update(void)
     }
 
 	 t3d_mat4fp_from_srt_euler(character.modelMat, character.scale, character.rot, character.pos);
+     character_update_shadow_mat();
 }
 
 void character_update_position(void) 
@@ -884,6 +974,7 @@ void character_update_position(void)
 		(float[3]){character.rot[0], character.rot[1], character.rot[2]},
 		(float[3]){character.pos[0], character.pos[1], character.pos[2]}
 	);
+	character_update_shadow_mat();
 }
 
 /* Third-person camera follow with smoothing. Distances scaled to character size. */
@@ -1010,8 +1101,30 @@ void character_update_camera(void)
 
 void character_draw(void) 
 {
+	if (!character.visible) return;
+
+	// --- Shadow (ground-locked) ---
+	if (character.dpl_shadow && character.shadowMat) {
+		float h = character.pos[1] - SHADOW_GROUND_Y;
+		if (h < 0.0f) h = 0.0f;
+		float t = h / JUMP_HEIGHT;
+		if (t > 1.0f) t = 1.0f;
+
+		// Smooth fade: (1 - t)^2
+		float fade = 1.0f - t;
+		fade *= fade;
+		uint8_t a = (uint8_t)(SHADOW_BASE_ALPHA * fade);
+
+		if (a > 0) {
+			rdpq_set_prim_color(RGBA32(0, 0, 0, a));
+			t3d_matrix_set(character.shadowMat, true);
+			rspq_block_run(character.dpl_shadow);
+		}
+	}
+
+	// --- Character ---
 	t3d_matrix_set(character.modelMat, true);
-	rspq_block_run(character.dpl);
+	rspq_block_run(character.dpl_model);
 }
 
 void character_draw_ui(void)
@@ -1053,6 +1166,10 @@ void character_delete(void)
     rspq_wait();
 
     t3d_model_free(characterModel);
+    if (characterShadowModel) {
+        t3d_model_free(characterShadowModel);
+        characterShadowModel = NULL;
+    }
 
     free_if_not_null(character.scrollParams);
 
@@ -1090,10 +1207,24 @@ void character_delete(void)
         character.modelMat = NULL;
     }
 
-    if (character.dpl) 
+    if (character.shadowMat)
     {
         rspq_wait();
-        rspq_block_free(character.dpl);
-        character.dpl = NULL;
+        free_uncached(character.shadowMat);
+        character.shadowMat = NULL;
+    }
+
+    if (character.dpl_model)
+    {
+        rspq_wait();
+        rspq_block_free(character.dpl_model);
+        character.dpl_model = NULL;
+    }
+
+    if (character.dpl_shadow)
+    {
+        rspq_wait();
+        rspq_block_free(character.dpl_shadow);
+        character.dpl_shadow = NULL;
     }
 }

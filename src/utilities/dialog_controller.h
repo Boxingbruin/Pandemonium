@@ -16,9 +16,6 @@ void dialog_controller_stop_speaking(void);
 
 // Update and draw functions
 void dialog_controller_update(void);
-void dialog_controller_draw(void);
-
-// Internal dialog drawing function
-void dialog_controller_draw_dialog(bool bottom, int width, int height);
+void dialog_controller_draw(bool isVertical, int x, int y, int boxWidth, int boxHeight);
 
 #endif

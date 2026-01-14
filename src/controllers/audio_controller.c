@@ -13,8 +13,6 @@ static bool currentMusicLoop = false;
 
 static bool sfx1Playing = false;
 
-static bool player1Playing = false;
-
 // Volume control (0-10 scale)
 static int masterVolume = 8;
 static int musicVolume = 8;
@@ -22,6 +20,11 @@ static int sfxVolume = 8;
 static bool globalMute = false;
 static bool isLoadingSettings = false;
 static bool pauseMuted = false;  // Track if we muted for pause
+
+static bool musicFadingOut = false;
+static float musicFadeT = 0.0f;
+static float musicFadeDuration = 0.0f;
+static float musicFadeStartVol = 0.0f;
 
 // Convert 0-10 scale to 0.0-1.0 float
 static float volume_to_float(int volume) {
@@ -43,20 +46,45 @@ void audio_set_loading_mode(bool loading) {
 
 void audio_initialize(void) 
 {
-    int ret = dfs_init(DFS_DEFAULT_LOCATION);
-    assert(ret == DFS_ESUCCESS);
+    // int ret = dfs_init(DFS_DEFAULT_LOCATION);
+    // assert(ret == DFS_ESUCCESS);
 
     audio_init(22050, 4);
     mixer_init(16);
     wav64_init_compression(1);
 
     // Maximum frequency of music channel is 128k
-    // Set the limits of the music channel to 0 and 48000
-    mixer_ch_set_limits(CHANNEL_MUSIC, 0, 48000, 0);
+    // Set the limits of the music channel to 0 and 44100
+    mixer_ch_set_limits(CHANNEL_MUSIC, 0, 22050, 0);
+}
+
+void audio_reset_fade(void)
+{
+    musicFadingOut = false;
+    musicFadeT = 0.0f;
+    musicFadeDuration = 0.0f;
+    musicFadeStartVol = 0.0f;
+}
+
+void audio_stop_music(void) 
+{
+    if(musicFadingOut)
+        audio_reset_fade();
+
+    if (musicPlaying) 
+    {
+        mixer_ch_stop(CHANNEL_MUSIC);
+        wav64_close(&currentMusic);
+        musicPlaying = false;
+    }
 }
 
 void audio_play_music(const char *path, bool loop) 
 {
+    // Cancel any fade in progress
+    if(musicFadingOut)
+        audio_reset_fade();
+
     // Stop any currently playing music
     if (musicPlaying)
         audio_stop_music();
@@ -68,6 +96,7 @@ void audio_play_music(const char *path, bool loop)
 
     // Load the new music file
     wav64_open(&currentMusic, path);
+    mixer_ch_set_freq(CHANNEL_MUSIC, currentMusic.wave.frequency);
     wav64_set_loop(&currentMusic, loop);
 
     // Apply volume settings
@@ -77,16 +106,6 @@ void audio_play_music(const char *path, bool loop)
     // Play the music on the music channel
     wav64_play(&currentMusic, CHANNEL_MUSIC);
     musicPlaying = true;
-}
-
-void audio_stop_music(void) 
-{
-    if (musicPlaying) 
-    {
-        mixer_ch_stop(CHANNEL_MUSIC);
-        wav64_close(&currentMusic);
-        musicPlaying = false;
-    }
 }
 
 void audio_play_sfx(wav64_t* sfx, int sfxLayer, float volume) 
@@ -119,41 +138,6 @@ void audio_stop_sfx(int sfxLayer)
             {
                 mixer_ch_stop(CHANNEL_SFX1);
                 sfx1Playing = false;
-            }
-            break;
-        default:
-            break;
-    }
-}
-
-void audio_play_player(wav64_t* playerSfx, int playerLayer, float volume) 
-{
-    switch (playerLayer) 
-    {
-        case 0:
-            if (player1Playing) 
-            {
-                audio_stop_player(CHANNEL_PLAYER1);
-            }
-            mixer_ch_set_vol(CHANNEL_PLAYER1, volume, volume);
-            wav64_play(playerSfx, CHANNEL_PLAYER1);
-            player1Playing = true;
-            break;
-        default:
-            break;
-    }
-}
-
-void audio_stop_player(int playerLayer) 
-{
-    switch (playerLayer) 
-    {
-        case 0:
-            if (player1Playing) 
-            {
-                mixer_ch_stop(CHANNEL_PLAYER1);
-                //wav64_close(&currentPlayer1);  // Free the WAV64 resources
-                player1Playing = false;
             }
             break;
         default:
@@ -293,4 +277,44 @@ void audio_resume_music(void) {
 
 bool audio_is_music_playing(void) {
     return musicPlaying && !pauseMuted;
+}
+
+void audio_update_fade(float dt)
+{
+    if (!musicFadingOut) return;
+
+    musicFadeT += dt;
+    float t = (musicFadeDuration > 0.0f) ? (musicFadeT / musicFadeDuration) : 1.0f;
+    if (t > 1.0f) t = 1.0f;
+
+    float v = musicFadeStartVol * (1.0f - t);
+    mixer_ch_set_vol(CHANNEL_MUSIC, v, v);
+
+    if (t >= 1.0f) {
+        audio_stop_music();
+    }
+}
+
+// Start a fade-out. durationSec <= 0 => stop immediately.
+void audio_stop_music_fade(float durationSec)
+{
+    if (!musicPlaying) return;
+
+    if (durationSec <= 0.0f) {
+        audio_stop_music();
+        return;
+    }
+
+    // Cancel pause-mute so fade is audible / deterministic
+    pauseMuted = false;
+
+    musicFadingOut = true;
+    musicFadeT = 0.0f;
+    musicFadeDuration = durationSec;
+
+    // capture the current intended music volume (0..1)
+    musicFadeStartVol = apply_volume_settings(musicVolume);
+
+    // ensure we start from the expected level
+    mixer_ch_set_vol(CHANNEL_MUSIC, musicFadeStartVol, musicFadeStartVol);
 }
