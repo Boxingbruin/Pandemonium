@@ -212,7 +212,7 @@ static void boss_attacks_handle_power_jump(Boss* boss, float dt) {
         float dx = boss->powerJumpTargetPos[0] - boss->pos[0];
         float dz = boss->powerJumpTargetPos[2] - boss->pos[2];
         if (dx != 0.0f || dz != 0.0f) {
-            boss->rot[1] = -atan2f(-dz, dx) + 3.14159265359f; // T3D_PI
+            boss->rot[1] = -atan2f(-dz, dx) + T3D_PI;
         }
     }
     // Phase 2: Jump arc (1.367 - 2.767s)
@@ -224,13 +224,13 @@ static void boss_attacks_handle_power_jump(Boss* boss, float dt) {
         boss->pos[2] = boss->powerJumpStartPos[2] + (boss->powerJumpTargetPos[2] - boss->powerJumpStartPos[2]) * t;
         
         // Parabolic height
-        boss->pos[1] = boss->powerJumpStartPos[1] + boss->powerJumpHeight * sinf(t * 3.14159265359f);
+        boss->pos[1] = boss->powerJumpStartPos[1] + boss->powerJumpHeight * sinf(t * T3D_PI);
         
         // Face movement direction - use consistent rotation formula
         float dx = boss->powerJumpTargetPos[0] - boss->powerJumpStartPos[0];
         float dz = boss->powerJumpTargetPos[2] - boss->powerJumpStartPos[2];
         if (dx != 0.0f || dz != 0.0f) {
-            boss->rot[1] = -atan2f(-dz, dx) + 3.14159265359f;
+            boss->rot[1] = -atan2f(-dz, dx) + T3D_PI;
         }
     }
     // Phase 3: Landing impact + recovery (2.767 - 4.533s)
@@ -271,7 +271,7 @@ static void boss_attacks_handle_combo(Boss* boss, float dt) {
     float dx = boss->lockedTargetingPos[0] - boss->pos[0];
     float dz = boss->lockedTargetingPos[2] - boss->pos[2];
     // Use consistent rotation formula
-    boss->rot[1] = -atan2f(-dz, dx) + 3.14159265359f;
+    boss->rot[1] = -atan2f(-dz, dx) + T3D_PI;
     
     int targetStep = (int)(boss->stateTimer / stepDuration);
     if (targetStep != boss->comboStep && targetStep < 3) {
@@ -354,7 +354,7 @@ static void boss_attacks_handle_combo_starter(Boss* boss, float dt) {
     float dx = boss->comboStarterTargetPos[0] - boss->pos[0];
     float dz = boss->comboStarterTargetPos[2] - boss->pos[2];
     // Use same rotation formula as strafe/chase for consistency
-    boss->rot[1] = -atan2f(-dz, dx) + 3.14159265359f;
+    boss->rot[1] = -atan2f(-dz, dx) + T3D_PI;
     
     // Phase 1: Throw sword (0.0 - 0.5s)
     if (!boss->swordThrown && boss->stateTimer < 0.5f) {
@@ -375,7 +375,7 @@ static void boss_attacks_handle_combo_starter(Boss* boss, float dt) {
         float t = (boss->stateTimer - 0.5f) / 0.5f; // 0 to 1 over 0.5s
         boss->swordProjectilePos[0] = boss->pos[0] + (boss->comboStarterTargetPos[0] - boss->pos[0]) * t;
         boss->swordProjectilePos[2] = boss->pos[2] + (boss->comboStarterTargetPos[2] - boss->pos[2]) * t;
-        boss->swordProjectilePos[1] = boss->pos[1] + 2.0f + sinf(t * 3.14159265359f) * 5.0f; // Arc
+        boss->swordProjectilePos[1] = boss->pos[1] + 2.0f + sinf(t * T3D_PI) * 5.0f; // Arc
         
         // Check for hit
         float hitDx = character.pos[0] - boss->swordProjectilePos[0];
@@ -431,7 +431,7 @@ static void boss_attacks_handle_roar_stomp(Boss* boss, float dt) {
         // Face player - use consistent rotation formula
         float dx = character.pos[0] - boss->pos[0];
         float dz = character.pos[2] - boss->pos[2];
-        boss->rot[1] = -atan2f(-dz, dx) + 3.14159265359f;
+        boss->rot[1] = -atan2f(-dz, dx) + T3D_PI;
         
         // Animation trigger would be handled by animation system at 0.8-0.9s
     }
@@ -468,7 +468,7 @@ static void boss_attacks_handle_tracking_slam(Boss* boss, float dt) {
     // Face the locked target position (predicted player position) instead of current position
     float dx = boss->lockedTargetingPos[0] - boss->pos[0];
     float dz = boss->lockedTargetingPos[2] - boss->pos[2];
-    boss->rot[1] = -atan2f(-dz, dx) + 3.14159265359f;
+    boss->rot[1] = -atan2f(-dz, dx) + T3D_PI;
 
     // Check for hit during slam (check against actual character position for damage)
     if (!boss->currentAttackHasHit) {
@@ -487,7 +487,7 @@ static void boss_attacks_handle_charge(Boss* boss, float dt) {
     // Face the locked targeting position (behind player)
     float dx = boss->lockedTargetingPos[0] - boss->pos[0];
     float dz = boss->lockedTargetingPos[2] - boss->pos[2];
-    boss->rot[1] = -atan2f(-dz, dx) + 3.14159265359f;
+    boss->rot[1] = -atan2f(-dz, dx) + T3D_PI;
 
     // Check for hit during charge (check against actual character position for damage)
     // Hit window: 0.2s to 0.5s into the charge
@@ -511,11 +511,26 @@ static void boss_attacks_handle_flip_attack(Boss* boss, float dt) {
 
     // Phase 1: Idle preparation (0.0 - 2.0s)
     if (boss->stateTimer < idleDuration) {
-        // Stay in place, face target direction
+        // Stay in place, smoothly face target direction (don't snap)
         float dx = boss->flipAttackTargetPos[0] - boss->pos[0];
         float dz = boss->flipAttackTargetPos[2] - boss->pos[2];
         if (dx != 0.0f || dz != 0.0f) {
-            boss->rot[1] = -atan2f(-dz, dx) + 3.14159265359f; // T3D_PI
+            float targetAngle = -atan2f(-dz, dx) + T3D_PI;
+            
+            // Smoothly rotate toward target angle using boss turn rate
+            float currentAngle = boss->rot[1];
+            float angleDelta = targetAngle - currentAngle;
+            
+            // Normalize angle delta to [-PI, PI]
+            while (angleDelta > T3D_PI) angleDelta -= 2.0f * T3D_PI;
+            while (angleDelta < -T3D_PI) angleDelta += 2.0f * T3D_PI;
+            
+            // Apply smooth rotation with turn rate
+            float maxTurnRate = boss->turnRate * dt;
+            if (angleDelta > maxTurnRate) angleDelta = maxTurnRate;
+            else if (angleDelta < -maxTurnRate) angleDelta = -maxTurnRate;
+            
+            boss->rot[1] = currentAngle + angleDelta;
         }
     }
     // Phase 2: Jump arc (2.0 - 3.0s)
@@ -527,13 +542,13 @@ static void boss_attacks_handle_flip_attack(Boss* boss, float dt) {
         boss->pos[2] = boss->flipAttackStartPos[2] + (boss->flipAttackTargetPos[2] - boss->flipAttackStartPos[2]) * t;
         
         // Parabolic height (lower than power jump)
-        boss->pos[1] = boss->flipAttackStartPos[1] + boss->flipAttackHeight * sinf(t * 3.14159265359f);
+        boss->pos[1] = boss->flipAttackStartPos[1] + boss->flipAttackHeight * sinf(t * T3D_PI);
         
         // Face movement direction - use consistent rotation formula
         float dx = boss->flipAttackTargetPos[0] - boss->flipAttackStartPos[0];
         float dz = boss->flipAttackTargetPos[2] - boss->flipAttackStartPos[2];
         if (dx != 0.0f || dz != 0.0f) {
-            boss->rot[1] = -atan2f(-dz, dx) + 3.14159265359f;
+            boss->rot[1] = -atan2f(-dz, dx) + T3D_PI;
         }
     }
     // Phase 3: Landing impact + recovery (3.0 - 4.0s)
