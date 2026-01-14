@@ -91,6 +91,7 @@ static T3DMat4FP* cinematicChainsMatrix;
 static T3DSkeleton* cinematicChainsSkeleton; 
 static T3DAnim** cinematicChainsAnimations = NULL;
 static int currentCinematicChainsAnimation = 0;
+static bool cinematicChainsVisible = true;
 // Cutscene Chain Break
 static T3DModel* cutsceneChainBreakModel; 
 static rspq_block_t* cutsceneChainBreakDpl; 
@@ -598,6 +599,9 @@ void scene_init_playing(){
     // Return camera control to the player
     camera_mode_smooth(CAMERA_CHARACTER, 1.0f);
     cameraLockOnActive = true;
+
+    // Hide cinematic chains once gameplay starts
+    cinematicChainsVisible = false;
 
 }
 
@@ -1741,8 +1745,10 @@ void scene_draw(T3DViewport *viewport)
     // rdpq_mode_zbuf(false, false);
 
     t3d_matrix_push_pos(1);   
-        t3d_matrix_set(cinematicChainsMatrix, true);
-        rspq_block_run(cinematicChainsDpl);
+        if (cinematicChainsVisible) {
+            t3d_matrix_set(cinematicChainsMatrix, true);
+            rspq_block_run(cinematicChainsDpl);
+        }
         t3d_matrix_set(chainsMatrix, true);
         rspq_block_run(chainsDpl);
     t3d_matrix_pop(1); 
