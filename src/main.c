@@ -36,14 +36,20 @@ int main(void)
     dfs_init(DFS_DEFAULT_LOCATION);
     display_close(); // Close the display to reset it
 
-    if(HARDWARE_MODE) // ONLY ENABLE THIS IF WE ARE EXPERIENCING BAD FRAMERATES ON HARDWARE
+    if(DITHER_ENABLED) // ONLY ENABLE THIS IF WE ARE EXPERIENCING BAD FRAMERATES ON HARDWARE
     {
-       display_init(RESOLUTION_320x240, DEPTH_16_BPP, 3, GAMMA_NONE, FILTERS_RESAMPLE_ANTIALIAS_DEDITHER);
+        display_init(RESOLUTION_320x240, DEPTH_16_BPP, 3, GAMMA_NONE, FILTERS_RESAMPLE_ANTIALIAS);
     }
     else
     {
-        //display_init(RESOLUTION_320x240, DEPTH_32_BPP, 3, GAMMA_NONE, FILTERS_DISABLED);
-        display_init(RESOLUTION_320x240, DEPTH_32_BPP, 3, GAMMA_NONE, FILTERS_RESAMPLE_ANTIALIAS);
+        if(ARES_AA_ENABLED)
+        {
+            display_init(RESOLUTION_320x240, DEPTH_32_BPP, 3, GAMMA_NONE, FILTERS_RESAMPLE_ANTIALIAS);
+        }
+        else
+        {
+            display_init(RESOLUTION_320x240, DEPTH_32_BPP, 3, GAMMA_NONE, FILTERS_DISABLED);
+        }
     }
 
     rdpq_init();

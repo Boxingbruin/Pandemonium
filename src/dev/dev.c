@@ -21,7 +21,7 @@
 
 #include "globals.h"
 
-bool debugDraw = true;
+bool debugDraw = false;
 
 static bool displayMetrics = false;
 static bool requestDisplayMetrics = false;
@@ -417,7 +417,10 @@ void dev_update()
                     break;
                 case DEV_FREECAM:
                     t3d_debug_printf(paneX, 24, "Free Camera Controls");
-                    t3d_debug_printf(paneX, 36, "CamPos: %.4f, %.4f, %.4f", camPos.v[0], camPos.v[1], camPos.v[2]);
+                    t3d_debug_printf(paneX, 36, "CamX: %.4f", camPos.v[0]);
+                    t3d_debug_printf(paneX, 48, "CamY: %.4f", camPos.v[1]);
+                    t3d_debug_printf(paneX, 60, "CamZ: %.4f", camPos.v[2]);
+
                     break;
                 case DEV_LIGHTDIR:
                     t3d_debug_printf(paneX, 24, "Light Direction Controls");

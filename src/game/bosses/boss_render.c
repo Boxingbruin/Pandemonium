@@ -62,10 +62,10 @@ void boss_render_draw(Boss* boss) {
         T3DSkeleton* skel = (T3DSkeleton*)boss->skeleton;
         if (skel) {
             // Push bone matrix, then sword's local transform matrix
-            t3d_matrix_push(&skel->boneMatricesFP[boss->handRightBoneIndex]); // double matrix push and pop, it's already in a push pop.
-                t3d_matrix_push((T3DMat4FP*)boss->swordMatFP);
-                rspq_block_run((rspq_block_t*)boss->swordDpl);
-            t3d_matrix_pop(2);
+            // t3d_matrix_push(&skel->boneMatricesFP[boss->handRightBoneIndex]); // double matrix push and pop, it's already in a push pop.
+            //     t3d_matrix_push((T3DMat4FP*)boss->swordMatFP);
+            //     rspq_block_run((rspq_block_t*)boss->swordDpl);
+            // t3d_matrix_pop(2);
         }
     }
 }

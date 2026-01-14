@@ -48,15 +48,15 @@ void draw_boss_health_bar(const char *name, float ratio, float flash)
 	rdpq_fill_rectangle(left, top, fillEnd, bottom);
 	
 	// Center the boss name text
-	const char* displayName = name ? name : "Enemy";
-	float barCenter = (left + right) * 0.5f;
+	//const char* displayName = name ? name : "Enemy";
+	//float barCenter = (left + right) * 0.5f;
 
 	// Estimate character width (approximately 6 pixels for debug font)
-	float estimatedTextWidth = strlen(displayName) * 6.0f;
-	float textX = barCenter - (estimatedTextWidth * 0.5f);
+	// float estimatedTextWidth = strlen(displayName) * 6.0f;
+	// float textX = barCenter - (estimatedTextWidth * 0.5f);
 	
-	// Use rdpq_text_printf with proper text rendering setup
-	rdpq_text_printf(NULL, FONT_UNBALANCED, (int)textX, (int)(bottom + 12.0f), "%s", displayName);
+	// // Use rdpq_text_printf with proper text rendering setup
+	// rdpq_text_printf(NULL, FONT_UNBALANCED, (int)textX, (int)(bottom + 12.0f), "%s", displayName);
 }
 
 void draw_player_health_bar(const char *name, float ratio, float flash)

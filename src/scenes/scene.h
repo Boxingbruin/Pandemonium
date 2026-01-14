@@ -13,6 +13,20 @@ typedef enum {
     GAME_STATE_TITLE_TRANSITION,
 } GameState;
 
+// Cutscene state management
+typedef enum {
+    CUTSCENE_NONE,
+    CUTSCENE_PHASE1_INTRO,
+    CUTSCENE_PHASE1_CHAIN_CLOSEUP,
+    CUTSCENE_PHASE1_SWORDS_CLOSEUP,
+    CUTSCENE_PHASE1_FILLER,
+    CUTSCENE_PHASE1_LOYALTY,
+    CUTSCENE_PHASE1_FEAR,
+    CUTSCENE_PHASE1_BREAK_CHAINS,
+    CUTSCENE_PHASE1_FACE_ZOOM_OUT,
+    CUTSCENE_PHASE1_INTRO_END
+} CutsceneState;
+
 void scene_init(void);
 void scene_reset(void);
 void scene_restart(void);

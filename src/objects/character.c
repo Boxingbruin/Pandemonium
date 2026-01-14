@@ -104,7 +104,6 @@ void character_reset(void)
     lastLPressed = false;
     leftTriggerHeld = false;
     leftTriggerHoldTime = 0.0f;
-    character.pos[1] = 0.0f;
     character.currentAnimation = 0;
     character.previousAnimation = -1;
     character.isBlending = false;
@@ -849,18 +848,18 @@ void character_update(void)
             }
 
         }
-    } else if (characterState == CHAR_STATE_JUMPING) {
-        // Keep horizontal velocity from the takeoff; no air drag so run speed carries through jump
-        apply_friction(deltaTime, JUMP_FRICTION_SCALE);
-        float jumpPhase = fminf(1.0f, actionTimer / JUMP_DURATION);
-        character.pos[1] = fm_sinf(jumpPhase * T3D_PI) * JUMP_HEIGHT;
+    // } else if (characterState == CHAR_STATE_JUMPING) {
+    //     // Keep horizontal velocity from the takeoff; no air drag so run speed carries through jump
+    //     apply_friction(deltaTime, JUMP_FRICTION_SCALE);
+    //     float jumpPhase = fminf(1.0f, actionTimer / JUMP_DURATION);
+    //     character.pos[1] = fm_sinf(jumpPhase * T3D_PI) * JUMP_HEIGHT;
     } else if (characterState != CHAR_STATE_ROLLING) {
         apply_friction(deltaTime, 1.0f);
     }
 
-    if (characterState != CHAR_STATE_JUMPING) {
-        character.pos[1] = 0.0f;
-    }
+    // if (characterState != CHAR_STATE_JUMPING) {
+    //     character.pos[1] = 0.0f;
+    // }
 
     update_current_speed(stick.magnitude, deltaTime);
     float animationSpeedRatio = currentSpeed;

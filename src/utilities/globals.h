@@ -9,10 +9,12 @@
 #define FIXED_TIMESTEP_MS 33.3f
 #define ANIM_SPEED 1.0f
 
-#define DEV_MODE false
-#define SHOW_FPS true
+#define DEV_MODE true
+#define SHOW_FPS false
 #define HARDWARE_MODE false
 
+#define DITHER_ENABLED false
+#define ARES_AA_ENABLED false
 enum
 {
     FONT_UNBALANCED = 2,

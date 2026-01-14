@@ -471,7 +471,7 @@ void boss_init(Boss* boss) {
     boss->skeletonBlend = skeletonBlend;
     
     // Create animations
-    const int animationCount = 10;
+    const int animationCount = BOSS_ANIM_COUNT;
     const char* animationNames[] = {
         "Idle1",
         "Walk1",
@@ -482,7 +482,9 @@ void boss_init(Boss* boss) {
         "JumpForwardAttack1",
         "ComboLunge1",
         "ComboStarter1",
-        "FlipAttack1"
+        "FlipAttack1",
+        "Phase1Kneel",
+        "Phase1KneelCutscene1"
     };
     const bool animationsLooping[] = {
         true,  // Idle - loop
@@ -494,7 +496,9 @@ void boss_init(Boss* boss) {
         false, // JumpForward - one-shot
         false, // ComboLunge - one-shot
         false, // ComboStarter - one-shot
-        false  // FlipAttack - one-shot
+        false,  // FlipAttack - one-shot
+        true, // Kneel - loop
+        false, // Kneel cutscene "FEAR"
     };
     
     T3DAnim** animations = malloc_uncached(animationCount * sizeof(T3DAnim*));
@@ -509,15 +513,12 @@ void boss_init(Boss* boss) {
     boss->animations = (void**)animations;
     boss->animationCount = animationCount;
     
-    // Start with idle animation - ensure it's properly set up
-    if (animationCount > 0) {
-        // Set current animation index
-        boss->currentAnimation = 0;
-        boss->currentAnimState = BOSS_ANIM_IDLE;
-        // Animation is already attached to skeleton from the loop above
-        t3d_anim_set_playing(animations[0], true);
-    }
-    
+    // Set current animation index
+    boss->currentAnimation = BOSS_ANIM_KNEEL;
+    boss->currentAnimState = BOSS_ANIM_KNEEL;
+    // Animation is already attached to skeleton from the loop above
+    t3d_anim_set_playing(animations[BOSS_ANIM_KNEEL], true);
+
     // Create display list
     rspq_block_begin();
     t3d_model_draw_skinned(bossModel, skeleton);
@@ -526,7 +527,7 @@ void boss_init(Boss* boss) {
     
     // Initialize transform
     boss->pos[0] = 0.0f;
-    boss->pos[1] = 0.0f;
+    boss->pos[1] = 1.0f;
     boss->pos[2] = 0.0f;
     boss->rot[0] = 0.0f;
     boss->rot[1] = 0.0f;
@@ -587,7 +588,7 @@ void boss_init(Boss* boss) {
     boss->modelMat = modelMat;
     
     // Initialize combat stats
-    boss->name = "Destroyer of Worlds";
+    boss->name = "Guardian of the Shackled Sun";
     boss->maxHealth = 100.0f;
     boss->health = 100.0f;
     boss->phaseIndex = 1;

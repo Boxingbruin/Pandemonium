@@ -13,8 +13,6 @@ static bool currentMusicLoop = false;
 
 static bool sfx1Playing = false;
 
-static bool player1Playing = false;
-
 // Volume control (0-10 scale)
 static int masterVolume = 8;
 static int musicVolume = 8;
@@ -51,13 +49,13 @@ void audio_initialize(void)
     // int ret = dfs_init(DFS_DEFAULT_LOCATION);
     // assert(ret == DFS_ESUCCESS);
 
-    audio_init(44100, 4);
+    audio_init(22050, 4);
     mixer_init(16);
     wav64_init_compression(1);
 
     // Maximum frequency of music channel is 128k
     // Set the limits of the music channel to 0 and 44100
-    mixer_ch_set_limits(CHANNEL_MUSIC, 0, 44100, 0);
+    mixer_ch_set_limits(CHANNEL_MUSIC, 0, 22050, 0);
 }
 
 void audio_reset_fade(void)
@@ -140,41 +138,6 @@ void audio_stop_sfx(int sfxLayer)
             {
                 mixer_ch_stop(CHANNEL_SFX1);
                 sfx1Playing = false;
-            }
-            break;
-        default:
-            break;
-    }
-}
-
-void audio_play_player(wav64_t* playerSfx, int playerLayer, float volume) 
-{
-    switch (playerLayer) 
-    {
-        case 0:
-            if (player1Playing) 
-            {
-                audio_stop_player(CHANNEL_PLAYER1);
-            }
-            mixer_ch_set_vol(CHANNEL_PLAYER1, volume, volume);
-            wav64_play(playerSfx, CHANNEL_PLAYER1);
-            player1Playing = true;
-            break;
-        default:
-            break;
-    }
-}
-
-void audio_stop_player(int playerLayer) 
-{
-    switch (playerLayer) 
-    {
-        case 0:
-            if (player1Playing) 
-            {
-                mixer_ch_stop(CHANNEL_PLAYER1);
-                //wav64_close(&currentPlayer1);  // Free the WAV64 resources
-                player1Playing = false;
             }
             break;
         default:

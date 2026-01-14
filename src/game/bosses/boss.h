@@ -36,7 +36,9 @@ typedef enum {
     BOSS_ANIM_COMBO_LUNGE = 7,
     BOSS_ANIM_COMBO_STARTER = 8,
     BOSS_ANIM_FLIP_ATTACK = 9,
-    BOSS_ANIM_COUNT = 10
+    BOSS_ANIM_KNEEL = 10,
+    BOSS_ANIM_KNEEL_CUTSCENE = 11,
+    BOSS_ANIM_COUNT = 12
 } BossAnimState;
 
 typedef enum {
