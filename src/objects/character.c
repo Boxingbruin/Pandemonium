@@ -17,6 +17,7 @@
 #include "game/bosses/boss.h"
 #include "scene.h"
 #include "simple_collision_utility.h"
+#include "collision_mesh.h"
 #include "game_math.h"
 #include "display_utility.h"
 
@@ -28,7 +29,14 @@
 */
 
 T3DModel* characterModel;
+T3DModel* characterShadowModel;
 Character character;
+
+// Shadow tuning
+static const float SHADOW_GROUND_Y = 0.0f;
+static const float SHADOW_Y_OFFSET = 0.2f;     // prevent z-fighting with the ground
+static const float SHADOW_BASE_ALPHA = 120.0f; // alpha when on the ground
+static const float SHADOW_SHRINK_AMOUNT = 0.45f; // 0=no shrink, 0.45 -> 55% size at peak
 
 static CharacterState characterState = CHAR_STATE_NORMAL;
 static float actionTimer = 0.0f;
@@ -85,6 +93,27 @@ static const char* kAnimNames[ANIM_COUNT] = {
     "Idle", "Walk", "Run", "Roll", "Attack1"
 };
 static CharacterState prevState = CHAR_STATE_NORMAL;
+
+static inline void character_update_shadow_mat(void)
+{
+    if (!character.shadowMat) return;
+
+    // Height above the ground plane
+    float h = character.pos[1] - SHADOW_GROUND_Y;
+    if (h < 0.0f) h = 0.0f;
+
+    float t = h / JUMP_HEIGHT;
+    if (t > 1.0f) t = 1.0f;
+
+    // Optional: shrink as you rise
+    float shrink = 1.0f - SHADOW_SHRINK_AMOUNT * t;
+
+    float shadowPos[3]   = { character.pos[0], SHADOW_GROUND_Y + SHADOW_Y_OFFSET, character.pos[2] };
+    float shadowRot[3]   = { 0.0f, 0.0f, 0.0f };
+    float shadowScale[3] = { character.scale[0] * 2.0f * shrink, character.scale[1], character.scale[2] * 2.0f * shrink };
+
+    t3d_mat4fp_from_srt_euler(character.shadowMat, shadowScale, shadowRot, shadowPos);
+}
 
 // ---- Local helpers ----
 typedef struct {
@@ -174,7 +203,6 @@ static inline void compute_desired_velocity_lockon(float inputX, float inputY, c
     *outX = fwdX * inputY + rightX * inputX;
     *outZ = fwdZ * inputY + rightZ * inputX;
 }
-
 
 // ===== PLEASE DONT USE THE FIXED POINT API =====  
 // NOTE: CHECK collision_system.c for a demo
@@ -544,6 +572,7 @@ static inline void update_animations(float speedRatio, CharacterState state, flo
 void character_init(void)
 {
     characterModel = t3d_model_load("rom:/knight/knight.t3dm");
+    characterShadowModel = t3d_model_load("rom:/blob_shadow/shadow.t3dm");
 
     T3DSkeleton* skeleton = malloc(sizeof(T3DSkeleton));
     *skeleton = t3d_skeleton_create(characterModel);
@@ -579,9 +608,16 @@ void character_init(void)
         }
     }
 
+    // model block
     rspq_block_begin();
+    rdpq_set_prim_color(RGBA32(255, 255, 255, 255));
     t3d_model_draw_skinned(characterModel, skeleton);
-    rspq_block_t* dpl = rspq_block_end();
+    rspq_block_t* dpl_model = rspq_block_end();
+
+    // shadow block (no prim color here; we’ll set it per-frame as we need to change the alpha
+    rspq_block_begin();
+    t3d_model_draw(characterShadowModel);
+    rspq_block_t* dpl_shadow = rspq_block_end();
 
     CapsuleCollider collider = {
         .localCapA = {{0.0f, 4.0f, 0.0f}},    // Bottom at feet
@@ -606,7 +642,9 @@ void character_init(void)
         .isBlending = false,
         .capsuleCollider = collider,
         .modelMat = malloc_uncached(sizeof(T3DMat4FP)),
-        .dpl = dpl,
+        .shadowMat = malloc_uncached(sizeof(T3DMat4FP)),
+        .dpl_model = dpl_model,
+        .dpl_shadow = dpl_shadow,
         .visible = true,
         .maxHealth = 100.0f,
         .health = 100.0f,
@@ -615,6 +653,7 @@ void character_init(void)
     };
 
     t3d_mat4fp_identity(newCharacter.modelMat);
+    t3d_mat4fp_identity(newCharacter.shadowMat);
 
     character = newCharacter;
 
@@ -657,6 +696,7 @@ void character_update(void)
             t3d_skeleton_update(character.skeleton);
         }
         t3d_mat4fp_from_srt_euler(character.modelMat, character.scale, character.rot, character.pos);
+        character_update_shadow_mat();
         return;
     }
 
@@ -711,6 +751,7 @@ void character_update(void)
         }
 
         t3d_mat4fp_from_srt_euler(character.modelMat, character.scale, character.rot, character.pos);
+        character_update_shadow_mat();
         return;
     }
     // Disable player input during cutscenes & title screen
@@ -761,6 +802,7 @@ void character_update(void)
         }
         
         t3d_mat4fp_from_srt_euler(character.modelMat, character.scale, character.rot, character.pos);
+        character_update_shadow_mat();
         return;
     }
 
@@ -921,6 +963,7 @@ void character_update(void)
     }
 
 	 t3d_mat4fp_from_srt_euler(character.modelMat, character.scale, character.rot, character.pos);
+     character_update_shadow_mat();
 }
 
 void character_update_position(void) 
@@ -931,6 +974,7 @@ void character_update_position(void)
 		(float[3]){character.rot[0], character.rot[1], character.rot[2]},
 		(float[3]){character.pos[0], character.pos[1], character.pos[2]}
 	);
+	character_update_shadow_mat();
 }
 
 /* Third-person camera follow with smoothing. Distances scaled to character size. */
@@ -1057,8 +1101,30 @@ void character_update_camera(void)
 
 void character_draw(void) 
 {
+	if (!character.visible) return;
+
+	// --- Shadow (ground-locked) ---
+	if (character.dpl_shadow && character.shadowMat) {
+		float h = character.pos[1] - SHADOW_GROUND_Y;
+		if (h < 0.0f) h = 0.0f;
+		float t = h / JUMP_HEIGHT;
+		if (t > 1.0f) t = 1.0f;
+
+		// Smooth fade: (1 - t)^2
+		float fade = 1.0f - t;
+		fade *= fade;
+		uint8_t a = (uint8_t)(SHADOW_BASE_ALPHA * fade);
+
+		if (a > 0) {
+			rdpq_set_prim_color(RGBA32(0, 0, 0, a));
+			t3d_matrix_set(character.shadowMat, true);
+			rspq_block_run(character.dpl_shadow);
+		}
+	}
+
+	// --- Character ---
 	t3d_matrix_set(character.modelMat, true);
-	rspq_block_run(character.dpl);
+	rspq_block_run(character.dpl_model);
 }
 
 void character_draw_ui(void)
@@ -1100,6 +1166,10 @@ void character_delete(void)
     rspq_wait();
 
     t3d_model_free(characterModel);
+    if (characterShadowModel) {
+        t3d_model_free(characterShadowModel);
+        characterShadowModel = NULL;
+    }
 
     free_if_not_null(character.scrollParams);
 
@@ -1137,10 +1207,24 @@ void character_delete(void)
         character.modelMat = NULL;
     }
 
-    if (character.dpl) 
+    if (character.shadowMat)
     {
         rspq_wait();
-        rspq_block_free(character.dpl);
-        character.dpl = NULL;
+        free_uncached(character.shadowMat);
+        character.shadowMat = NULL;
+    }
+
+    if (character.dpl_model)
+    {
+        rspq_wait();
+        rspq_block_free(character.dpl_model);
+        character.dpl_model = NULL;
+    }
+
+    if (character.dpl_shadow)
+    {
+        rspq_wait();
+        rspq_block_free(character.dpl_shadow);
+        character.dpl_shadow = NULL;
     }
 }

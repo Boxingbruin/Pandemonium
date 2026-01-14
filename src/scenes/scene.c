@@ -18,6 +18,7 @@
 #include "general_utility.h"
 #include "game_lighting.h"
 #include "game_time.h"
+#include "game_math.h"
 
 #include "globals.h"
 
@@ -450,31 +451,50 @@ void scene_init(void)
 }
 
 // Returns a consistent point around the boss' midsection for lock-on targeting.
-// Prefers the midpoint of the boss capsule if it is configured; otherwise falls
-// back to an estimate derived from the boss' orbit radius.
+// Uses the Spine1 bone position if available; otherwise falls back to capsule estimate.
 static T3DVec3 get_boss_lock_focus_point(void)
 {
     if (!g_boss) {
         return (T3DVec3){{0.0f, 0.0f, 0.0f}};
     }
     
-    // Default to a mid-body estimate even if the capsule data is uninitialized.
+    // Try to use Spine1 bone position if available
+    if (g_boss->spine1BoneIndex >= 0 && g_boss->skeleton && g_boss->modelMat) {
+        T3DSkeleton* skel = (T3DSkeleton*)g_boss->skeleton;
+        if (skel && skel->skeletonRef) {
+            // Get bone's transform matrix (in model space, updated by animation system)
+            const T3DMat4FP* boneMat = &skel->boneMatricesFP[g_boss->spine1BoneIndex];
+            const T3DMat4FP* modelMat = (const T3DMat4FP*)g_boss->modelMat;
+            
+            // Bone-local point (origin of the bone)
+            const float boneLocal[3] = { 0.0f, 0.0f, 0.0f };
+            
+            // 1) Transform from bone-local space to model space (apply bone matrix)
+            float boneModel[3];
+            mat4fp_mul_point_f32_row3_colbasis(boneMat, boneLocal, boneModel);
+            
+            // 2) Transform from model space to world space (apply boss model matrix)
+            float boneWorld[3];
+            mat4fp_mul_point_f32_row3_colbasis(modelMat, boneModel, boneWorld);
+            
+            return (T3DVec3){{
+                boneWorld[0],
+                boneWorld[1],
+                boneWorld[2]
+            }};
+        }
+    }
+    
+    // Fallback to capsule-based estimate if bone is not available
     float focusOffset = g_boss->orbitRadius * 0.6f; // roughly chest height for current tuning
 
     float capA = g_boss->capsuleCollider.localCapA.v[1];
     float capB = g_boss->capsuleCollider.localCapB.v[1];
 
-    // // If a capsule is defined, use its midpoint (scaled to world space).
-    // if (g_boss->scale[1] > 0.0f && (capA != 0.0f || capB != 0.0f)) {
-    //     focusOffset = (capA + capB) * 0.5f;
-    // }
-
     // Use point halfway between midpoint and capB (i.e. 75% from A -> B)
     if (capA != 0.0f || capB != 0.0f) {
         focusOffset = (capA + capB + capB + capB) * 0.25f;
     }
-
-    //focusOffset = capB;
 
     return (T3DVec3){{
         g_boss->pos[0],

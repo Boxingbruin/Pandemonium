@@ -26,11 +26,23 @@
 static void boss_apply_intent(Boss* boss, const BossIntent* intent);
 static void boss_update_transforms(Boss* boss);
 static void boss_update_movement(Boss* boss, float dt);
+static inline void boss_update_shadow_mat(Boss* boss);
 
 // Boss structure is defined in boss.h
 
 // Global boss instance
 static Boss* g_boss = NULL;
+
+// Shared blob shadow model for the boss
+static T3DModel* s_bossShadowModel = NULL;
+
+// Boss shadow tuning
+static const float BOSS_SHADOW_GROUND_Y = 0.0f;
+static const float BOSS_SHADOW_Y_OFFSET = 0.2f;        // prevent z-fighting with the ground
+static const float BOSS_SHADOW_BASE_ALPHA = 120.0f;    // alpha when on the ground
+static const float BOSS_SHADOW_SHRINK_AMOUNT = 0.35f;  // shrink as boss goes up
+static const float BOSS_JUMP_REF_HEIGHT = 120.0f;      // reference height for full shrink
+static const float BOSS_SHADOW_SIZE_MULT = 3.6f;       // 2x larger than previous
 
 // Apply intent from AI to animation system
 static void boss_apply_intent(Boss* boss, const BossIntent* intent) {
@@ -53,6 +65,9 @@ static void boss_update_transforms(Boss* boss) {
     // Update transformation matrix
     T3DMat4FP* mat = (T3DMat4FP*)boss->modelMat;
     t3d_mat4fp_from_srt_euler(mat, boss->scale, boss->rot, boss->pos);
+
+    // Update shadow matrix
+    boss_update_shadow_mat(boss);
 }
 
 // Update movement and physics
@@ -264,15 +279,15 @@ static void boss_update_movement(Boss* boss, float dt) {
         extern Character character;
         float faceDx = character.pos[0] - boss->pos[0];
         float faceDz = character.pos[2] - boss->pos[2];
-        float targetAngle = -atan2f(-faceDz, faceDx) + 3.14159265359f; // T3D_PI
+        float targetAngle = -atan2f(-faceDz, faceDx) + T3D_PI; // T3D_PI
         
         // Smoothly rotate toward target angle
         float currentAngle = boss->rot[1];
         float angleDelta = targetAngle - currentAngle;
         
         // Normalize angle delta to [-PI, PI]
-        while (angleDelta > 3.14159265359f) angleDelta -= 2.0f * 3.14159265359f;
-        while (angleDelta < -3.14159265359f) angleDelta += 2.0f * 3.14159265359f;
+        while (angleDelta > T3D_PI) angleDelta -= 2.0f * T3D_PI;
+        while (angleDelta < -T3D_PI) angleDelta += 2.0f * T3D_PI;
         
         // Apply smooth rotation with turn rate
         float maxTurnRate = boss->turnRate * dt;
@@ -288,15 +303,15 @@ static void boss_update_movement(Boss* boss, float dt) {
         
         // Only rotate if we're not too close to the target (prevents oscillation)
         if (faceDist > 10.0f) {
-            float targetAngle = -atan2f(-faceDz, faceDx) + 3.14159265359f;
+            float targetAngle = -atan2f(-faceDz, faceDx) + T3D_PI;
             
             // Smoothly rotate toward target angle
             float currentAngle = boss->rot[1];
             float angleDelta = targetAngle - currentAngle;
             
             // Normalize angle delta to [-PI, PI]
-            while (angleDelta > 3.14159265359f) angleDelta -= 2.0f * 3.14159265359f;
-            while (angleDelta < -3.14159265359f) angleDelta += 2.0f * 3.14159265359f;
+            while (angleDelta > T3D_PI) angleDelta -= 2.0f * T3D_PI;
+            while (angleDelta < -T3D_PI) angleDelta += 2.0f * T3D_PI;
             
             // Apply smooth rotation with turn rate
             float maxTurnRate = boss->turnRate * dt;
@@ -314,8 +329,8 @@ static void boss_update_movement(Boss* boss, float dt) {
         float targetAngle = atan2f(-boss->velX, boss->velZ);
         float currentAngle = boss->rot[1];
         float angleDelta = targetAngle - currentAngle;
-        while (angleDelta > 3.14159265359f) angleDelta -= 2.0f * 3.14159265359f;
-        while (angleDelta < -3.14159265359f) angleDelta += 2.0f * 3.14159265359f;
+        while (angleDelta > T3D_PI) angleDelta -= 2.0f * T3D_PI;
+        while (angleDelta < -T3D_PI) angleDelta += 2.0f * T3D_PI;
         
         float maxTurnRate = boss->turnRate * dt;
         if (angleDelta > maxTurnRate) angleDelta = maxTurnRate;
@@ -335,6 +350,29 @@ Boss* boss_spawn(void) {
     
     boss_init(g_boss);
     return g_boss;
+}
+
+static inline void boss_update_shadow_mat(Boss* boss)
+{
+    if (!boss || !boss->shadowMat) return;
+
+    float h = boss->pos[1] - BOSS_SHADOW_GROUND_Y;
+    if (h < 0.0f) h = 0.0f;
+
+    float t = (BOSS_JUMP_REF_HEIGHT > 0.0f) ? (h / BOSS_JUMP_REF_HEIGHT) : 0.0f;
+    if (t > 1.0f) t = 1.0f;
+
+    float shrink = 1.0f - BOSS_SHADOW_SHRINK_AMOUNT * t;
+
+    float shadowPos[3]   = { boss->pos[0], BOSS_SHADOW_GROUND_Y + BOSS_SHADOW_Y_OFFSET, boss->pos[2] };
+    float shadowRot[3]   = { 0.0f, 0.0f, 0.0f };
+    float shadowScale[3] = {
+        boss->scale[0] * BOSS_SHADOW_SIZE_MULT * shrink,
+        boss->scale[1],
+        boss->scale[2] * BOSS_SHADOW_SIZE_MULT * shrink
+    };
+
+    t3d_mat4fp_from_srt_euler((T3DMat4FP*)boss->shadowMat, shadowScale, shadowRot, shadowPos);
 }
 
 void boss_update_weapon_collider_from_hand(Boss *boss)
@@ -462,11 +500,11 @@ void boss_init(Boss* boss) {
     boss->model = bossModel;
     
     // Create skeletons
-    T3DSkeleton* skeleton = malloc_uncached(sizeof(T3DSkeleton));
+    T3DSkeleton* skeleton = malloc(sizeof(T3DSkeleton));
     *skeleton = t3d_skeleton_create(bossModel);
     boss->skeleton = skeleton;
     
-    T3DSkeleton* skeletonBlend = malloc_uncached(sizeof(T3DSkeleton));
+    T3DSkeleton* skeletonBlend = malloc(sizeof(T3DSkeleton));
     *skeletonBlend = t3d_skeleton_clone(skeleton, false);
     boss->skeletonBlend = skeletonBlend;
     
@@ -524,6 +562,16 @@ void boss_init(Boss* boss) {
     t3d_model_draw_skinned(bossModel, skeleton);
     rspq_block_t* dpl = rspq_block_end();
     boss->dpl = dpl;
+
+    // Ensure shadow model is loaded once
+    if (!s_bossShadowModel) {
+        s_bossShadowModel = t3d_model_load("rom:/blob_shadow/shadow.t3dm");
+    }
+    // Create display list for shadow (no prim color here; set per-frame)
+    rspq_block_begin();
+    t3d_model_draw(s_bossShadowModel);
+    rspq_block_t* dpl_shadow = rspq_block_end();
+    boss->dpl_shadow = dpl_shadow;
     
     // Initialize transform
     boss->pos[0] = 0.0f;
@@ -547,6 +595,9 @@ void boss_init(Boss* boss) {
     
     // Find Hand-Right bone index
     boss->handRightBoneIndex = t3d_skeleton_find_bone(skeleton, "Hand-Right");
+    
+    // Find Spine1 bone index (for z-targeting)
+    boss->spine1BoneIndex = t3d_skeleton_find_bone(skeleton, "Spine1");
     
     // Initialize hand attack collider (local space, will be updated during attacks)
     boss->handAttackCollider.localCapA.v[0] = 0.0f;
@@ -586,6 +637,11 @@ void boss_init(Boss* boss) {
     T3DMat4FP* modelMat = malloc_uncached(sizeof(T3DMat4FP));
     t3d_mat4fp_identity(modelMat);
     boss->modelMat = modelMat;
+
+    // Initialize shadow matrix
+    T3DMat4FP* shadowMat = malloc_uncached(sizeof(T3DMat4FP));
+    t3d_mat4fp_identity(shadowMat);
+    boss->shadowMat = shadowMat;
     
     // Initialize combat stats
     boss->name = "Guardian of the Shackled Sun";
@@ -769,6 +825,15 @@ void boss_free(Boss* boss) {
         rspq_wait();
         rspq_block_free((rspq_block_t*)boss->dpl);
     }
+
+    if (boss->dpl_shadow) {
+        rspq_wait();
+        rspq_block_free((rspq_block_t*)boss->dpl_shadow);
+    }
+    if (boss->shadowMat) {
+        rspq_wait();
+        free_uncached((T3DMat4FP*)boss->shadowMat);
+    }
     
     // Cleanup sword resources
     if (boss->swordModel) {
@@ -783,5 +848,11 @@ void boss_free(Boss* boss) {
     if (boss->swordMatFP) {
         rspq_wait();
         free_uncached(boss->swordMatFP);
+    }
+
+    // Free shared shadow model if allocated
+    if (s_bossShadowModel) {
+        t3d_model_free(s_bossShadowModel);
+        s_bossShadowModel = NULL;
     }
 }
