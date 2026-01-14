@@ -71,6 +71,8 @@ typedef struct Boss {
     void *model;  // T3DModel* (avoiding header dependency)
     void *modelMat;  // T3DMat4FP* 
     void *dpl;  // rspq_block_t*
+    void *shadowMat; // T3DMat4FP*
+    void *dpl_shadow; // rspq_block_t*
     bool visible;
     
     // Animation system (owned by boss_anim.c - ONLY boss_anim.c touches these)
