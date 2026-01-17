@@ -60,12 +60,15 @@ COLLISION_DEPS := tools/requirements-collision.txt
 COLLISION_STAMP := $(COLLISION_VENV)/.collision_deps_installed
 
 all:
-	@START_TIME=$$(date +%s); \
+# Measure build time
+	@START_MS=$$(python3 -c 'import time; print(int(time.time()*1000))'); \
 	$(MAKE) pandemonium.z64; \
-	END_TIME=$$(date +%s); \
-	ELAPSED=$$((END_TIME - START_TIME)); \
-	if [ $$ELAPSED -gt 0 ]; then \
-	  echo "Build duration: $${ELAPSED} seconds"; \
+	END_MS=$$(python3 -c 'import time; print(int(time.time()*1000))'); \
+	ELAPSED_MS=$$((END_MS - START_MS)); \
+	if [ $$ELAPSED_MS -gt 0 ]; then \
+	  SEC=$$((ELAPSED_MS / 1000)); \
+	  MS=$$((ELAPSED_MS % 1000)); \
+	  printf "Build duration: %d.%03d seconds\n" $$SEC $$MS; \
 	fi
 
 # Versioned build target
