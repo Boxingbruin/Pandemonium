@@ -59,7 +59,14 @@ COLLISION_PY := $(COLLISION_VENV)/bin/python3
 COLLISION_DEPS := tools/requirements-collision.txt
 COLLISION_STAMP := $(COLLISION_VENV)/.collision_deps_installed
 
-all: pandemonium.z64
+all:
+	@START_TIME=$$(date +%s); \
+	$(MAKE) pandemonium.z64; \
+	END_TIME=$$(date +%s); \
+	ELAPSED=$$((END_TIME - START_TIME)); \
+	if [ $$ELAPSED -gt 0 ]; then \
+	  echo "Build duration: $${ELAPSED} seconds"; \
+	fi
 
 # Versioned build target
 versioned: pandemonium.z64
