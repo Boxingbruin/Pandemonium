@@ -11,6 +11,24 @@ surface_t offscreenBuffer;
 static int fadeBlackAlpha = 255; // Default alpha value for the rectangle
 bool startScreenFade = false;
 
+// UI intro progress values (0.0 = off-screen, 1.0 = fully visible)
+static float boss_ui_intro = 1.0f;
+static float player_ui_intro = 1.0f;
+
+void display_utility_set_boss_ui_intro(float progress)
+{
+	if (progress < 0.0f) progress = 0.0f;
+	if (progress > 1.0f) progress = 1.0f;
+	boss_ui_intro = progress;
+}
+
+void display_utility_set_player_ui_intro(float progress)
+{
+	if (progress < 0.0f) progress = 0.0f;
+	if (progress > 1.0f) progress = 1.0f;
+	player_ui_intro = progress;
+}
+
 void draw_boss_health_bar(const char *name, float ratio, float flash)
 {
 	// Clamp ratio
@@ -35,17 +53,35 @@ void draw_boss_health_bar(const char *name, float ratio, float flash)
 	int left = margin;
 	int right = SCREEN_WIDTH - margin;
 	int top = 5;
-	int bottom = 20;
-	rdpq_set_prim_color(RGBA32(50, 50, 50, 255));
-	rdpq_fill_rectangle(left, top, right, bottom);
+	int bottom = 17;
+
+	// center-out growth only (no vertical slide)
+	float p = boss_ui_intro;
+	int alpha = 255;
+
+	// Width reveal from center outward based on intro progress
+	int center = (left + right) / 2;
+	int halfWidth = (right - left) / 2;
+	int revealLeft = center - (int)(halfWidth * p);
+	int revealRight = center + (int)(halfWidth * p);
+	if (revealRight > revealLeft) {
+		rdpq_set_prim_color(RGBA32(50, 50, 50, alpha));
+		rdpq_fill_rectangle(revealLeft, top, revealRight, bottom);
+	}
 	
 	// Health fill (solid red; no debug markers)
 	int red = 200 + (int)(55.0f * flash);
 	int green = 30 + (int)(20.0f * flash);
 	int blue = 30 + (int)(20.0f * flash);
-	rdpq_set_prim_color(RGBA32(red, green, blue, 255));
+	rdpq_set_prim_color(RGBA32(red, green, blue, alpha));
 	int fillEnd = left + (int)((right - left) * ratio);
-	rdpq_fill_rectangle(left, top, fillEnd, bottom);
+	// Clip fill to revealed width region
+	int clipLeft = (revealLeft > left) ? revealLeft : left;
+	int clipRight = (revealRight < right) ? revealRight : right;
+	int fillClipRight = (fillEnd < clipRight) ? fillEnd : clipRight;
+	if (fillClipRight > clipLeft) {
+		rdpq_fill_rectangle(clipLeft, top, fillClipRight, bottom);
+	}
 	
 	// Center the boss name text
 	//const char* displayName = name ? name : "Enemy";
@@ -90,8 +126,16 @@ void draw_player_health_bar(const char *name, float ratio, float flash)
 	float bottom = SCREEN_HEIGHT - margin;
 	float top = bottom - barHeight;
 
-	rdpq_set_prim_color(RGBA32(60, 20, 20, 255));
-	rdpq_fill_rectangle(left, top, right, bottom);
+	// Slide from bottom (no alpha fade); full-width bar (no center reveal)
+	int slideDistBottom = 40; // pixels downward off-screen at start
+	float p = player_ui_intro; // 0..1
+	float yOffset = (1.0f - p) * (float)slideDistBottom;
+	top += yOffset;
+	bottom += yOffset;
+	int alpha = 255;
+
+	rdpq_set_prim_color(RGBA32(60, 20, 20, alpha));
+	rdpq_fill_rectangle((int)left, (int)top, (int)right, (int)bottom);
 	
 	// Health fill - using green/yellow/red gradient based on health ratio
 	int red, green, blue;
@@ -114,9 +158,9 @@ void draw_player_health_bar(const char *name, float ratio, float flash)
 		blue = 40 + (int)(20.0f * combinedFlash);
 	}
 	
-	rdpq_set_prim_color(RGBA32(red, green, blue, 255));
-	float fillEnd = left + ((right - left) * ratio);
-	rdpq_fill_rectangle(left, top, fillEnd, bottom);
+	rdpq_set_prim_color(RGBA32(red, green, blue, alpha));
+	float fillEndF = left + ((right - left) * ratio);
+	rdpq_fill_rectangle((int)left, (int)top, (int)fillEndF, (int)bottom);
 	
 	// Player name text below the health bar
 	// const char* displayName = name ? name : "Player";

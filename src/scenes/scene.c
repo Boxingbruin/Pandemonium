@@ -127,6 +127,15 @@ static const char *phase1Dialogs[] = {
 };
 bool cutsceneDialogActive = false;
 
+// Boss title fade control (shown during intro, fades out when fight starts)
+static float bossTitleFade = 0.0f;
+static float bossTitleFadeSpeed = 1.8f;
+
+// progress for boss/player UIs
+static float bossUiIntro = 1.0f;
+static float playerUiIntro = 1.0f;
+static float uiIntroSpeed = 1.5f;
+
 static CutsceneState cutsceneState = CUTSCENE_PHASE1_INTRO;
 static float cutsceneTimer = 0.0f;
 static float cutsceneCameraTimer = 0.0f;  // Separate timer for camera movement (doesn't reset)
@@ -594,6 +603,9 @@ void scene_init_playing(){
     cutsceneState = CUTSCENE_NONE;
     cutsceneCameraTimer = 0.0f;
     bossActivated = true;
+    // Switch music from intro cinematic to boss fight
+    audio_stop_music();
+    audio_play_music("rom:/audio/music/boss_phase1-not_looping-22k.wav64", true);
     // Hide letterbox bars with animation
     letterbox_hide();
     // Return camera control to the player
@@ -602,6 +614,15 @@ void scene_init_playing(){
 
     // Hide cinematic chains once gameplay starts
     cinematicChainsVisible = false;
+
+    // Start boss title fully visible so it slides up on gameplay start
+    bossTitleFade = 1.0f;
+
+    // Reset UI intro animations (they will slide/fade into view)
+    bossUiIntro = 0.0f;
+    playerUiIntro = 0.0f;
+    display_utility_set_boss_ui_intro(bossUiIntro);
+    display_utility_set_player_ui_intro(playerUiIntro);
 
 }
 
@@ -677,6 +698,8 @@ void scene_init_cutscene()
 
             screenTransition = true;
             startScreenFade = true;
+            // Start hiding letterbox bars before gameplay begins
+            letterbox_hide();
             cutsceneDialogActive = false;
             scene_set_cinematic_camera((T3DVec3){{-22.0f, 29.0f, -10.0f}}, (T3DVec3){{-150.0f, 29.0f, -10.0f}}, (T3DVec3){{100.0f, 29.0f, 0.0f}});
             break;
@@ -1108,6 +1131,8 @@ void scene_update(void)
         character_update();
         t3d_anim_update(dynamicBannerAnimations[0], deltaTime);
         t3d_skeleton_update(dynamicBannerSkeleton);
+        // Keep animation state updated (bars not drawn during title)
+        letterbox_update();
         return;
     }
 
@@ -1145,6 +1170,25 @@ void scene_update(void)
 
 
         //dialog_controller_update();
+
+        // Update boss title fade-out when fight has started
+        if (bossTitleFade > 0.0f) {
+            bossTitleFade -= deltaTime / bossTitleFadeSpeed;
+            if (bossTitleFade < 0.0f) bossTitleFade = 0.0f;
+        }
+
+        // Progress UI intro animations
+        // Boss health bar should start growing only after boss title is gone
+        if (bossTitleFade <= 0.0f && bossUiIntro < 1.0f) {
+            bossUiIntro += deltaTime / uiIntroSpeed;
+            if (bossUiIntro > 1.0f) bossUiIntro = 1.0f;
+            display_utility_set_boss_ui_intro(bossUiIntro);
+        }
+        if (playerUiIntro < 1.0f) {
+            playerUiIntro += deltaTime / uiIntroSpeed;
+            if (playerUiIntro > 1.0f) playerUiIntro = 1.0f;
+            display_utility_set_player_ui_intro(playerUiIntro);
+        }
     }
     else // Cutscene
     {
@@ -1623,10 +1667,17 @@ void scene_draw_cutscene(){
             rdpq_set_prim_color(RGBA32(0,0,0,120));
             rdpq_mode_combiner(RDPQ_COMBINER_FLAT);
             
-            rdpq_fill_rectangle(25, 35, 220, 58);
+            int barWidth = 195;
+            int barHeight = 23;
+            int barTop = 35;
+            int barLeft = (SCREEN_WIDTH - barWidth) / 2;
+            rdpq_fill_rectangle(barLeft, barTop, barLeft + barWidth, barTop + barHeight);
 
             rdpq_set_prim_color(RGBA32(255, 255, 255, 255));
-            rdpq_text_printf(NULL, FONT_UNBALANCED, 35, 50, g_boss->name);
+            rdpq_text_printf(&(rdpq_textparms_t){
+                .align = ALIGN_CENTER,
+                .width = SCREEN_WIDTH,
+            }, FONT_UNBALANCED, 0, 50, "%s", g_boss->name);
 
             if(screenTransition)
             {
@@ -1682,6 +1733,8 @@ void scene_draw(T3DViewport *viewport)
     if(cutsceneState != CUTSCENE_NONE)
     {
         scene_draw_cutscene();
+        // Draw letterbox bars during cutscenes
+        letterbox_draw();
         return;
     }
     // ===== DRAW 3D =====
@@ -1769,10 +1822,42 @@ void scene_draw(T3DViewport *viewport)
 
     // Draw UI elements after 3D rendering is complete (hide during cutscenes or death)
     if (!cutsceneActive && !isEndScreen) {
-        if (scene_is_boss_active() && g_boss) {
+        // Boss UI appears only after the boss title has fully slid off-screen
+        if (scene_is_boss_active() && g_boss && bossTitleFade <= 0.0f) {
             boss_draw_ui(g_boss, viewport);
         }
         character_draw_ui();
+    }
+
+    // Slide-up overlay for boss title after fight starts (no fading)
+    if (!cutsceneActive && !isEndScreen && bossTitleFade > 0.0f && g_boss) {
+        rdpq_sync_pipe();
+        rdpq_set_mode_standard();
+        rdpq_mode_blender(RDPQ_BLENDER_MULTIPLY);
+        rdpq_mode_combiner(RDPQ_COMBINER_FLAT);
+
+        int barWidth = 195;
+        int barHeight = 23;
+        int barTop = 35;
+        int barLeft = (SCREEN_WIDTH - barWidth) / 2;
+        int slideDistance = 120; // pixels to move upward until off-screen
+        float t = 1.0f - bossTitleFade; // 0 -> 1 as we slide up
+
+        // Compute current Y positions while sliding upward
+        int currentBarTop = barTop - (int)(slideDistance * t);
+        int currentTextY = 50 - (int)(slideDistance * t);
+
+        // Draw centered black bar behind the title (constant alpha)
+        int barAlpha = 120;
+        rdpq_set_prim_color(RGBA32(0, 0, 0, barAlpha));
+        rdpq_fill_rectangle(barLeft, currentBarTop, barLeft + barWidth, currentBarTop + barHeight);
+
+        // Draw centered title text (constant intensity while sliding up)
+        rdpq_set_prim_color(RGBA32(255, 255, 255, 255));
+        rdpq_text_printf(&(rdpq_textparms_t){
+            .align = ALIGN_CENTER,
+            .width = SCREEN_WIDTH,
+        }, FONT_UNBALANCED, 0, currentTextY, "%s", g_boss->name);
     }
     
     if (isEndScreen) {
