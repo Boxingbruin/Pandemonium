@@ -92,9 +92,7 @@ static void boss_update_movement(Boss* boss, float dt) {
     float desiredX = 0.0f, desiredZ = 0.0f;
     float maxSpeed = 0.0f;
     
-    // Static state for strafe direction (persists across frames)
-    static float lastStrafeDir = 1.0f; // 1.0 = right, -1.0 = left
-    static float strafeDirTimer = 0.0f;
+    
     
     switch (boss->state) {
         case BOSS_STATE_INTRO:
@@ -113,75 +111,24 @@ static void boss_update_movement(Boss* boss, float dt) {
             break;
             
         case BOSS_STATE_STRAFE:
-            // Strafing behavior: move perpendicular to direction to character
-            // Match character's lateral movement
             if (dist > 0.0f) {
-                // Normalize direction to character
                 float toCharX = dx / dist;
                 float toCharZ = dz / dist;
-                
-                // Get character's velocity to determine strafe direction
-                float charVelX, charVelZ;
-                character_get_velocity(&charVelX, &charVelZ);
-                
-                // Calculate perpendicular directions (left and right relative to boss->character)
-                // Left perpendicular: (-toCharZ, toCharX)
-                // Right perpendicular: (toCharZ, -toCharX)
                 float leftX = -toCharZ;
                 float leftZ = toCharX;
                 float rightX = toCharZ;
                 float rightZ = -toCharX;
-                
-                // Determine which direction the character is moving laterally
-                // Project character velocity onto left/right perpendicular vectors
-                float leftDot = charVelX * leftX + charVelZ * leftZ;
-                float rightDot = charVelX * rightX + charVelZ * rightZ;
-                
-                // Choose strafe direction - stick to a direction more strongly
-                // Use hysteresis: require strong opposite movement to change direction
-                const float STRONG_MOVEMENT_THRESHOLD = 80.0f;
-                const float MIN_DIRECTION_TIME = 3.0f;
-                const float OPPOSITE_DIRECTION_MULTIPLIER = 2.0f;
-                
-                strafeDirTimer += dt;
-                
-                // Only consider changing direction if enough time has passed
-                float lateralMovement = fabsf(leftDot) > fabsf(rightDot) ? fabsf(leftDot) : fabsf(rightDot);
-                
-                if (strafeDirTimer >= MIN_DIRECTION_TIME) {
-                    // Determine desired direction based on character movement
-                    float desiredDir = 0.0f;
-                    if (fabsf(leftDot) > fabsf(rightDot)) {
-                        desiredDir = (leftDot > 0.0f) ? -1.0f : 1.0f;
-                    } else {
-                        desiredDir = (rightDot > 0.0f) ? 1.0f : -1.0f;
-                    }
-                    
-                    // Only change if character is moving strongly in OPPOSITE direction to current strafe
-                    if (desiredDir * lastStrafeDir < 0.0f) {
-                        // Character moving opposite to current strafe - require very strong movement
-                        if (lateralMovement > STRONG_MOVEMENT_THRESHOLD * OPPOSITE_DIRECTION_MULTIPLIER) {
-                            lastStrafeDir = desiredDir;
-                            strafeDirTimer = 0.0f; // Reset timer after direction change
-                        }
-                    }
-                }
-                
-                // Apply strafe direction
-                if (lastStrafeDir > 0.0f) {
+                if (boss->strafeDirection > 0.0f) {
                     desiredX = rightX;
                     desiredZ = rightZ;
                 } else {
                     desiredX = leftX;
                     desiredZ = leftZ;
                 }
-                
-                // Blend in some forward movement if character is far away
                 if (dist > boss->orbitRadius + 5.0f) {
                     float forwardBlend = fminf(1.0f, (dist - boss->orbitRadius) / 20.0f);
                     desiredX = desiredX * (1.0f - forwardBlend * 0.3f) + toCharX * forwardBlend * 0.3f;
                     desiredZ = desiredZ * (1.0f - forwardBlend * 0.3f) + toCharZ * forwardBlend * 0.3f;
-                    // Normalize
                     float len = sqrtf(desiredX * desiredX + desiredZ * desiredZ);
                     if (len > 0.0f) {
                         desiredX /= len;
@@ -655,6 +602,7 @@ void boss_init(Boss* boss) {
     boss->currentSpeed = 0.0f;
     boss->turnRate = 8.0f;
     boss->orbitRadius = 6.0f;
+    boss->strafeDirection = 1.0f;
     
     // Initialize timers
     boss->stateTimer = 0.0f;
@@ -773,6 +721,7 @@ void boss_reset(Boss* boss) {
     // Reset velocity
     boss->velX = 0.0f;
     boss->velZ = 0.0f;
+    boss->strafeDirection = 1.0f;
     
     // Reset animation state
     boss->isAttacking = false;

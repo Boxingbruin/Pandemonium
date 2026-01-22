@@ -55,6 +55,9 @@ void boss_ai_init(Boss* boss) {
     boss->currentAttackId = BOSS_ATTACK_COUNT;
     
     bossWasActive = false;
+    bossStrafeDirection = 1.0f;
+    strafeDirectionTimer = 0.0f;
+    boss->strafeDirection = 1.0f;
 }
 
 static bool boss_ai_state_is_attack(BossState state) {
@@ -940,7 +943,7 @@ void boss_ai_update(Boss* boss, BossIntent* out_intent) {
                             strafeDirectionTimer = 0.0f; // Reset timer when character moves
                         } else {
                             // Character is stationary or moving very little
-                            // Alternate direction every few seconds to prevent always going right
+                            // Alternate direction every few seconds
                             strafeDirectionTimer += dt;
                             const float ALTERNATE_TIME = 3.0f;
                             if (strafeDirectionTimer >= ALTERNATE_TIME) {
@@ -950,8 +953,8 @@ void boss_ai_update(Boss* boss, BossIntent* out_intent) {
                         }
                     }
                 }
-                // Use left or right strafe based on direction
-                out_intent->anim = (bossStrafeDirection > 0.0f) ? BOSS_ANIM_STRAFE_RIGHT : BOSS_ANIM_STRAFE_LEFT;
+                boss->strafeDirection = bossStrafeDirection;
+                out_intent->anim = (boss->strafeDirection > 0.0f) ? BOSS_ANIM_STRAFE_RIGHT : BOSS_ANIM_STRAFE_LEFT;
                 break;
             case BOSS_STATE_CHASE:
                 out_intent->anim = BOSS_ANIM_WALK;
