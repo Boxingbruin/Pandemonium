@@ -123,6 +123,7 @@ typedef struct Boss {
     float currentSpeed;
     float turnRate;
     float orbitRadius;
+    float strafeDirection;
     
     // AI state (owned by boss_ai.c)
     BossState state;
