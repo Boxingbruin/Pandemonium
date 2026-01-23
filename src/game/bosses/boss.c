@@ -375,49 +375,6 @@ static inline void boss_update_shadow_mat(Boss* boss)
     t3d_mat4fp_from_srt_euler((T3DMat4FP*)boss->shadowMat, shadowScale, shadowRot, shadowPos);
 }
 
-// void boss_update_weapon_collider_from_hand(Boss *boss)
-// {
-//     if(!boss->handAttackColliderActive) return;
-
-//     if (!boss || !boss->skeleton || !boss->modelMat) return;
-//     if (boss->handRightBoneIndex < 0) return;
-
-//     T3DSkeleton *sk = (T3DSkeleton*)boss->skeleton;
-
-//     const T3DMat4FP *B = &sk->boneMatricesFP[boss->handRightBoneIndex]; // bone in MODEL space
-//     const T3DMat4FP *M = (const T3DMat4FP*)boss->modelMat;             // model in WORLD space
-
-//     // Bone-local points
-//     const float p0_local[3] = { 0.0f, 0.0f, 0.0f };
-
-//     // Choose any axis; you said direction doesn't matter.
-//     // Try Z first. If it points sideways, swap to X or Y.
-//     const float len = 640.0f;
-//     const float p1_local[3] = { -len, 0.0f, 0.0f };
-
-//     // 1) bone-local -> MODEL space (apply B)
-//     float p0_model[3], p1_model[3];
-//     mat4fp_mul_point_f32_row3_colbasis(B, p0_local, p0_model);
-//     mat4fp_mul_point_f32_row3_colbasis(B, p1_local, p1_model);
-
-//     // 2) MODEL -> WORLD space (apply M)
-//     float p0_world[3], p1_world[3];
-//     mat4fp_mul_point_f32_row3_colbasis(M, p0_model, p0_world);
-//     mat4fp_mul_point_f32_row3_colbasis(M, p1_model, p1_world);
-
-//     // 3) Write capsule endpoints (world space)
-//     boss->handAttackCollider.localCapA.v[0] = p0_world[0];
-//     boss->handAttackCollider.localCapA.v[1] = p0_world[1];
-//     boss->handAttackCollider.localCapA.v[2] = p0_world[2];
-
-//     boss->handAttackCollider.localCapB.v[0] = p1_world[0];
-//     boss->handAttackCollider.localCapB.v[1] = p1_world[1];
-//     boss->handAttackCollider.localCapB.v[2] = p1_world[2];
-
-//     boss->handAttackCollider.radius = 5.0f;
-
-// }
-
 
 // Public API implementation
 void boss_update(Boss* boss) {
