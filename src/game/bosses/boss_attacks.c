@@ -17,8 +17,11 @@
 #include <t3d/t3dskeleton.h>
 #include <t3d/t3dmath.h>
 
+#include "systems/collision_system.h"
+
 #include "game_time.h"
 #include "character.h"
+
 #include "utilities/collision_mesh.h"
 #include "utilities/simple_collision_utility.h"
 #include "utilities/game_math.h"
@@ -34,7 +37,7 @@ static void boss_attacks_handle_roar_stomp(Boss* boss, float dt);
 static void boss_attacks_handle_tracking_slam(Boss* boss, float dt);
 static void boss_attacks_handle_charge(Boss* boss, float dt);
 static void boss_attacks_handle_flip_attack(Boss* boss, float dt);
-static void boss_update_hand_attack_collider(Boss* boss);
+//static void boss_update_hand_attack_collider(Boss* boss);
 
 // Sound flags shared with AI module
 extern bool bossPowerJumpImpactPlayed;
@@ -53,9 +56,9 @@ void boss_attacks_update(Boss* boss, float dt) {
                           boss->state == BOSS_STATE_FLIP_ATTACK);
     
     // Always update collider position for debugging (even when not attacking)
-    if (boss->handRightBoneIndex >= 0) {
-        boss_update_hand_attack_collider(boss);
-    }
+    //if (boss->handRightBoneIndex >= 0) {
+    //     boss_update_hand_attack_collider(boss);
+    // }
     
     if (isAttackState) {
         boss->handAttackColliderActive = true;
@@ -99,105 +102,105 @@ void boss_attacks_update(Boss* boss, float dt) {
     }
 }
 
-// Update hand attack collider position based on bone transform
-static void boss_update_hand_attack_collider(Boss* boss) {
-    if (!boss || boss->handRightBoneIndex < 0) return;
+// // Update hand attack collider position based on bone transform
+// static void boss_update_hand_attack_collider(Boss* boss) {
+//     if (!boss || boss->handRightBoneIndex < 0) return;
     
-    T3DSkeleton* skel = (T3DSkeleton*)boss->skeleton;
-    if (!skel || !skel->skeletonRef) return;
+//     T3DSkeleton* skel = (T3DSkeleton*)boss->skeleton;
+//     if (!skel || !skel->skeletonRef) return;
     
-    // Get bone's transform matrix (in model space, updated by animation system)
-    T3DMat4FP* boneMat = &skel->boneMatricesFP[boss->handRightBoneIndex];
+//     // Get bone's transform matrix (in model space, updated by animation system)
+//     T3DMat4FP* boneMat = &skel->boneMatricesFP[boss->handRightBoneIndex];
     
-    // Extract position from bone matrix (bone's position in model space)
-    // T3DMat4FP is a fixed-point 4x4 matrix stored as 16 int32_t values
-    // Try column-major format first: translation at indices 3, 7, 11 (4th element of each of first 3 columns)
-    // If that doesn't work, try row-major: indices 12, 13, 14 (last column)
-    int32_t* matData = (int32_t*)boneMat;
+//     // Extract position from bone matrix (bone's position in model space)
+//     // T3DMat4FP is a fixed-point 4x4 matrix stored as 16 int32_t values
+//     // Try column-major format first: translation at indices 3, 7, 11 (4th element of each of first 3 columns)
+//     // If that doesn't work, try row-major: indices 12, 13, 14 (last column)
+//     int32_t* matData = (int32_t*)boneMat;
     
-    // Try column-major (most common in graphics APIs)
-    float bonePosModelX = FROM_FIXED(matData[3]);
-    float bonePosModelY = FROM_FIXED(matData[7]);
-    float bonePosModelZ = FROM_FIXED(matData[11]);
+//     // Try column-major (most common in graphics APIs)
+//     float bonePosModelX = FROM_FIXED(matData[3]);
+//     float bonePosModelY = FROM_FIXED(matData[7]);
+//     float bonePosModelZ = FROM_FIXED(matData[11]);
     
-    // Transform bone position from model space to world space
-    // Apply boss's scale first
-    float sx = boss->scale[0];
-    float sy = boss->scale[1];
-    float sz = boss->scale[2];
+//     // Transform bone position from model space to world space
+//     // Apply boss's scale first
+//     float sx = boss->scale[0];
+//     float sy = boss->scale[1];
+//     float sz = boss->scale[2];
     
-    float scaledX = bonePosModelX * sx;
-    float scaledY = bonePosModelY * sy;
-    float scaledZ = bonePosModelZ * sz;
+//     float scaledX = bonePosModelX * sx;
+//     float scaledY = bonePosModelY * sy;
+//     float scaledZ = bonePosModelZ * sz;
     
-    // Apply boss's rotation (Euler angles: rot[0]=pitch, rot[1]=yaw, rot[2]=roll)
-    // For now, assuming only Y-axis rotation (yaw) as boss typically only rotates around Y
-    float yaw = boss->rot[1];
-    float cosY = cosf(yaw);
-    float sinY = sinf(yaw);
+//     // Apply boss's rotation (Euler angles: rot[0]=pitch, rot[1]=yaw, rot[2]=roll)
+//     // For now, assuming only Y-axis rotation (yaw) as boss typically only rotates around Y
+//     float yaw = boss->rot[1];
+//     float cosY = cosf(yaw);
+//     float sinY = sinf(yaw);
     
-    // Rotate around Y axis
-    float rotatedX = scaledX * cosY - scaledZ * sinY;
-    float rotatedZ = scaledX * sinY + scaledZ * cosY;
-    float rotatedY = scaledY; // Y doesn't change with Y-axis rotation
+//     // Rotate around Y axis
+//     float rotatedX = scaledX * cosY - scaledZ * sinY;
+//     float rotatedZ = scaledX * sinY + scaledZ * cosY;
+//     float rotatedY = scaledY; // Y doesn't change with Y-axis rotation
     
-    // Apply boss's world position
-    boss->handAttackColliderWorldPos[0] = boss->pos[0] + rotatedX;
-    boss->handAttackColliderWorldPos[1] = boss->pos[1] + rotatedY;
-    boss->handAttackColliderWorldPos[2] = boss->pos[2] + rotatedZ;
-}
+//     // Apply boss's world position
+//     boss->handAttackColliderWorldPos[0] = boss->pos[0] + rotatedX;
+//     boss->handAttackColliderWorldPos[1] = boss->pos[1] + rotatedY;
+//     boss->handAttackColliderWorldPos[2] = boss->pos[2] + rotatedZ;
+// }
 
-// Check collision between hand attack collider and character
-static bool boss_check_hand_attack_collision(Boss* boss) {
-    if (!boss || !boss->handAttackColliderActive || boss->handRightBoneIndex < 0) {
-        return false;
-    }
+// // Check collision between hand attack collider and character
+// static bool boss_check_hand_attack_collision(Boss* boss) {
+//     if (!boss || !boss->handAttackColliderActive || boss->handRightBoneIndex < 0) {
+//         return false;
+//     }
     
-    // Get character capsule collider in world space
-    float sx = character.scale[0];
-    float ax = character.capsuleCollider.localCapA.v[0] * sx;
-    float ay = character.capsuleCollider.localCapA.v[1] * sx;
-    float az = character.capsuleCollider.localCapA.v[2] * sx;
-    float bx = character.capsuleCollider.localCapB.v[0] * sx;
-    float by = character.capsuleCollider.localCapB.v[1] * sx;
-    float bz = character.capsuleCollider.localCapB.v[2] * sx;
+//     // Get character capsule collider in world space
+//     float sx = character.scale[0];
+//     float ax = character.capsuleCollider.localCapA.v[0] * sx;
+//     float ay = character.capsuleCollider.localCapA.v[1] * sx;
+//     float az = character.capsuleCollider.localCapA.v[2] * sx;
+//     float bx = character.capsuleCollider.localCapB.v[0] * sx;
+//     float by = character.capsuleCollider.localCapB.v[1] * sx;
+//     float bz = character.capsuleCollider.localCapB.v[2] * sx;
     
-    float charCapA[3] = {
-        character.pos[0] + ax,
-        character.pos[1] + ay,
-        character.pos[2] + az
-    };
-    float charCapB[3] = {
-        character.pos[0] + bx,
-        character.pos[1] + by,
-        character.pos[2] + bz
-    };
-    float charRadius = character.capsuleCollider.radius * sx;
+//     float charCapA[3] = {
+//         character.pos[0] + ax,
+//         character.pos[1] + ay,
+//         character.pos[2] + az
+//     };
+//     float charCapB[3] = {
+//         character.pos[0] + bx,
+//         character.pos[1] + by,
+//         character.pos[2] + bz
+//     };
+//     float charRadius = character.capsuleCollider.radius * sx;
     
-    // Get hand collider - use world position as center, calculate endpoints
-    // Transform local capsule endpoints through bone and boss transforms
-    float handRadius = boss->handAttackCollider.radius * boss->scale[0];
-    float handHalfLen = boss->handAttackCollider.localCapB.v[1] * 0.5f * boss->scale[1];
+//     // Get hand collider - use world position as center, calculate endpoints
+//     // Transform local capsule endpoints through bone and boss transforms
+//     float handRadius = boss->handAttackCollider.radius * boss->scale[0];
+//     float handHalfLen = boss->handAttackCollider.localCapB.v[1] * 0.5f * boss->scale[1];
     
-    // For now, create capsule along Y axis in local space (simplified)
-    // Endpoints in world space
-    float handCapA[3] = {
-        boss->handAttackColliderWorldPos[0],
-        boss->handAttackColliderWorldPos[1] - handHalfLen,
-        boss->handAttackColliderWorldPos[2]
-    };
-    float handCapB[3] = {
-        boss->handAttackColliderWorldPos[0],
-        boss->handAttackColliderWorldPos[1] + handHalfLen,
-        boss->handAttackColliderWorldPos[2]
-    };
+//     // For now, create capsule along Y axis in local space (simplified)
+//     // Endpoints in world space
+//     float handCapA[3] = {
+//         boss->handAttackColliderWorldPos[0],
+//         boss->handAttackColliderWorldPos[1] - handHalfLen,
+//         boss->handAttackColliderWorldPos[2]
+//     };
+//     float handCapB[3] = {
+//         boss->handAttackColliderWorldPos[0],
+//         boss->handAttackColliderWorldPos[1] + handHalfLen,
+//         boss->handAttackColliderWorldPos[2]
+//     };
     
-    // Use capsule vs capsule collision
-    return scu_capsule_vs_capsule_f(
-        handCapA, handCapB, handRadius,
-        charCapA, charCapB, charRadius
-    );
-}
+//     // Use capsule vs capsule collision
+//     return scu_capsule_vs_capsule_f(
+//         handCapA, handCapB, handRadius,
+//         charCapA, charCapB, charRadius
+//     );
+// }
 
 static void boss_attacks_handle_power_jump(Boss* boss, float dt) {
     // Frame timings at 30 FPS: 0-41 idle, 41-83 jump+land, 83-136 land+recover
@@ -309,7 +312,7 @@ static void boss_attacks_handle_combo(Boss* boss, float dt) {
         // Step 1: Sweep attack
         
         if (boss->stateTimer > 0.5f && boss->stateTimer < 0.7f && !boss->currentAttackHasHit) {
-            if (boss_check_hand_attack_collision(boss)) {
+            if (bossWeaponCollision) {
                 character_apply_damage(15.0f);
                 // boss_debug_sound("boss_attack_success");
                 boss->currentAttackHasHit = true;
@@ -324,7 +327,7 @@ static void boss_attacks_handle_combo(Boss* boss, float dt) {
             boss->velZ = cosf(boss->rot[1]) * thrustSpeed * dt;
             
             if (!boss->currentAttackHasHit) {
-                if (boss_check_hand_attack_collision(boss)) {
+                if (bossWeaponCollision) {
                     character_apply_damage(20.0f);
                     // boss_debug_sound("boss_attack_success");
                     boss->currentAttackHasHit = true;
@@ -337,7 +340,7 @@ static void boss_attacks_handle_combo(Boss* boss, float dt) {
         if (boss->stateTimer > stepDuration * 2 + 0.6f && 
             boss->stateTimer < stepDuration * 2 + 0.8f && 
             !boss->currentAttackHasHit) {
-            if (boss_check_hand_attack_collision(boss)) {
+            if (bossWeaponCollision) {
                 character_apply_damage(30.0f);
                 // boss_debug_sound("boss_attack_success");
                 boss->currentAttackHasHit = true;
@@ -472,7 +475,7 @@ static void boss_attacks_handle_tracking_slam(Boss* boss, float dt) {
 
     // Check for hit during slam (check against actual character position for damage)
     if (!boss->currentAttackHasHit) {
-        if (boss_check_hand_attack_collision(boss)) {
+        if (bossWeaponCollision) {
             character_apply_damage(25.0f);
             boss->currentAttackHasHit = true;
         }
@@ -492,7 +495,7 @@ static void boss_attacks_handle_charge(Boss* boss, float dt) {
     // Check for hit during charge (check against actual character position for damage)
     // Hit window: 0.2s to 0.5s into the charge
     if (boss->stateTimer > 0.2f && boss->stateTimer < 0.5f && !boss->currentAttackHasHit) {
-        if (boss_check_hand_attack_collision(boss)) {
+        if (bossWeaponCollision) {
             character_apply_damage(15.0f);
             boss->currentAttackHasHit = true;
         }

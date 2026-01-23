@@ -11,11 +11,17 @@
 T3DVec3 charCapA;
 T3DVec3 charCapB;
 float charRadius = 1.0f;
+
 T3DVec3 bossCapA;
 T3DVec3 bossCapB;
 float bossRadius = 1.0f;
-
 bool bodyHitboxCollision = false;
+
+T3DVec3 bossWeaponCapA;
+T3DVec3 bossWeaponCapB;
+float bossWeaponRadius = 1.0f;
+
+bool bossWeaponCollision = false;
 
 void collision_init(void)
 {
@@ -51,6 +57,8 @@ void collision_init(void)
     }};
 
     bossRadius = boss->capsuleCollider.radius;
+
+    bossWeaponRadius = 5.0f;
 }
 
 void collision_update(void) // Disable viewport after development
@@ -84,28 +92,53 @@ void collision_update(void) // Disable viewport after development
 
     bodyHitboxCollision = scu_capsule_vs_capsule_f(charCapA.v, charCapB.v, charRadius, bossCapA.v, bossCapB.v, bossRadius);
 
-    // TODO: Uncomment this when we have a hand attack collider working
-    // Draw hand attack collider if bone index is valid (always draw for debugging, use active state for color)
-    if (boss->handRightBoneIndex >= 0) {
-        //   float handRadius = 300.0f;
-        //   float handHalfLen = 600.0f;
-        
-        //   // Calculate endpoints from center position (capsule along Y axis)
-        //   T3DVec3 handCapA = {{
-        //       boss->handAttackColliderWorldPos[0],
-        //       boss->handAttackColliderWorldPos[1],
-        //       boss->handAttackColliderWorldPos[2] + 100.0f,
-        //   }};
-        //   T3DVec3 handCapB = {{
-        //       boss->handAttackColliderWorldPos[0],
-        //       boss->handAttackColliderWorldPos[1] + handHalfLen,
-        //       boss->handAttackColliderWorldPos[2] + 100.0f,
-        //   }};
-        
-        //   // Draw in red if active, cyan if inactive (for debugging)
-        //   uint16_t color = boss->handAttackColliderActive ? DEBUG_COLORS[0] : DEBUG_COLORS[2]; // Red if active, blue if inactive
-        //   debug_draw_capsule(viewport, &handCapA, &handCapB, handRadius, color);
-    }
+    if(!boss->handAttackColliderActive) return;
+
+    if (!boss || !boss->skeleton || !boss->modelMat) return;
+    if (boss->handRightBoneIndex < 0) return;
+
+    T3DSkeleton *sk = (T3DSkeleton*)boss->skeleton;
+
+    const T3DMat4FP *B = &sk->boneMatricesFP[boss->handRightBoneIndex]; // bone in MODEL space
+    const T3DMat4FP *M = (const T3DMat4FP*)boss->modelMat;             // model in WORLD space
+
+    // Bone-local points
+    const float p0_local[3] = { 0.0f, 0.0f, 0.0f };
+
+    // Choose any axis; you said direction doesn't matter.
+    // Try Z first. If it points sideways, swap to X or Y.
+    const float len = 640.0f;
+    const float p1_local[3] = { -len, 0.0f, 0.0f };
+
+    // 1) bone-local -> MODEL space (apply B)
+    float p0_model[3], p1_model[3];
+    mat4fp_mul_point_f32_row3_colbasis(B, p0_local, p0_model);
+    mat4fp_mul_point_f32_row3_colbasis(B, p1_local, p1_model);
+
+    // 2) MODEL -> WORLD space (apply M)
+    float p0_world[3], p1_world[3];
+    mat4fp_mul_point_f32_row3_colbasis(M, p0_model, p0_world);
+    mat4fp_mul_point_f32_row3_colbasis(M, p1_model, p1_world);
+
+    // 3) Write capsule endpoints (world space)
+    
+    boss->handAttackCollider.localCapB.v[0] = p1_world[0];
+    boss->handAttackCollider.localCapB.v[1] = p1_world[1];
+    boss->handAttackCollider.localCapB.v[2] = p1_world[2];
+
+    bossWeaponCapA = (T3DVec3){{
+        p0_world[0],
+        p0_world[1],
+        p0_world[2],
+    }};
+
+    bossWeaponCapB = (T3DVec3){{
+        p1_world[0],
+        p1_world[1],
+        p1_world[2],
+    }};
+
+    bossWeaponCollision = scu_capsule_vs_capsule_f(bossWeaponCapA.v, bossWeaponCapB.v, bossWeaponRadius, charCapA.v, charCapB.v, charRadius);
 }
 
 void collision_draw(T3DViewport *viewport)
@@ -129,5 +162,18 @@ void collision_draw(T3DViewport *viewport)
             }};
             debug_draw_cross(viewport, &mid, 5.0f, DEBUG_COLORS[0]);
         }
+    }
+
+    Boss* boss = boss_get_instance();
+
+    // Draw boss hand collider
+    if(boss->handAttackColliderActive){
+        debug_draw_capsule(
+            viewport,
+            &bossWeaponCapA,
+            &bossWeaponCapB,
+            bossWeaponRadius,
+            DEBUG_COLORS[5]
+        );
     }
 }

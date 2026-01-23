@@ -191,16 +191,5 @@ void boss_render_debug(Boss* boss, void* viewport) {
         debug_draw_sphere(vp, &targetPos, 4.0f, DEBUG_COLORS[5]);
         debug_draw_cross(vp, &targetPos, 4.0f, DEBUG_COLORS[5]);
     }
-
-    // Draw boss hand collider
-    if(boss->handAttackColliderActive){
-        debug_draw_capsule(
-            vp,
-            &boss->handAttackCollider.localCapA,
-            &boss->handAttackCollider.localCapB,
-            boss->handAttackCollider.radius,
-            DEBUG_COLORS[5]
-        );
-    }
 }
 
