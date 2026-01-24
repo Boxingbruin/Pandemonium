@@ -41,6 +41,9 @@ static const float SHADOW_SHRINK_AMOUNT = 0.45f; // 0=no shrink, 0.45 -> 55% siz
 static CharacterState characterState = CHAR_STATE_NORMAL;
 static float actionTimer = 0.0f;
 
+// Render yaw offset to align Blender +X forward to world +Z forward
+static const float MODEL_YAW_OFFSET = T3D_PI * -0.5f; // -90 degrees
+
 // Movement state
 static float movementVelocityX = 0.0f;
 static float movementVelocityZ = 0.0f;
@@ -68,7 +71,16 @@ static const float JUMP_FRICTION_SCALE = 0.0f;   // Preserve run speed while in 
 static const float ROLL_JUMP_WINDOW_START = 0.35f; // fraction of roll duration
 static const float ROLL_JUMP_WINDOW_END   = 0.85f; // fraction of roll duration
 
-
+// Combo attack tuning (normalized timing 0..1)
+static const float ATTACK1_DURATION = 0.9f;
+static const float ATTACK2_DURATION = 0.9f;
+static const float ATTACK3_DURATION = 0.9f;
+static const float ATTACK4_DURATION = 1.0f;
+static const float ATTACK_END_DURATION = 0.6f;
+static const float ATTACK_QUEUE_THRESHOLD = 0.6f; // when current attack progress >= this, queued next will trigger on end
+static const float ATTACK_FORWARD_IMPULSE = 35.0f;
+static const float KNOCKDOWN_DURATION = 0.8f;
+static const float KNOCKDOWN_BACK_IMPULSE = 25.0f;
 
 // Input state tracking for edge detection
 static bool lastBPressed = false;
@@ -87,12 +99,49 @@ static const float BLEND_MARGIN = 0.2f;        // walk<->run blend zone width
 static const float ATTACK_FRICTION_SCALE = 0.3f; // Preserve momentum during attack
 
 static bool walkThroughFog = false;
+// Attack combo state
+static int attackComboIndex = 0; // 0=none, 1..4
+static bool attackQueued = false; // queued next stage of combo
+static bool attackEnding = false; // playing AttackNEnd
+static float currentActionDuration = 1.0f; // seconds for normalized action timer
+// Animation selection helpers for lock-on strafing
+static bool animLockOnStrafingFlag = false; // true when lateral motion dominates in lock-on
+static int animStrafeDirFlag = 0;           // -1 = left, +1 = right
+static float animStrafeBlendRatio = 0.0f;   // 0 = pure run, 1 = pure strafe
 
-// Animation names for recreation (used to reset action animations)
-static const char* kAnimNames[ANIM_COUNT] = {
-    "Idle", "Walk", "Run", "Roll", "Attack1"
-};
 static CharacterState prevState = CHAR_STATE_NORMAL;
+
+static void character_anim_apply_pose(void)
+{
+    if (!character.skeleton) return;
+    if (character.isBlending && character.skeletonBlend) {
+        int p = character.previousAnimation;
+        bool ok = (p >= 0 && p < character.animationCount && character.animations && character.animations[p] &&
+                   t3d_anim_get_length(character.animations[p]) > 0.0f);
+        if (ok) {
+            // Blend previous pose into current pose on the main skeleton
+            // dst = main, srcA = main (current), srcB = previous (blend)
+            t3d_skeleton_blend(character.skeleton, character.skeleton, character.skeletonBlend, character.blendFactor);
+        } else {
+            character.isBlending = false;
+        }
+    }
+
+    t3d_skeleton_update(character.skeleton);
+}
+
+// Forward declaration for shadow matrix helper
+static inline void character_update_shadow_mat(void);
+
+static void character_finalize_frame(bool updateCamera)
+{
+    if (updateCamera) {
+        character_update_camera();
+    }
+    float rotAdjusted[3] = { character.rot[0], character.rot[1] + MODEL_YAW_OFFSET, character.rot[2] };
+    t3d_mat4fp_from_srt_euler(character.modelMat, character.scale, rotAdjusted, character.pos);
+    character_update_shadow_mat();
+}
 
 static inline void character_update_shadow_mat(void)
 {
@@ -266,50 +315,144 @@ static inline bool attack_hit_test(void) {
     return attackHit;
 }
 
-static inline void update_actions(const joypad_buttons_t* buttons, bool leftHeldNow, bool leftJustPressed, bool jumpJustPressed, float inputMagnitude, float dt) {
-    if (buttons->a && characterState == CHAR_STATE_NORMAL && inputMagnitude > 0.1f) {
-        characterState = CHAR_STATE_ROLLING;
-        actionTimer = 0.0f;
+static inline void update_actions(const joypad_buttons_t* buttons, bool leftHeldNow, bool leftJustPressed, bool jumpJustPressed, const StickInput* stick, float dt) {
+    // Roll - when z-targeting, prevent straight backwards rolling only (allow diagonal back-left/back-right)
+    // When not z-targeting, allow rolling in any direction
+    if (buttons->a && characterState == CHAR_STATE_NORMAL && stick->magnitude > 0.1f) {
+        bool canRoll = true;
+        
+        // Only restrict backward rolling when z-targeting is active
+        if (cameraLockOnActive) {
+            // Check if trying to roll straight backwards
+            // Only block if movement is primarily backward (Y negative and dominant over X)
+            bool isStraightBackward = (stick->y < 0.0f) && (fabsf(stick->y) > fabsf(stick->x));
+            if (isStraightBackward) {
+                canRoll = false;
+            }
+        }
+        
+        if (canRoll) {
+            characterState = CHAR_STATE_ROLLING;
+            actionTimer = 0.0f; // normalized 0..1
+            currentActionDuration = ROLL_DURATION;
+        }
     }
+    // Jump
     if (jumpJustPressed) {
         if (characterState == CHAR_STATE_NORMAL) {
             characterState = CHAR_STATE_JUMPING;
             actionTimer = 0.0f;
+            currentActionDuration = JUMP_DURATION;
         } else if (characterState == CHAR_STATE_ROLLING) {
-            float rollPhase = (ROLL_DURATION > 0.0f) ? (actionTimer / ROLL_DURATION) : 0.0f;
+            float rollPhase = actionTimer; // normalized
             if (rollPhase >= ROLL_JUMP_WINDOW_START && rollPhase <= ROLL_JUMP_WINDOW_END) {
                 characterState = CHAR_STATE_JUMPING;
                 actionTimer = 0.0f;
+                currentActionDuration = JUMP_DURATION;
             }
         }
     }
-    if (leftJustPressed && characterState == CHAR_STATE_NORMAL) {
-        characterState = CHAR_STATE_ATTACKING;
-        actionTimer = 0.0f;
-        character.currentAttackHasHit = false; // Reset hit flag for new attack
-    } else if (characterState == CHAR_STATE_ATTACKING && leftHeldNow && leftTriggerHoldTime >= STRONG_ATTACK_HOLD_THRESHOLD) {
-        // Upgrade a light attack to a strong attack if the trigger is held
-        characterState = CHAR_STATE_ATTACKING_STRONG;
-        actionTimer = 0.0f;
-        character.currentAttackHasHit = false;
+    // Attack combo input
+    if (leftJustPressed) {
+        if (characterState == CHAR_STATE_NORMAL) {
+            // Always start with regular attack, but allow upgrade to strong attack
+            characterState = CHAR_STATE_ATTACKING;
+            attackComboIndex = 1;
+            attackQueued = false;
+            attackEnding = false;
+            actionTimer = 0.0f;
+            currentActionDuration = ATTACK1_DURATION;
+            character.currentAttackHasHit = false;
+            // small forward impulse
+            float yaw = character.rot[1];
+            float fx = -fm_sinf(yaw);
+            float fz =  fm_cosf(yaw);
+            movementVelocityX += fx * ATTACK_FORWARD_IMPULSE;
+            movementVelocityZ += fz * ATTACK_FORWARD_IMPULSE;
+        } else if (characterState == CHAR_STATE_ATTACKING && !attackEnding) {
+            attackQueued = true;
+        }
     }
+    // Strong attack upgrade - only during very early part of regular attack and only once
+    static bool strongAttackUpgraded = false;
+    if (characterState == CHAR_STATE_ATTACKING && leftHeldNow && 
+        leftTriggerHoldTime >= STRONG_ATTACK_HOLD_THRESHOLD && 
+        actionTimer < 0.3f && !attackEnding && !strongAttackUpgraded) {
+        strongAttackUpgraded = true; // Prevent multiple triggers
+        characterState = CHAR_STATE_ATTACKING_STRONG;
+        attackComboIndex = 1;
+        attackQueued = false;
+        attackEnding = false;
+        actionTimer = 0.0f; // Reset timer for strong attack
+        currentActionDuration = STRONG_ATTACK_DURATION;
+        character.currentAttackHasHit = false;
+        // Lock movement during charged attack
+        movementVelocityX = 0.0f;
+        movementVelocityZ = 0.0f;
+    }
+    
+    // Reset strong attack upgrade flag when not attacking
+    if (characterState == CHAR_STATE_NORMAL) {
+        strongAttackUpgraded = false;
+    }
+    // Progress normalized timers
     if (characterState != CHAR_STATE_NORMAL) {
-        actionTimer += dt;
+        if (currentActionDuration <= 0.0001f) currentActionDuration = 1.0f;
+        actionTimer += dt / currentActionDuration;
+        if (actionTimer > 1.0f) actionTimer = 1.0f;
+
         if (characterState == CHAR_STATE_ROLLING) {
-            if (actionTimer >= ROLL_DURATION) {
+            if (actionTimer >= 1.0f) {
                 characterState = CHAR_STATE_NORMAL;
                 actionTimer = 0.0f;
             }
-        } else if (characterState == CHAR_STATE_ATTACKING && actionTimer >= ATTACK_DURATION) {
-            characterState = CHAR_STATE_NORMAL;
-            actionTimer = 0.0f;
-        } else if (characterState == CHAR_STATE_ATTACKING_STRONG && actionTimer >= STRONG_ATTACK_DURATION) {
-            characterState = CHAR_STATE_NORMAL;
-            actionTimer = 0.0f;
-        } else if (characterState == CHAR_STATE_JUMPING && actionTimer >= JUMP_DURATION) {
-            characterState = CHAR_STATE_NORMAL;
-            actionTimer = 0.0f;
-            character.pos[1] = 0.0f; // Land back on the ground plane
+        } else if (characterState == CHAR_STATE_ATTACKING) {
+            if (!attackEnding && attackQueued && actionTimer >= ATTACK_QUEUE_THRESHOLD && attackComboIndex < 4) {
+                attackComboIndex++;
+                attackQueued = false;
+                actionTimer = 0.0f;
+                currentActionDuration = (attackComboIndex == 2) ? ATTACK2_DURATION : (attackComboIndex == 3) ? ATTACK3_DURATION : ATTACK4_DURATION;
+                character.currentAttackHasHit = false;
+                float yaw = character.rot[1];
+                float fx = -fm_sinf(yaw);
+                float fz =  fm_cosf(yaw);
+                movementVelocityX += fx * ATTACK_FORWARD_IMPULSE;
+                movementVelocityZ += fz * ATTACK_FORWARD_IMPULSE;
+            } else if (!attackEnding && actionTimer >= 1.0f) {
+                if (attackComboIndex < 4) {
+                    attackEnding = true;
+                    actionTimer = 0.0f;
+                    currentActionDuration = ATTACK_END_DURATION;
+                } else {
+                    characterState = CHAR_STATE_NORMAL;
+                    actionTimer = 0.0f;
+                    attackComboIndex = 0;
+                    attackQueued = false;
+                    attackEnding = false;
+                }
+            } else if (attackEnding && actionTimer >= 1.0f) {
+                characterState = CHAR_STATE_NORMAL;
+                actionTimer = 0.0f;
+                attackComboIndex = 0;
+                attackQueued = false;
+                attackEnding = false;
+            }
+        } else if (characterState == CHAR_STATE_ATTACKING_STRONG) {
+            if (actionTimer >= 1.0f) {
+                characterState = CHAR_STATE_NORMAL;
+                actionTimer = 0.0f;
+            }
+        } else if (characterState == CHAR_STATE_JUMPING) {
+            if (actionTimer >= 1.0f) {
+                characterState = CHAR_STATE_NORMAL;
+                actionTimer = 0.0f;
+                character.pos[1] = 0.0f;
+            }
+        } else if (characterState == CHAR_STATE_KNOCKDOWN) {
+            if (actionTimer >= 1.0f) {
+                characterState = CHAR_STATE_NORMAL;
+                actionTimer = 0.0f;
+            }
         }
     }
 }
@@ -361,24 +504,63 @@ static inline void update_current_speed(float inputMagnitude, float dt) {
 
 // Helper function to determine target animation index based on state and speed
 static inline int get_target_animation(CharacterState state, float speedRatio) {
+    if (state == CHAR_STATE_TITLE_IDLE) {
+        return ANIM_IDLE_TITLE;
+    }
+    if (state == CHAR_STATE_FOG_WALK) {
+        return ANIM_FOG_OF_WAR;
+    }
+    if (state == CHAR_STATE_KNOCKDOWN) {
+        return ANIM_KNOCKDOWN;
+    }
     if (state == CHAR_STATE_ROLLING || state == CHAR_STATE_JUMPING) {
         return ANIM_ROLL;
     }
     if (state == CHAR_STATE_ATTACKING || state == CHAR_STATE_ATTACKING_STRONG) {
-        return ANIM_ATTACK;
+        if (attackEnding) {
+            if (attackComboIndex == 1) return ANIM_ATTACK1_END;
+            if (attackComboIndex == 2) return ANIM_ATTACK2_END;
+            if (attackComboIndex == 3) return ANIM_ATTACK3_END;
+        } else {
+            if (state == CHAR_STATE_ATTACKING_STRONG) {
+                return ANIM_ATTACK_CHARGED;
+            }
+            switch (attackComboIndex) {
+                case 1: return ANIM_ATTACK1;
+                case 2: return ANIM_ATTACK2;
+                case 3: return ANIM_ATTACK3;
+                case 4: return ANIM_ATTACK4;
+                default: return ANIM_ATTACK1;
+            }
+        }
+        return ANIM_ATTACK1;
     }
+    // Lock-on strafing selection
+    if (cameraLockOnActive && animStrafeDirFlag != 0) {
+        if (speedRatio < RUN_THRESHOLD) {
+            return animStrafeDirFlag > 0 ? ANIM_STRAFE_WALK_RIGHT : ANIM_STRAFE_WALK_LEFT;
+        } else {
+            return animStrafeDirFlag > 0 ? ANIM_STRAFE_RUN_RIGHT : ANIM_STRAFE_RUN_LEFT;
+        }
+    }
+    // Determine if moving backwards relative to facing
+    float yaw = character.rot[1];
+    float fwdX = -fm_sinf(yaw);
+    float fwdZ =  fm_cosf(yaw);
+    float dotForward = movementVelocityX * fwdX + movementVelocityZ * fwdZ;
+    bool isBackward = (dotForward < -0.001f);
     // Normal state: select based on speed
     if (speedRatio < IDLE_THRESHOLD) {
         return ANIM_IDLE;
     }
     if (speedRatio < WALK_THRESHOLD) {
-        return ANIM_WALK;
+        return isBackward ? ANIM_WALK_BACK : ANIM_WALK;
     }
     if (speedRatio < RUN_THRESHOLD) {
-        return ANIM_WALK;
+        return isBackward ? ANIM_WALK_BACK : ANIM_WALK;
     }
     // For the blend zone and above, use RUN
-    return ANIM_RUN;
+    return isBackward ? ANIM_RUN_BACK : ANIM_RUN;
 }
 
 static inline void update_animations(float speedRatio, CharacterState state, float dt) {
@@ -387,182 +569,140 @@ static inline void update_animations(float speedRatio, CharacterState state, flo
     // Determine target animation
     int targetAnim = get_target_animation(state, speedRatio);
 
-    if (state == CHAR_STATE_ROLLING && prevState != CHAR_STATE_ROLLING) {
-        if (character.animations && character.animations[ANIM_ROLL]) {
-            t3d_anim_set_time(character.animations[ANIM_ROLL], 0.0f);
-            t3d_anim_set_looping(character.animations[ANIM_ROLL], false);
-            t3d_anim_set_playing(character.animations[ANIM_ROLL], true);
+    // RunEnd transition: play end animation once when dropping below run threshold
+    static bool runEndActive = false;
+    if (!runEndActive && character.currentAnimation == ANIM_RUN && state == CHAR_STATE_NORMAL && speedRatio < RUN_THRESHOLD && speedRatio >= IDLE_THRESHOLD) {
+        targetAnim = ANIM_RUN_END;
+        runEndActive = true;
+    }
+    if (runEndActive && speedRatio >= IDLE_THRESHOLD) {
+        targetAnim = ANIM_RUN_END;
+    } else if (runEndActive && speedRatio < IDLE_THRESHOLD) {
+        // If speed drops to idle during run end, skip to idle immediately
+        runEndActive = false;
+    }
+
+    // Fallback to Idle if target is invalid
+    bool targetValid = (targetAnim >= 0 && targetAnim < character.animationCount && character.animations[targetAnim] != NULL);
+    if (!targetValid) {
+        targetAnim = ANIM_IDLE; // Safe fallback
+        if (runEndActive && targetAnim == ANIM_RUN_END) {
+            runEndActive = false;
         }
     }
-    if ((state == CHAR_STATE_ATTACKING || state == CHAR_STATE_ATTACKING_STRONG) && prevState != state) {
-        if (character.animations && character.animations[ANIM_ATTACK]) {
-            t3d_anim_set_time(character.animations[ANIM_ATTACK], 0.0f);
-            t3d_anim_set_looping(character.animations[ANIM_ATTACK], false);
-            t3d_anim_set_playing(character.animations[ANIM_ATTACK], true);
-        }
-    }
+
+    // Only attach/switch when actually changing animations (like the example)
+    bool needsSwitch = (character.currentAnimation != targetAnim);
     
-    // Switch animations if needed - start blending
-    if (character.currentAnimation != targetAnim) {
-        // If we're already blending, complete the blend first
-        if (character.isBlending) {
-            // Force complete the blend
-            character.blendFactor = 1.0f;
-            character.isBlending = false;
-            character.blendTimer = 0.0f;
-            
-            // Stop previous animation
-            if (character.previousAnimation >= 0 && character.previousAnimation < character.animationCount &&
-                character.animations && character.animations[character.previousAnimation]) {
-                t3d_anim_set_playing(character.animations[character.previousAnimation], false);
-            }
+    if (needsSwitch) {
+        // Stop previous animation if blending
+        if (character.isBlending && character.previousAnimation >= 0 && 
+            character.previousAnimation < character.animationCount && 
+            character.animations[character.previousAnimation]) {
+            t3d_anim_set_playing(character.animations[character.previousAnimation], false);
         }
-        
-        // Store previous animation for blending
-        character.previousAnimation = character.currentAnimation;
-        
-        // Start blending if we have a valid previous animation
-        if (character.previousAnimation >= 0 && character.previousAnimation < character.animationCount && 
-            character.animations && character.animations[character.previousAnimation]) {
-            // Save the current animation time before switching
-            float savedTime = 0.0f;
-            if (character.currentAnimation >= 0 && character.currentAnimation < character.animationCount && 
-                character.animations[character.currentAnimation]) {
-                savedTime = character.animations[character.currentAnimation]->time;
-            }
+
+        // For action states (attacks, rolls), start immediate transition with blend
+        if (state == CHAR_STATE_ATTACKING || state == CHAR_STATE_ATTACKING_STRONG || 
+            state == CHAR_STATE_ROLLING || state == CHAR_STATE_JUMPING) {
             
-            // Reset blend skeleton and attach previous animation
-            t3d_skeleton_reset(character.skeletonBlend);
-            t3d_anim_attach(character.animations[character.previousAnimation], character.skeletonBlend);
-            t3d_anim_set_playing(character.animations[character.previousAnimation], true);
-            t3d_anim_set_time(character.animations[character.previousAnimation], savedTime);
-            
-            // Start blending
+            // Start blending from current to new animation
+            character.previousAnimation = character.currentAnimation;
+            character.currentAnimation = targetAnim;
             character.isBlending = true;
+            character.blendDuration = 0.1f; // Quick blend for actions
+            character.blendTimer = 0.0f;
             character.blendFactor = 0.0f;
-            character.blendTimer = -0.0001f; // Start slightly negative so first frame skips blending
-        }
-        
-        // Start new animation on main skeleton
-        character.currentAnimation = targetAnim;
-        if (character.currentAnimation >= 0 && character.currentAnimation < character.animationCount && 
-            character.animations[character.currentAnimation]) {
-            t3d_skeleton_reset(character.skeleton);
-            t3d_anim_attach(character.animations[character.currentAnimation], character.skeleton);
-            t3d_anim_set_playing(character.animations[character.currentAnimation], true);
-            t3d_anim_set_time(character.animations[character.currentAnimation], 0.0f);
+
+            // Setup new animation on main skeleton
+            if (character.animations[targetAnim]) {
+                t3d_anim_attach(character.animations[targetAnim], character.skeleton);
+                t3d_anim_set_time(character.animations[targetAnim], 0.0f);
+                t3d_anim_set_looping(character.animations[targetAnim], false);
+                t3d_anim_set_playing(character.animations[targetAnim], true);
+
+                // Keep old animation on blend skeleton if valid
+                if (character.previousAnimation >= 0 && character.animations[character.previousAnimation]) {
+                    t3d_skeleton_reset(character.skeletonBlend);
+                    t3d_anim_attach(character.animations[character.previousAnimation], character.skeletonBlend);
+                    t3d_anim_set_playing(character.animations[character.previousAnimation], true);
+                }
+            }
+        } else {
+            // For locomotion, just switch directly (no blend needed for walk/run/idle)
+            character.currentAnimation = targetAnim;
+            character.isBlending = false;
+            
+            if (character.animations[targetAnim]) {
+                t3d_skeleton_reset(character.skeleton);
+                t3d_anim_attach(character.animations[targetAnim], character.skeleton);
+                
+                // Set appropriate looping - most locomotion should loop
+                bool shouldLoop = (targetAnim == ANIM_IDLE || targetAnim == ANIM_WALK || 
+                                  targetAnim == ANIM_RUN || targetAnim == ANIM_WALK_BACK || 
+                                  targetAnim == ANIM_RUN_BACK || targetAnim == ANIM_STRAFE_WALK_LEFT ||
+                                  targetAnim == ANIM_STRAFE_WALK_RIGHT || targetAnim == ANIM_STRAFE_RUN_LEFT ||
+                                  targetAnim == ANIM_STRAFE_RUN_RIGHT);
+                t3d_anim_set_looping(character.animations[targetAnim], shouldLoop);
+                t3d_anim_set_playing(character.animations[targetAnim], true);
+            }
         }
     }
-    
-    // Update blending
+
+    // Update blending if active
     if (character.isBlending) {
         character.blendTimer += dt;
-        // Clamp negative timer to 0 (first frame skip)
-        if (character.blendTimer < 0.0f) {
-            character.blendTimer = 0.0f;
-            character.blendFactor = 0.0f;
-        } else if (character.blendTimer >= character.blendDuration) {
+        if (character.blendTimer >= character.blendDuration) {
             // Blend complete
-            character.blendFactor = 1.0f;
             character.isBlending = false;
+            character.blendFactor = 1.0f;
             character.blendTimer = 0.0f;
             
             // Stop previous animation
-            if (character.previousAnimation >= 0 && character.previousAnimation < character.animationCount &&
-                character.animations && character.animations[character.previousAnimation]) {
+            if (character.previousAnimation >= 0 && character.animations[character.previousAnimation]) {
                 t3d_anim_set_playing(character.animations[character.previousAnimation], false);
             }
         } else {
             character.blendFactor = character.blendTimer / character.blendDuration;
         }
     }
-    
-    // Update all animations (both current and previous if blending)
-    if (state == CHAR_STATE_ROLLING) {
-        if (character.animations && character.animations[ANIM_ROLL]) {
-            t3d_anim_set_playing(character.animations[ANIM_ROLL], true);
-            t3d_anim_set_speed(character.animations[ANIM_ROLL], ROLL_ANIM_SPEED);
-            t3d_anim_update(character.animations[ANIM_ROLL], dt);
-        }
-    } else if (state == CHAR_STATE_JUMPING) {
-        // Reuse the roll animation during jump with a quick taper
-        if (character.animations && character.animations[ANIM_ROLL]) {
-            float jumpPhase = fminf(1.0f, actionTimer / JUMP_DURATION);
-            float rollSpeed = fmaxf(0.4f, 1.0f - jumpPhase * 0.6f);
-            t3d_anim_set_playing(character.animations[ANIM_ROLL], true);
-            t3d_anim_set_speed(character.animations[ANIM_ROLL], rollSpeed);
-            t3d_anim_update(character.animations[ANIM_ROLL], dt);
-        }
-    } else if (state == CHAR_STATE_ATTACKING || state == CHAR_STATE_ATTACKING_STRONG) {
-        if (character.animations && character.animations[ANIM_ATTACK]) {
-            t3d_anim_set_playing(character.animations[ANIM_ATTACK], true);
-            if (state == CHAR_STATE_ATTACKING_STRONG) {
-                t3d_anim_set_speed(character.animations[ANIM_ATTACK], 0.8f);
-            } else {
-                t3d_anim_set_speed(character.animations[ANIM_ATTACK], 1.0f);
+
+    // Update current animation (like the example does)
+    if (character.currentAnimation >= 0 && character.animations[character.currentAnimation]) {
+        T3DAnim* currentAnim = character.animations[character.currentAnimation];
+        
+        // Set speed based on state and movement
+        float animSpeed = 1.0f;
+        if (state == CHAR_STATE_NORMAL) {
+            if (character.currentAnimation == ANIM_WALK || character.currentAnimation == ANIM_WALK_BACK) {
+                animSpeed = fmaxf(speedRatio * 2.0f + 0.3f, 0.5f);
+            } else if (character.currentAnimation == ANIM_RUN || character.currentAnimation == ANIM_RUN_BACK) {
+                animSpeed = fmaxf(speedRatio * 0.8f + 0.2f, 0.6f);
             }
-            t3d_anim_update(character.animations[ANIM_ATTACK], dt);
+        } else if (state == CHAR_STATE_ATTACKING_STRONG) {
+            animSpeed = 0.8f;
+        } else if (state == CHAR_STATE_ROLLING) {
+            animSpeed = ROLL_ANIM_SPEED;
         }
-    } else if(state == CHAR_STATE_FOG_WALK){
-        if (character.animations && character.animations[ANIM_WALK_THROUGH_FOG]) {
-            t3d_anim_update(character.animations[ANIM_WALK_THROUGH_FOG], dt);
-        }
-    } else if(state == CHAR_STATE_TITLE_IDLE){
-        if (character.animations && character.animations[ANIM_IDLE]) {
-            t3d_anim_update(character.animations[ANIM_IDLE], dt);
-        }
-    } else {
-        // Normal state: update based on speed
-        if (speedRatio < IDLE_THRESHOLD) {
-            if (character.animations && character.animations[ANIM_IDLE]) {
-                t3d_anim_set_playing(character.animations[ANIM_IDLE], true);
-                t3d_anim_update(character.animations[ANIM_IDLE], dt);
-            }
-        } else if (speedRatio < WALK_THRESHOLD) {
-            if (character.animations && character.animations[ANIM_WALK]) {
-                t3d_anim_set_playing(character.animations[ANIM_WALK], true);
-                float transitionSpeed = fmaxf(speedRatio * 2.5f + 0.2f, 0.3f);
-                t3d_anim_set_speed(character.animations[ANIM_WALK], transitionSpeed);
-                t3d_anim_update(character.animations[ANIM_WALK], dt);
-            }
-        } else if (speedRatio < RUN_THRESHOLD) {
-            if (character.animations && character.animations[ANIM_WALK]) {
-                t3d_anim_set_playing(character.animations[ANIM_WALK], true);
-                float walkSpeed = fmaxf(speedRatio * 2.0f + 0.3f, 0.5f);
-                t3d_anim_set_speed(character.animations[ANIM_WALK], walkSpeed);
-                t3d_anim_update(character.animations[ANIM_WALK], dt);
-            }
-        } else if (speedRatio < RUN_THRESHOLD + BLEND_MARGIN) {
-            // Walk/run blend zone - play both animations
-            float blendStart = RUN_THRESHOLD;
-            float blendEnd = RUN_THRESHOLD + BLEND_MARGIN;
-            float blendRatio = (speedRatio - blendStart) / (blendEnd - blendStart);
-            blendRatio = fminf(1.0f, fmaxf(0.0f, blendRatio));
-            if (character.animations && character.animations[ANIM_WALK] && character.animations[ANIM_RUN]) {
-                t3d_anim_set_playing(character.animations[ANIM_WALK], true);
-                t3d_anim_set_playing(character.animations[ANIM_RUN], true);
-                float walkSpeed = fmaxf(speedRatio * 2.5f + 0.4f, 0.8f);
-                t3d_anim_set_speed(character.animations[ANIM_WALK], walkSpeed);
-                float runSpeed = fmaxf(blendRatio * 0.6f + 0.4f, 0.6f);
-                t3d_anim_set_speed(character.animations[ANIM_RUN], runSpeed);
-                t3d_anim_update(character.animations[ANIM_WALK], dt);
-                t3d_anim_update(character.animations[ANIM_RUN], dt);
-            }
-        } else {
-            if (character.animations && character.animations[ANIM_RUN]) {
-                t3d_anim_set_playing(character.animations[ANIM_RUN], true);
-                float runSpeed = fmaxf(speedRatio * 0.8f + 0.2f, 0.6f);
-                t3d_anim_set_speed(character.animations[ANIM_RUN], runSpeed);
-                t3d_anim_update(character.animations[ANIM_RUN], dt);
-            }
-        }
+        
+        t3d_anim_set_speed(currentAnim, animSpeed);
+        t3d_anim_update(currentAnim, dt);
     }
-    
-    // Update previous animation if blending
+
+    // Update previous animation if blending (like the example)
     if (character.isBlending && character.previousAnimation >= 0 && 
-        character.previousAnimation < character.animationCount && 
-        character.animations && character.animations[character.previousAnimation]) {
+        character.animations[character.previousAnimation]) {
         t3d_anim_update(character.animations[character.previousAnimation], dt);
+        
+        // Blend between previous and current (same pattern as example)
+        t3d_skeleton_blend(character.skeleton, character.skeletonBlend, character.skeleton, character.blendFactor);
+    }
+
+    // Clear RunEnd when it finishes
+    if (runEndActive && character.currentAnimation == ANIM_RUN_END) {
+        if (character.animations[ANIM_RUN_END] && !character.animations[ANIM_RUN_END]->isPlaying) {
+            runEndActive = false;
+        }
     }
 }
 
@@ -579,33 +719,66 @@ void character_init(void)
 
     T3DSkeleton* skeletonBlend = malloc(sizeof(T3DSkeleton));
     *skeletonBlend = t3d_skeleton_clone(skeleton, false);
+    T3DSkeleton* skeletonLocomotion = malloc(sizeof(T3DSkeleton));
+    *skeletonLocomotion = t3d_skeleton_clone(skeleton, false);
 
-    T3DAnim** animations = NULL;
-
-    const int animationCount = 6;
+    const int animationCount = ANIM_COUNT;
     const char* animationNames[] = {
         "Idle",
-        "Walk",
+        "IdleTitle",
+        "Walk1",
         "Run",
+        "RunEnd",
         "Roll",
+        "Knockdown",
+        "StrafeWalkLeft",
+        "StrafeWalkRight",
+        "StrafeRunLeft",
+        "StrafeRunRight",
         "Attack1",
-        "FogOfWar"
+        "Attack1End",
+        "Attack2",
+        "Attack2End",
+        "Attack3",
+        "Attack3End",
+        "Attack4",
+        "FogOfWar",
+        "AttackCharged",
+        "WalkBackwards",
+        "RunBackwards"
     };
     const bool animationsLooping[] = {
-        false, true, true, true, false, false
+        true,   // Idle
+        true,   // IdleTitle
+        true,   // Walk1
+        true,   // Run
+        false,  // RunEnd
+        false,  // Roll
+        false,  // Knockdown
+        true,   // StrafeWalkLeft
+        true,   // StrafeWalkRight
+        true,   // StrafeRunLeft
+        true,   // StrafeRunRight
+        false,  // Attack1
+        false,  // Attack1End
+        false,  // Attack2
+        false,  // Attack2End
+        false,  // Attack3
+        false,  // Attack3End
+        false,  // Attack4
+        false,  // FogOfWar
+        false,  // AttackCharged
+        true,   // WalkBackwards
+        true    // RunBackwards
     };
 
-    if (animationCount > 0)
-    {
-        animations = malloc(animationCount * sizeof(T3DAnim*));
-        for (int i = 0; i < animationCount; i++)
-        {
-            animations[i] = malloc(sizeof(T3DAnim));
-            *animations[i] = t3d_anim_create(characterModel, animationNames[i]);
-            t3d_anim_set_looping(animations[i], animationsLooping[i]);
-            // t3d_anim_set_playing(animations[i], true);
-            t3d_anim_attach(animations[i], skeleton);
-        }
+    T3DAnim** animations = malloc_uncached(animationCount * sizeof(T3DAnim*));
+    for (int i = 0; i < animationCount; i++) {
+        animations[i] = malloc_uncached(sizeof(T3DAnim));
+        *animations[i] = t3d_anim_create(characterModel, animationNames[i]);
+        t3d_anim_set_looping(animations[i], animationsLooping[i]);
+        t3d_anim_set_playing(animations[i], false);
+        t3d_anim_attach(animations[i], skeleton);
     }
 
     // model block
@@ -632,6 +805,7 @@ void character_init(void)
         .scrollParams = NULL,
         .skeleton = skeleton,
         .skeletonBlend = skeletonBlend,
+        .skeletonLocomotion = skeletonLocomotion,
         .animations = animations,
         .currentAnimation = 0,
         .previousAnimation = -1,
@@ -672,31 +846,8 @@ void character_update(void)
         movementVelocityX = 0.0f;
         movementVelocityZ = 0.0f;
         character_update_camera();
-        if (character.skeleton) {
-            // Blend skeletons if blending is active (matches boss pattern)
-            // Note: We blend BEFORE updating the skeleton, and we never update the blend skeleton directly
-            // The blend skeleton's state comes from its attached animation being updated
-            if (character.isBlending && character.skeletonBlend && character.blendTimer > 0.0f) {
-                bool canBlend = (character.previousAnimation >= 0 && 
-                                character.previousAnimation < character.animationCount && 
-                                character.animations && character.animations[character.previousAnimation] != NULL &&
-                                character.animations[character.previousAnimation]->isPlaying &&
-                                character.blendFactor >= 0.0f && 
-                                character.blendFactor <= 1.0f);
-                if (canBlend) {
-                    // Blend skeletons: blend from skeletonBlend (old) to skeleton (new), store result in skeleton
-                    // IMPORTANT: We do NOT update the blend skeleton - only blend it into the main skeleton
-                    // The blend skeleton's state comes from its attached animation
-                    t3d_skeleton_blend(character.skeletonBlend, character.skeleton, character.skeleton, character.blendFactor);
-                } else {
-                    character.isBlending = false;
-                }
-            }
-            // Update main skeleton (ONLY the main skeleton, never the blend skeleton)
-            t3d_skeleton_update(character.skeleton);
-        }
-        t3d_mat4fp_from_srt_euler(character.modelMat, character.scale, character.rot, character.pos);
-        character_update_shadow_mat();
+        character_anim_apply_pose();
+        character_finalize_frame(false);
         return;
     }
 
@@ -708,7 +859,7 @@ void character_update(void)
 
         if(scene_get_game_state() == GAME_STATE_TITLE_TRANSITION && walkThroughFog == false)
         {
-            t3d_anim_set_playing(character.animations[ANIM_WALK_THROUGH_FOG], true);
+            t3d_anim_set_playing(character.animations[ANIM_FOG_OF_WAR], true);
             characterState = CHAR_STATE_FOG_WALK;
             walkThroughFog = true;
         }
@@ -726,32 +877,8 @@ void character_update(void)
         character.pos[0] = newPosX;
         character.pos[2] = newPosZ;
 
-        if (character.skeleton) {
-            // Blend skeletons if blending is active (matches boss pattern)
-            // Note: We blend BEFORE updating the skeleton, and we never update the blend skeleton directly
-            // The blend skeleton's state comes from its attached animation being updated
-            if (character.isBlending && character.skeletonBlend && character.blendTimer > 0.0f) {
-                bool canBlend = (character.previousAnimation >= 0 && 
-                                character.previousAnimation < character.animationCount && 
-                                character.animations && character.animations[character.previousAnimation] != NULL &&
-                                character.animations[character.previousAnimation]->isPlaying &&
-                                character.blendFactor >= 0.0f && 
-                                character.blendFactor <= 1.0f);
-                if (canBlend) {
-                    // Blend skeletons: blend from skeletonBlend (old) to skeleton (new), store result in skeleton
-                    // IMPORTANT: We do NOT update the blend skeleton - only blend it into the main skeleton
-                    // The blend skeleton's state comes from its attached animation
-                    t3d_skeleton_blend(character.skeletonBlend, character.skeleton, character.skeleton, character.blendFactor);
-                } else {
-                    character.isBlending = false;
-                }
-            }
-            // Update main skeleton (ONLY the main skeleton, never the blend skeleton)
-            t3d_skeleton_update(character.skeleton);
-        }
-
-        t3d_mat4fp_from_srt_euler(character.modelMat, character.scale, character.rot, character.pos);
-        character_update_shadow_mat();
+        character_anim_apply_pose();
+        character_finalize_frame(false);
         return;
     }
     // Disable player input during cutscenes & title screen
@@ -776,33 +903,8 @@ void character_update(void)
         // }
         
         character_update_camera();
-        
-        if (character.skeleton) {
-            // Blend skeletons if blending is active (matches boss pattern)
-            // Note: We blend BEFORE updating the skeleton, and we never update the blend skeleton directly
-            // The blend skeleton's state comes from its attached animation being updated
-            if (character.isBlending && character.skeletonBlend && character.blendTimer > 0.0f) {
-                bool canBlend = (character.previousAnimation >= 0 && 
-                                character.previousAnimation < character.animationCount && 
-                                character.animations && character.animations[character.previousAnimation] != NULL &&
-                                character.animations[character.previousAnimation]->isPlaying &&
-                                character.blendFactor >= 0.0f && 
-                                character.blendFactor <= 1.0f);
-                if (canBlend) {
-                    // Blend skeletons: blend from skeletonBlend (old) to skeleton (new), store result in skeleton
-                    // IMPORTANT: We do NOT update the blend skeleton - only blend it into the main skeleton
-                    // The blend skeleton's state comes from its attached animation
-                    t3d_skeleton_blend(character.skeletonBlend, character.skeleton, character.skeleton, character.blendFactor);
-                } else {
-                    character.isBlending = false;
-                }
-            }
-            // Update main skeleton (ONLY the main skeleton, never the blend skeleton)
-            t3d_skeleton_update(character.skeleton);
-        }
-        
-        t3d_mat4fp_from_srt_euler(character.modelMat, character.scale, character.rot, character.pos);
-        character_update_shadow_mat();
+        character_anim_apply_pose();
+        character_finalize_frame(false);
         return;
     }
 
@@ -810,9 +912,9 @@ void character_update(void)
     joypad_buttons_t buttons = joypad_get_buttons_pressed(JOYPAD_PORT_1);
     joypad_buttons_t buttonsReleased = joypad_get_buttons_released(JOYPAD_PORT_1);
 
-    // B is jump now (edge-detected), left trigger is attack/strong attack
-    bool jumpJustPressed = buttons.b && !lastBPressed;
-    lastBPressed = buttons.b;
+    // Disable B button action
+    bool jumpJustPressed = false;
+    lastBPressed = false;
 
     if (buttons.l) {
         leftTriggerHeld = true;
@@ -829,7 +931,7 @@ void character_update(void)
     lastLPressed = buttons.l;
 
     StickInput stick = normalize_stick((float)joypad.stick_x, (float)joypad.stick_y);
-    update_actions(&buttons, leftTriggerHeld, leftJustPressed, jumpJustPressed, stick.magnitude, deltaTime);
+    update_actions(&buttons, leftTriggerHeld, leftJustPressed, jumpJustPressed, &stick, deltaTime);
 
     if (characterState != CHAR_STATE_ATTACKING && characterState != CHAR_STATE_ATTACKING_STRONG && characterState != CHAR_STATE_JUMPING && stick.magnitude > 0.0f) {
         float desiredVelX, desiredVelZ;
@@ -846,33 +948,56 @@ void character_update(void)
         }
         float currentMaxSpeed = (characterState == CHAR_STATE_ROLLING) ? ROLL_SPEED : MAX_MOVEMENT_SPEED;
         accelerate_towards(desiredVelX, desiredVelZ, currentMaxSpeed, deltaTime);
-        if (cameraLockOnActive) {
-            // During lock-on: if strafing, face movement; if moving forward/back, face target
-            bool strafing = fabsf(stick.x) > fabsf(stick.y) * 0.6f;
-            if (strafing) {
-                update_yaw_from_velocity(deltaTime);
-            } else {
-                float targetAngle = atan2f(-(cameraLockOnTarget.v[0] - character.pos[0]), (cameraLockOnTarget.v[2] - character.pos[2]));
-                float currentAngle = character.rot[1];
-                while (targetAngle > T3D_PI) targetAngle -= 2.0f * T3D_PI;
-                while (targetAngle < -T3D_PI) targetAngle += 2.0f * T3D_PI;
-                while (currentAngle > T3D_PI) currentAngle -= 2.0f * T3D_PI;
-                while (currentAngle < -T3D_PI) currentAngle += 2.0f * T3D_PI;
-                float angleDelta = targetAngle - currentAngle;
-                while (angleDelta > T3D_PI) angleDelta -= 2.0f * T3D_PI;
-                while (angleDelta < -T3D_PI) angleDelta += 2.0f * T3D_PI;
-                float maxTurnRate = TURN_RATE * deltaTime;
-                if (angleDelta > maxTurnRate) angleDelta = maxTurnRate;
-                else if (angleDelta < -maxTurnRate) angleDelta = -maxTurnRate;
-                character.rot[1] = currentAngle + angleDelta;
-            }
+        if (cameraLockOnActive && characterState != CHAR_STATE_ROLLING) {
+            // During lock-on: always face the target while moving (strafe keeps facing boss)
+            // BUT when rolling, face the roll direction instead
+            // Compute strafe direction relative to target
+            T3DVec3 toTargetDir = {{
+                cameraLockOnTarget.v[0] - character.pos[0],
+                0.0f,
+                cameraLockOnTarget.v[2] - character.pos[2]
+            }};
+            t3d_vec3_norm(&toTargetDir);
+            // Right-hand perpendicular in XZ: right = normalize(cross(forward, up))
+            T3DVec3 rightDir = {{ -toTargetDir.v[2], 0.0f, toTargetDir.v[0] }}; // perpendicular in XZ
+            float forward = desiredVelX * toTargetDir.v[0] + desiredVelZ * toTargetDir.v[2];
+            float lateral = desiredVelX * rightDir.v[0] + desiredVelZ * rightDir.v[2];
+            // Blend ratio from direction components
+            float sum = fabsf(forward) + fabsf(lateral) + 0.0001f;
+            animStrafeBlendRatio = fminf(1.0f, fmaxf(0.0f, fabsf(lateral) / sum));
+            animLockOnStrafingFlag = (fabsf(lateral) > 0.01f);
+            animStrafeDirFlag = (lateral > 0.0f) ? +1 : (lateral < 0.0f ? -1 : 0);
+
+            float targetAngle = atan2f(-(cameraLockOnTarget.v[0] - character.pos[0]), (cameraLockOnTarget.v[2] - character.pos[2]));
+            float currentAngle = character.rot[1];
+            while (targetAngle > T3D_PI) targetAngle -= 2.0f * T3D_PI;
+            while (targetAngle < -T3D_PI) targetAngle += 2.0f * T3D_PI;
+            while (currentAngle > T3D_PI) currentAngle -= 2.0f * T3D_PI;
+            while (currentAngle < -T3D_PI) currentAngle += 2.0f * T3D_PI;
+            float angleDelta = targetAngle - currentAngle;
+            while (angleDelta > T3D_PI) angleDelta -= 2.0f * T3D_PI;
+            while (angleDelta < -T3D_PI) angleDelta += 2.0f * T3D_PI;
+            float maxTurnRate = TURN_RATE * deltaTime;
+            if (angleDelta > maxTurnRate) angleDelta = maxTurnRate;
+            else if (angleDelta < -maxTurnRate) angleDelta = -maxTurnRate;
+            character.rot[1] = currentAngle + angleDelta;
         } else {
+            // When rolling or not locked-on, face the movement direction
             update_yaw_from_velocity(deltaTime);
+            animLockOnStrafingFlag = false;
+            animStrafeDirFlag = 0;
+            animStrafeBlendRatio = 0.0f;
         }
     } else if (characterState == CHAR_STATE_ATTACKING || characterState == CHAR_STATE_ATTACKING_STRONG) {
-        // Keep momentum during attacks by reducing friction
-        float frictionScale = (characterState == CHAR_STATE_ATTACKING_STRONG) ? STRONG_ATTACK_FRICTION_SCALE : ATTACK_FRICTION_SCALE;
+        // Charged attack locks movement completely; normal attacks keep some momentum
+        float frictionScale = (characterState == CHAR_STATE_ATTACKING_STRONG) ? 1.0f : ATTACK_FRICTION_SCALE;
         apply_friction(deltaTime, frictionScale);
+
+        if (characterState == CHAR_STATE_ATTACKING_STRONG) {
+            // Ensure no drift during charged attack
+            movementVelocityX = 0.0f;
+            movementVelocityZ = 0.0f;
+        }
 
         // Hit window: apply damage to boss on overlap
         float hitStart = (characterState == CHAR_STATE_ATTACKING_STRONG) ? STRONG_ATTACK_HIT_START : 0.25f;
@@ -936,44 +1061,18 @@ void character_update(void)
         character.pos[2] = newPosZ;
     //}
 
-    character_update_camera();
-
-    if (character.skeleton) {
-        // Blend skeletons if blending is active (matches boss pattern)
-        // Note: We blend BEFORE updating the skeleton, and we never update the blend skeleton directly
-        // The blend skeleton's state comes from its attached animation being updated
-        if (character.isBlending && character.skeletonBlend && character.blendTimer > 0.0f) {
-            bool canBlend = (character.previousAnimation >= 0 && 
-                            character.previousAnimation < character.animationCount && 
-                            character.animations[character.previousAnimation] != NULL &&
-                            character.animations[character.previousAnimation]->isPlaying &&
-                            character.blendFactor >= 0.0f && 
-                            character.blendFactor <= 1.0f);
-            if (canBlend) {
-                // Blend skeletons: blend from skeletonBlend (old) to skeleton (new), store result in skeleton
-                // IMPORTANT: We do NOT update the blend skeleton - only blend it into the main skeleton
-                // The blend skeleton's state comes from its attached animation
-                t3d_skeleton_blend(character.skeletonBlend, character.skeleton, character.skeleton, character.blendFactor);
-            } else {
-                character.isBlending = false;
-            }
-        }
-        // Update main skeleton (ONLY the main skeleton, never the blend skeleton)
-        t3d_skeleton_update(character.skeleton);
-    }
-
-	 t3d_mat4fp_from_srt_euler(character.modelMat, character.scale, character.rot, character.pos);
-     character_update_shadow_mat();
+    character_anim_apply_pose();
+    character_finalize_frame(true);
 }
 
 void character_update_position(void) 
 {
 	// Update the full transformation matrix with scale, rotation, and position
-	t3d_mat4fp_from_srt_euler(character.modelMat,
-		(float[3]){character.scale[0], character.scale[1], character.scale[2]},
-		(float[3]){character.rot[0], character.rot[1], character.rot[2]},
-		(float[3]){character.pos[0], character.pos[1], character.pos[2]}
-	);
+    t3d_mat4fp_from_srt_euler(character.modelMat,
+        (float[3]){character.scale[0], character.scale[1], character.scale[2]},
+        (float[3]){character.rot[0], character.rot[1] + MODEL_YAW_OFFSET, character.rot[2]},
+        (float[3]){character.pos[0], character.pos[1], character.pos[2]}
+    );
 	character_update_shadow_mat();
 }
 
@@ -1105,21 +1204,21 @@ void character_draw(void)
 
 	// --- Shadow (ground-locked) ---
 	if (character.dpl_shadow && character.shadowMat) {
-		float h = character.pos[1] - SHADOW_GROUND_Y;
-		if (h < 0.0f) h = 0.0f;
-		float t = h / JUMP_HEIGHT;
-		if (t > 1.0f) t = 1.0f;
+        float h = character.pos[1] - SHADOW_GROUND_Y;
+        if (h < 0.0f) h = 0.0f;
+        float t = h / JUMP_HEIGHT;
+        if (t > 1.0f) t = 1.0f;
 
-		// Smooth fade: (1 - t)^2
-		float fade = 1.0f - t;
-		fade *= fade;
-		uint8_t a = (uint8_t)(SHADOW_BASE_ALPHA * fade);
+        // Smooth fade: (1 - t)^2
+        float fade = 1.0f - t;
+        fade *= fade;
+        uint8_t a = (uint8_t)(SHADOW_BASE_ALPHA * fade);
 
-		if (a > 0) {
-			rdpq_set_prim_color(RGBA32(0, 0, 0, a));
-			t3d_matrix_set(character.shadowMat, true);
-			rspq_block_run(character.dpl_shadow);
-		}
+        if (a > 0) {
+            rdpq_set_prim_color(RGBA32(0, 0, 0, a));
+            t3d_matrix_set(character.shadowMat, true);
+            rspq_block_run(character.dpl_shadow);
+        }
 	}
 
 	// --- Character ---
@@ -1149,15 +1248,26 @@ void character_apply_damage(float amount)
         return;
     }
 
-	character.health -= amount;
+    character.health -= amount;
 	if (character.health < 0.0f) character.health = 0.0f;
 	// printf("[Character] took %.1f damage (%.1f/%.1f)\n", amount, character.health, character.maxHealth);
 	if (character.health <= 0.0f) {
 		// printf("[Character] HP: %.0f/%.0f - DEFEATED!\n", character.health, character.maxHealth);
 		scene_set_game_state(GAME_STATE_DEAD);
-	} else {
-		// printf("[Character] HP: %.0f/%.0f\n", character.health, character.maxHealth);
-	}
+    } else {
+        // Small knockback when taking significant damage
+        if (amount >= 10.0f && characterState != CHAR_STATE_ROLLING && characterState != CHAR_STATE_JUMPING) {
+            characterState = CHAR_STATE_KNOCKDOWN;
+            actionTimer = 0.0f;
+            currentActionDuration = KNOCKDOWN_DURATION;
+            // backward impulse
+            float yaw = character.rot[1];
+            float bx = fm_sinf(yaw);  // opposite of forward
+            float bz = -fm_cosf(yaw);
+            movementVelocityX += bx * KNOCKDOWN_BACK_IMPULSE;
+            movementVelocityZ += bz * KNOCKDOWN_BACK_IMPULSE;
+        }
+    }
 	character.damageFlashTimer = 0.3f;
 }
 

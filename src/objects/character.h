@@ -10,13 +10,29 @@
 
 // Animation states - these correspond to the animation indices
 typedef enum {
-    ANIM_IDLE = 0,
-    ANIM_WALK = 1,
-    ANIM_RUN = 2,
-    ANIM_ROLL = 3,
-    ANIM_ATTACK = 4,
-    ANIM_WALK_THROUGH_FOG = 5,
-    ANIM_COUNT = 6,
+    ANIM_IDLE,
+    ANIM_IDLE_TITLE,
+    ANIM_WALK,
+    ANIM_RUN,
+    ANIM_RUN_END,
+    ANIM_ROLL,
+    ANIM_KNOCKDOWN,
+    ANIM_STRAFE_WALK_LEFT,
+    ANIM_STRAFE_WALK_RIGHT,
+    ANIM_STRAFE_RUN_LEFT,
+    ANIM_STRAFE_RUN_RIGHT,
+    ANIM_ATTACK1,
+    ANIM_ATTACK1_END,
+    ANIM_ATTACK2,
+    ANIM_ATTACK2_END,
+    ANIM_ATTACK3,
+    ANIM_ATTACK3_END,
+    ANIM_ATTACK4,
+    ANIM_FOG_OF_WAR,
+    ANIM_ATTACK_CHARGED,
+    ANIM_WALK_BACK,
+    ANIM_RUN_BACK,
+    ANIM_COUNT,
 } CharacterAnimState;
 
 // Character state for action mechanics
@@ -27,7 +43,8 @@ typedef enum {
     CHAR_STATE_ATTACKING_STRONG,
     CHAR_STATE_JUMPING,
     CHAR_STATE_TITLE_IDLE,
-    CHAR_STATE_FOG_WALK
+    CHAR_STATE_FOG_WALK,
+    CHAR_STATE_KNOCKDOWN
 } CharacterState;
 
 typedef struct {
@@ -45,6 +62,7 @@ typedef struct {
     ScrollParams *scrollParams;
     T3DSkeleton *skeleton;
     T3DSkeleton *skeletonBlend;
+    T3DSkeleton *skeletonLocomotion;
     T3DAnim **animations;
     T3DAnim **animationsBlend;
     int currentAnimation;
