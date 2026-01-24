@@ -35,6 +35,30 @@
 // TODO: This should not be declared in the header file, as it is only used externally (temp)
 #include "dev.h"
 #include "debug_draw.h"
+#include "utilities/simple_collision_utility.h"
+
+// --- Simple square room colliders ---
+// Adjustable bounds and wall thickness for a basic square room.
+// You can tweak these values later to fit the scene.
+// Doubled room size: expand bounds in X/Z
+static float g_roomMinX = -500.0f;
+static float g_roomMaxX =  400.0f;
+static float g_roomMinZ = -500.0f;
+static float g_roomMaxZ =  500.0f;
+static float g_wallThickness = 5.0f;   // thin walls for collision
+
+// Four AABB walls: left, right, back, front (Y spans from floor to a fixed height)
+static AABB g_roomWalls[4];
+static const int g_roomWallCount = 4;
+
+// Diagonal corner walls (octagon feel) using box/AABB colliders at corners
+// Diagonal corner boxes approximating angled walls
+static AABB g_diagBoxes[16];           // up to 4 corners * several steps
+static int  g_diagBoxCount = 0;        // filled at init
+static int  g_diagSteps = 5;           // number of small boxes per diagonal
+static float g_diagBoxHalf = 8.0f;     // half-size of each small diagonal box
+static float g_diagOffset = 80.0f;     // how deep the corner cut is from each axis
+
 
 T3DModel* mapModel;
 rspq_block_t* mapDpl;
@@ -108,6 +132,132 @@ static float titleStartGameTime = 10.0f;
 static float titleFadeTime = 7.0f;
 
 static float roomY = -1.0f;
+
+// Title scene character facing: rotate to face down the hall
+static const float TITLE_CHARACTER_YAW = T3D_PI * 0.5f; // +90° around Y
+
+// --- Room collider helpers (depend on roomY) ---
+static void scene_init_room_colliders(void)
+{
+    // Vertical span of walls (slightly below floor to well above)
+    float minY = roomY - 5.0f;
+    float maxY = roomY + 150.0f;
+
+    // Left wall at minX
+    g_roomWalls[0].min = (T3DVec3){{ g_roomMinX - g_wallThickness, minY, g_roomMinZ }};
+    g_roomWalls[0].max = (T3DVec3){{ g_roomMinX + g_wallThickness, maxY, g_roomMaxZ }};
+
+    // Right wall at maxX
+    g_roomWalls[1].min = (T3DVec3){{ g_roomMaxX - g_wallThickness, minY, g_roomMinZ }};
+    g_roomWalls[1].max = (T3DVec3){{ g_roomMaxX + g_wallThickness, maxY, g_roomMaxZ }};
+
+    // Back wall at minZ
+    g_roomWalls[2].min = (T3DVec3){{ g_roomMinX, minY, g_roomMinZ - g_wallThickness }};
+    g_roomWalls[2].max = (T3DVec3){{ g_roomMaxX, maxY, g_roomMinZ + g_wallThickness }};
+
+    // Front wall at maxZ
+    g_roomWalls[3].min = (T3DVec3){{ g_roomMinX, minY, g_roomMaxZ - g_wallThickness }};
+    g_roomWalls[3].max = (T3DVec3){{ g_roomMaxX, maxY, g_roomMaxZ + g_wallThickness }};
+
+    // Diagonal corner boxes: axis-aligned blocks at each corner cutting off space
+    float d = g_diagOffset;
+
+    // Build small AABB boxes along top-right diagonal from
+    // A=(maxX, maxZ-d) to B=(maxX-d, maxZ)
+    g_diagBoxCount = 0;
+    for (int s = 0; s < g_diagSteps; s++) {
+        float t = (float)(s + 1) / (float)g_diagSteps;
+        float cx = g_roomMaxX - t * d;
+        float cz = g_roomMaxZ - d + t * d;
+        g_diagBoxes[g_diagBoxCount].min = (T3DVec3){{ cx - g_diagBoxHalf, minY, cz - g_diagBoxHalf }};
+        g_diagBoxes[g_diagBoxCount].max = (T3DVec3){{ cx + g_diagBoxHalf, maxY, cz + g_diagBoxHalf }};
+        g_diagBoxCount++;
+    }
+
+    // Bottom-left diagonal: A=(minX, minZ + d) to B=(minX + d, minZ)
+    for (int s = 0; s < g_diagSteps; s++) {
+        float t = (float)(s + 1) / (float)g_diagSteps;
+        float cx = g_roomMinX + t * d;
+        float cz = g_roomMinZ + d - t * d;
+        g_diagBoxes[g_diagBoxCount].min = (T3DVec3){{ cx - g_diagBoxHalf, minY, cz - g_diagBoxHalf }};
+        g_diagBoxes[g_diagBoxCount].max = (T3DVec3){{ cx + g_diagBoxHalf, maxY, cz + g_diagBoxHalf }};
+        g_diagBoxCount++;
+    }
+}
+
+// Keep the player inside the square bounds (simple constraint)
+static void scene_constrain_character_to_room(void)
+{
+    float margin = character.capsuleCollider.radius * character.scale[0];
+    if (character.pos[0] < g_roomMinX + margin) character.pos[0] = g_roomMinX + margin;
+    if (character.pos[0] > g_roomMaxX - margin) character.pos[0] = g_roomMaxX - margin;
+    if (character.pos[2] < g_roomMinZ + margin) character.pos[2] = g_roomMinZ + margin;
+    if (character.pos[2] > g_roomMaxZ - margin) character.pos[2] = g_roomMaxZ - margin;
+
+    // Diagonal constraints only near top corners to mimic screenshot
+    float x = character.pos[0];
+    float z = character.pos[2];
+    float d = g_diagOffset;
+
+    // Top-right region: enforce x + z <= maxX + maxZ - d only when near the corner
+    if (x > g_roomMaxX - d && z > g_roomMaxZ - d) {
+        float threshold = g_roomMaxX + g_roomMaxZ - d;
+        float s = x + z;
+        if (s > threshold) {
+            float delta = s - threshold;
+            character.pos[0] -= delta * 0.5f;
+            character.pos[2] -= delta * 0.5f;
+        }
+    }
+
+    // Top-left region: enforce z - x <= (maxZ - minX - d) only when near the corner
+    if (x < g_roomMinX + d && z > g_roomMaxZ - d) {
+        float threshold = g_roomMaxZ - g_roomMinX - d;
+        float s = z - x;
+        if (s > threshold) {
+            float delta = s - threshold;
+            character.pos[0] += delta * 0.5f;
+            character.pos[2] -= delta * 0.5f;
+        }
+    }
+}
+
+// Debug-render the walls and visualize capsule vs walls
+static void scene_draw_room_colliders(T3DViewport *viewport)
+{
+    if (!debugDraw) return;
+
+    // Character capsule in world space (respecting scale)
+    T3DVec3 capA = {{
+        character.pos[0] + character.capsuleCollider.localCapA.v[0] * character.scale[0],
+        character.pos[1] + character.capsuleCollider.localCapA.v[1] * character.scale[1],
+        character.pos[2] + character.capsuleCollider.localCapA.v[2] * character.scale[2],
+    }};
+    T3DVec3 capB = {{
+        character.pos[0] + character.capsuleCollider.localCapB.v[0] * character.scale[0],
+        character.pos[1] + character.capsuleCollider.localCapB.v[1] * character.scale[1],
+        character.pos[2] + character.capsuleCollider.localCapB.v[2] * character.scale[2],
+    }};
+    float radius = character.capsuleCollider.radius * character.scale[0];
+
+    // Draw walls
+    for (int i = 0; i < g_roomWallCount; i++) {
+        debug_draw_aabb(viewport, &g_roomWalls[i].min, &g_roomWalls[i].max, DEBUG_COLORS[2]);
+    }
+
+    // Visualize collisions: red on hit, cyan otherwise
+    debug_draw_capsule_vs_aabb_list(viewport, &capA, &capB, radius, g_roomWalls, g_roomWallCount,
+                                    DEBUG_COLORS[2], DEBUG_COLORS[0]);
+
+    // Draw diagonal corner boxes and highlight on collision
+    for (int i = 0; i < g_diagBoxCount; i++) {
+        bool hit = scu_capsule_vs_rect_f(
+            capA.v, capB.v, radius,
+            g_diagBoxes[i].min.v, g_diagBoxes[i].max.v);
+        uint16_t color = hit ? DEBUG_COLORS[0] : DEBUG_COLORS[2];
+        debug_draw_aabb(viewport, &g_diagBoxes[i].min, &g_diagBoxes[i].max, color);
+    }
+}
 
 static bool screenTransition = false;
 static bool screenBreath = false;
@@ -349,7 +499,7 @@ void scene_title_init()
     character.scale[1] = MODEL_SCALE * 1.5f;
     character.scale[2] = MODEL_SCALE * 1.5f;
 
-    character.rot[1] = 0.0f;
+    character.rot[1] = TITLE_CHARACTER_YAW;
 
     character_update_position();
 
@@ -416,6 +566,8 @@ void scene_init(void)
     // collision_mesh_init();
 
     scene_load_environment();
+    // Initialize simple square room colliders
+    scene_init_room_colliders();
     
     g_boss = boss_spawn();
     if (!g_boss) {
@@ -594,7 +746,7 @@ void scene_init_playing(){
     character.scale[1] = MODEL_SCALE * 0.5f;
     character.scale[2] = MODEL_SCALE * 0.5f;
 
-    character.rot[1] = 0.0f;
+    character.rot[1] = TITLE_CHARACTER_YAW;
 
     character_update_position();
 
@@ -1162,6 +1314,10 @@ void scene_update(void)
     {
         
         character_update();
+        // Constrain player inside the simple square room
+        scene_constrain_character_to_room();
+        // Update character transform after constraint
+        character_update_position();
         if (bossActivated && g_boss) {
             boss_update(g_boss);
         }
@@ -1810,6 +1966,11 @@ void scene_draw(T3DViewport *viewport)
     // Overlay lock-on marker above the boss
     if(DEV_MODE)
         draw_lockon_indicator(viewport);
+
+    // Debug draw room colliders in gameplay
+    if (cutsceneState == CUTSCENE_NONE) {
+        scene_draw_room_colliders(viewport);
+    }
     
     bool cutsceneActive = scene_is_cutscene_active();
     GameState state = scene_get_game_state();
