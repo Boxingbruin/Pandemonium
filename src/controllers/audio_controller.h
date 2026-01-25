@@ -7,7 +7,6 @@
 // Mixer / Channel Layout
 #define MIXER_NUM_CHANNELS   16
 #define CHANNEL_MUSIC        0
-// #define CHANNEL_MUSIC_R      1   // reserved by stereo music
 #define SFX_CH_FIRST         2
 #define SFX_CH_LAST          (MIXER_NUM_CHANNELS - 1)
 
@@ -27,16 +26,16 @@ void audio_stop_music_fade(float durationSec);
 void audio_update_fade(float dt);
 
 // Scene SFX Loading (Option A)
-#define AUDIO_SCENE_MAX_SFX  64   // pick a limit that works for you
+#define AUDIO_SCENE_MAX_SFX  14
 
 void audio_scene_load_paths(const char *const *paths, int count);
 void audio_scene_unload_sfx(void);
 
 // Play a scene-local SFX index
 void audio_play_scene_sfx_dist(
-    int sceneSfxIndex,   // 0..(scene_count-1)
-    float baseVolume,    // 0..1
-    float distance       // >=0
+    int sceneSfxIndex,
+    float baseVolume,
+    float distance
 );
 
 void audio_stop_all_sfx(void);

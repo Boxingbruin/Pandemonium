@@ -1,4 +1,3 @@
-
 #include <libdragon.h>
 #include <string.h>
 #include <stdbool.h>
@@ -59,9 +58,9 @@ static float apply_volume_settings(int specificVolume) {
  * audio_scene_load_paths(paths, count) loads wav64s into indices [0..count-1].
  */
 
-static wav64_t g_scene_wavs[AUDIO_SCENE_MAX_SFX];
-static bool    g_scene_loaded[AUDIO_SCENE_MAX_SFX];
-static int     g_scene_count = 0;
+static wav64_t sceneWavs[AUDIO_SCENE_MAX_SFX];
+static bool    sceneLoaded[AUDIO_SCENE_MAX_SFX];
+static int     sceneCount = 0;
 
 /* ============================================================================
  * Dynamic SFX channel slots
@@ -70,19 +69,19 @@ static int     g_scene_count = 0;
 
 typedef struct {
     int   ch;
-    bool  in_use;
+    bool  inUse;
 
-    int   scene_index;     // 0..(g_scene_count-1)
-    float base_vol_mul;    // 0..1 from caller
-    float distance;        // last provided distance (static unless caller changes design)
+    int   sceneIndex;
+    float baseVolMul;
+    float distance;        // last provided distance
 } SfxSlot;
 
-static SfxSlot g_sfx_slots[MIXER_NUM_CHANNELS];
+static SfxSlot sfxSlots[MIXER_NUM_CHANNELS];
 
-// Distance attenuation parameters (tune these to your world scale)
-static float sfx_min_dist = 1.0f;   // full volume at/inside this
-static float sfx_max_dist = 30.0f;  // silent at/after this
-static float sfx_min_gain = 0.0f;   // floor gain (usually 0)
+// Distance attenuation parameters (tune to world scale)
+static float sfxMinDist = 1.0f;   // full volume at/inside this
+static float sfxMaxDist = 30.0f;  // silent at/after this
+static float sfxMinGain = 0.0f;   // floor gain
 
 static inline bool ch_is_sfx_eligible(int ch)
 {
@@ -92,34 +91,34 @@ static inline bool ch_is_sfx_eligible(int ch)
 // Linear falloff (cheap)
 static float sfx_distance_gain(float d)
 {
-    if (d <= sfx_min_dist) return 1.0f;
-    if (d >= sfx_max_dist) return sfx_min_gain;
+    if (d <= sfxMinDist) return 1.0f;
+    if (d >= sfxMaxDist) return sfxMinGain;
 
-    float t = (d - sfx_min_dist) / (sfx_max_dist - sfx_min_dist); // 0..1
+    float t = (d - sfxMinDist) / (sfxMaxDist - sfxMinDist); // 0..1
     t = clamp01(t);
 
     float g = 1.0f - t;
-    if (g < sfx_min_gain) g = sfx_min_gain;
+    if (g < sfxMinGain) g = sfxMinGain;
     return g;
 }
 
 static void sfx_slots_init(void)
 {
     for (int i = 0; i < MIXER_NUM_CHANNELS; i++) {
-        g_sfx_slots[i].ch = i;
-        g_sfx_slots[i].in_use = false;
-        g_sfx_slots[i].scene_index = -1;
-        g_sfx_slots[i].base_vol_mul = 1.0f;
-        g_sfx_slots[i].distance = 0.0f;
+        sfxSlots[i].ch = i;
+        sfxSlots[i].inUse = false;
+        sfxSlots[i].sceneIndex = -1;
+        sfxSlots[i].baseVolMul = 1.0f;
+        sfxSlots[i].distance = 0.0f;
     }
 }
 
-static void sfx_slot_release(SfxSlot *s)
+static void sfx_slot_release(SfxSlot *slot)
 {
-    if (!s) return;
-    mixer_ch_stop(s->ch);
-    s->in_use = false;
-    s->scene_index = -1;
+    if (!slot) return;
+    mixer_ch_stop(slot->ch);
+    slot->inUse = false;
+    slot->sceneIndex = -1;
 }
 
 static void sfx_reap_finished(void)
@@ -127,11 +126,11 @@ static void sfx_reap_finished(void)
     for (int ch = 0; ch < MIXER_NUM_CHANNELS; ch++) {
         if (!ch_is_sfx_eligible(ch)) continue;
 
-        SfxSlot *s = &g_sfx_slots[ch];
-        if (!s->in_use) continue;
+        SfxSlot *slot = &sfxSlots[ch];
+        if (!slot->inUse) continue;
 
         if (!mixer_ch_playing(ch)) {
-            sfx_slot_release(s);
+            sfx_slot_release(slot);
         }
     }
 }
@@ -144,8 +143,8 @@ static SfxSlot* sfx_find_free_slot(void)
     for (int ch = 0; ch < MIXER_NUM_CHANNELS; ch++) {
         if (!ch_is_sfx_eligible(ch)) continue;
 
-        SfxSlot *s = &g_sfx_slots[ch];
-        if (!s->in_use) return s;
+        SfxSlot *slot = &sfxSlots[ch];
+        if (!slot->inUse) return slot;
     }
     return NULL;
 }
@@ -159,12 +158,12 @@ static void sfx_update_volumes(void)
     for (int ch = 0; ch < MIXER_NUM_CHANNELS; ch++) {
         if (!ch_is_sfx_eligible(ch)) continue;
 
-        SfxSlot *s = &g_sfx_slots[ch];
-        if (!s->in_use) continue;
+        SfxSlot *slot = &sfxSlots[ch];
+        if (!slot->inUse) continue;
         if (!mixer_ch_playing(ch)) continue;
 
-        float gain = sfx_distance_gain(s->distance);
-        float v = sfxBase * s->base_vol_mul * gain;
+        float gain = sfx_distance_gain(slot->distance);
+        float v = sfxBase * slot->baseVolMul * gain;
         mixer_ch_set_vol(ch, v, v);
     }
 }
@@ -185,7 +184,7 @@ static void audio_refresh_all_channel_volumes(void)
 
         for (int ch = 0; ch < MIXER_NUM_CHANNELS; ch++) {
             if (!ch_is_sfx_eligible(ch)) continue;
-            if (g_sfx_slots[ch].in_use) mixer_ch_set_vol(ch, 0.0f, 0.0f);
+            if (sfxSlots[ch].inUse) mixer_ch_set_vol(ch, 0.0f, 0.0f);
         }
     }
 }
@@ -201,14 +200,14 @@ void audio_scene_unload_sfx(void)
     audio_stop_all_sfx();
 
     // close all loaded wavs
-    for (int i = 0; i < g_scene_count; i++) {
-        if (g_scene_loaded[i]) {
-            wav64_close(&g_scene_wavs[i]);
-            g_scene_loaded[i] = false;
+    for (int i = 0; i < sceneCount; i++) {
+        if (sceneLoaded[i]) {
+            wav64_close(&sceneWavs[i]);
+            sceneLoaded[i] = false;
         }
     }
 
-    g_scene_count = 0;
+    sceneCount = 0;
 }
 
 void audio_scene_load_paths(const char *const *paths, int count)
@@ -220,17 +219,17 @@ void audio_scene_load_paths(const char *const *paths, int count)
     if (count > AUDIO_SCENE_MAX_SFX)
         count = AUDIO_SCENE_MAX_SFX;
 
-    g_scene_count = count;
+    sceneCount = count;
 
-    for (int i = 0; i < g_scene_count; i++) {
-        g_scene_loaded[i] = false;
+    for (int i = 0; i < sceneCount; i++) {
+        sceneLoaded[i] = false;
 
         const char *p = paths[i];
         if (!p) continue;
 
-        wav64_open(&g_scene_wavs[i], p);
-        wav64_set_loop(&g_scene_wavs[i], false);
-        g_scene_loaded[i] = true;
+        wav64_open(&sceneWavs[i], p);
+        wav64_set_loop(&sceneWavs[i], false);
+        sceneLoaded[i] = true;
     }
 }
 
@@ -253,9 +252,9 @@ void audio_initialize(void)
     mixer_ch_set_limits(CHANNEL_MUSIC, 0, 22050, 0);
 
     // clear scene cache
-    g_scene_count = 0;
+    sceneCount = 0;
     for (int i = 0; i < AUDIO_SCENE_MAX_SFX; i++) {
-        g_scene_loaded[i] = false;
+        sceneLoaded[i] = false;
     }
 
     sfx_slots_init();
@@ -318,7 +317,7 @@ void audio_pause_music(void)
 
     for (int ch = 0; ch < MIXER_NUM_CHANNELS; ch++) {
         if (!ch_is_sfx_eligible(ch)) continue;
-        if (g_sfx_slots[ch].in_use) {
+        if (sfxSlots[ch].inUse) {
             mixer_ch_set_vol(ch, 0.0f, 0.0f);
         }
     }
@@ -384,8 +383,8 @@ void audio_play_scene_sfx_dist(int sceneSfxIndex, float baseVolume, float distan
 {
     if (globalMute || pauseMuted) return;
 
-    if (sceneSfxIndex < 0 || sceneSfxIndex >= g_scene_count) return;
-    if (!g_scene_loaded[sceneSfxIndex]) return;
+    if (sceneSfxIndex < 0 || sceneSfxIndex >= sceneCount) return;
+    if (!sceneLoaded[sceneSfxIndex]) return;
 
     baseVolume = clamp01(baseVolume);
     if (distance < 0.0f) distance = 0.0f;
@@ -393,23 +392,23 @@ void audio_play_scene_sfx_dist(int sceneSfxIndex, float baseVolume, float distan
     SfxSlot *slot = sfx_find_free_slot();
     if (!slot) return; // all channels busy => drop
 
-    slot->in_use = true;
-    slot->scene_index = sceneSfxIndex;
-    slot->base_vol_mul = baseVolume;
+    slot->inUse = true;
+    slot->sceneIndex = sceneSfxIndex;
+    slot->baseVolMul = baseVolume;
     slot->distance = distance;
 
     float gain = sfx_distance_gain(distance);
     float finalVol = apply_volume_settings(sfxVolume) * baseVolume * gain;
     mixer_ch_set_vol(slot->ch, finalVol, finalVol);
 
-    wav64_play(&g_scene_wavs[sceneSfxIndex], slot->ch);
+    wav64_play(&sceneWavs[sceneSfxIndex], slot->ch);
 }
 
 void audio_stop_all_sfx(void)
 {
     for (int ch = 0; ch < MIXER_NUM_CHANNELS; ch++) {
         if (!ch_is_sfx_eligible(ch)) continue;
-        sfx_slot_release(&g_sfx_slots[ch]);
+        sfx_slot_release(&sfxSlots[ch]);
     }
 }
 
