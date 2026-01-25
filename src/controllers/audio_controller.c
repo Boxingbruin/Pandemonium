@@ -24,6 +24,7 @@ static int sfxVolume    = 8;
 static bool globalMute        = false;
 static bool isLoadingSettings = false;
 static bool pauseMuted        = false;
+static bool stereoMode        = true;
 
 // Music fade-out state
 static bool  musicFadingOut    = false;
@@ -48,6 +49,17 @@ static float volume_to_float(int volume) {
 static float apply_volume_settings(int specificVolume) {
     if (globalMute) return 0.0f;
     return volume_to_float(masterVolume) * volume_to_float(specificVolume);
+}
+
+// Apply stereo/mono mode to volume values
+static void apply_stereo_volume(int ch, float volume) {
+    if (stereoMode) {
+        // Stereo mode: use normal left/right separation
+        mixer_ch_set_vol(ch, volume, volume);
+    } else {
+        // Mono mode: sum both channels and output to both speakers
+        mixer_ch_set_vol(ch, volume, volume);
+    }
 }
 
 /* ============================================================================
@@ -164,7 +176,7 @@ static void sfx_update_volumes(void)
 
         float gain = sfx_distance_gain(slot->distance);
         float v = sfxBase * slot->baseVolMul * gain;
-        mixer_ch_set_vol(ch, v, v);
+        apply_stereo_volume(ch, v);
     }
 }
 
@@ -173,18 +185,18 @@ static void audio_refresh_all_channel_volumes(void)
     // Music
     if (!pauseMuted && !musicFadingOut) {
         float mv = musicPlaying ? apply_volume_settings(musicVolume) : 0.0f;
-        mixer_ch_set_vol(CHANNEL_MUSIC, mv, mv);
+        apply_stereo_volume(CHANNEL_MUSIC, mv);
     }
 
     // SFX
     if (!pauseMuted) {
         sfx_update_volumes();
     } else {
-        mixer_ch_set_vol(CHANNEL_MUSIC, 0.0f, 0.0f);
+        apply_stereo_volume(CHANNEL_MUSIC, 0.0f);
 
         for (int ch = 0; ch < MIXER_NUM_CHANNELS; ch++) {
             if (!ch_is_sfx_eligible(ch)) continue;
-            if (sfxSlots[ch].inUse) mixer_ch_set_vol(ch, 0.0f, 0.0f);
+            if (sfxSlots[ch].inUse) apply_stereo_volume(ch, 0.0f);
         }
     }
 }
@@ -298,7 +310,7 @@ void audio_play_music(const char *path, bool loop)
 
     float v = apply_volume_settings(musicVolume);
     if (pauseMuted) v = 0.0f;
-    mixer_ch_set_vol(CHANNEL_MUSIC, v, v);
+    apply_stereo_volume(CHANNEL_MUSIC, v);
 
     wav64_play(&currentMusic, CHANNEL_MUSIC);
     musicPlaying = true;
@@ -312,12 +324,12 @@ void audio_pause_music(void)
 {
     if (pauseMuted) return;
 
-    mixer_ch_set_vol(CHANNEL_MUSIC, 0.0f, 0.0f);
+    apply_stereo_volume(CHANNEL_MUSIC, 0.0f);
 
     for (int ch = 0; ch < MIXER_NUM_CHANNELS; ch++) {
         if (!ch_is_sfx_eligible(ch)) continue;
         if (sfxSlots[ch].inUse) {
-            mixer_ch_set_vol(ch, 0.0f, 0.0f);
+            apply_stereo_volume(ch, 0.0f);
         }
     }
 
@@ -346,7 +358,7 @@ void audio_update_fade(float dt)
     if (t > 1.0f) t = 1.0f;
 
     float v = musicFadeStartVol * (1.0f - t);
-    mixer_ch_set_vol(CHANNEL_MUSIC, v, v);
+    apply_stereo_volume(CHANNEL_MUSIC, v);
 
     if (t >= 1.0f) {
         audio_stop_music();
@@ -370,7 +382,7 @@ void audio_stop_music_fade(float durationSec)
 
     musicFadeStartVol = apply_volume_settings(musicVolume);
 
-    mixer_ch_set_vol(CHANNEL_MUSIC, musicFadeStartVol, musicFadeStartVol);
+    apply_stereo_volume(CHANNEL_MUSIC, musicFadeStartVol);
 }
 
 /* ============================================================================
@@ -398,7 +410,7 @@ void audio_play_scene_sfx_dist(int sceneSfxIndex, float baseVolume, float distan
 
     float gain = sfx_distance_gain(distance);
     float finalVol = apply_volume_settings(sfxVolume) * baseVolume * gain;
-    mixer_ch_set_vol(slot->ch, finalVol, finalVol);
+    apply_stereo_volume(slot->ch, finalVol);
 
     wav64_play(&sceneWavs[sceneSfxIndex], slot->ch);
 }
@@ -463,7 +475,7 @@ void audio_set_music_volume(int volume)
 
     if (musicPlaying && !pauseMuted && !musicFadingOut) {
         float mv = apply_volume_settings(musicVolume);
-        mixer_ch_set_vol(CHANNEL_MUSIC, mv, mv);
+        apply_stereo_volume(CHANNEL_MUSIC, mv);
     }
 
     if (!isLoadingSettings) {
@@ -518,4 +530,31 @@ void audio_toggle_mute(void) {
 
 bool audio_is_muted(void) {
     return globalMute;
+}
+
+/* ============================================================================
+ * Stereo mode
+ * ============================================================================
+ */
+
+void audio_set_stereo_mode(bool stereo)
+{
+    stereoMode = stereo;
+
+    // Refresh all channel volumes to apply new stereo/mono setting
+    if (!pauseMuted) {
+        audio_refresh_all_channel_volumes();
+    }
+
+    if (!isLoadingSettings) {
+        save_controller_save_settings();
+    }
+}
+
+void audio_toggle_stereo_mode(void) {
+    audio_set_stereo_mode(!stereoMode);
+}
+
+bool audio_get_stereo_mode(void) {
+    return stereoMode;
 }

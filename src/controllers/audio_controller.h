@@ -58,6 +58,11 @@ void audio_set_mute(bool muted);
 void audio_toggle_mute(void);
 bool audio_is_muted(void);
 
+// Stereo mode
+void audio_set_stereo_mode(bool stereo);
+void audio_toggle_stereo_mode(void);
+bool audio_get_stereo_mode(void);
+
 // Settings load guard
 void audio_set_loading_mode(bool loading);
 

@@ -17,6 +17,7 @@ static uint32_t calculate_checksum(const SaveData* data) {
     checksum ^= (uint32_t)data->musicVolume << 8;
     checksum ^= (uint32_t)data->sfxVolume << 16;
     checksum ^= (uint32_t)data->globalMute << 24;
+    checksum ^= (uint32_t)data->stereoMode << 25;
     return checksum;
 }
 
@@ -80,10 +81,24 @@ bool save_controller_load_settings(void) {
         return false;
     }
     
-    // Validate checksum (using function that excludes checksum field)
+    // Handle backward compatibility - set default for stereoMode if loading old save
+    // Check if this might be an old save by attempting validation with old checksum
     uint32_t expectedChecksum = calculate_checksum_for_validation(&loadedData);
     if (loadedData.checksum != expectedChecksum) {
-        return false;
+        // Try validating with old checksum (without stereoMode)
+        uint32_t oldChecksum = SAVE_MAGIC;
+        oldChecksum ^= (uint32_t)loadedData.masterVolume;
+        oldChecksum ^= (uint32_t)loadedData.musicVolume << 8;
+        oldChecksum ^= (uint32_t)loadedData.sfxVolume << 16;
+        oldChecksum ^= (uint32_t)loadedData.globalMute << 24;
+        
+        if (loadedData.checksum == oldChecksum) {
+            // This is an old save - set stereo mode to default (true)
+            loadedData.stereoMode = true;
+            debugf("Loaded old save format, setting stereo mode to default (true)\n");
+        } else {
+            return false;
+        }
     }
     
     // Validate data ranges
@@ -101,6 +116,7 @@ bool save_controller_load_settings(void) {
     audio_set_music_volume(loadedData.musicVolume);
     audio_set_sfx_volume(loadedData.sfxVolume);
     audio_set_mute(loadedData.globalMute);
+    audio_set_stereo_mode(loadedData.stereoMode);
     
     // Disable loading mode
     audio_set_loading_mode(false);
@@ -120,6 +136,7 @@ bool save_controller_save_settings(void) {
     saveData.musicVolume = audio_get_music_volume();
     saveData.sfxVolume = audio_get_sfx_volume();
     saveData.globalMute = audio_is_muted();
+    saveData.stereoMode = audio_get_stereo_mode();
     saveData.checksum = calculate_checksum(&saveData);
     
     // Check if we already have a save entry

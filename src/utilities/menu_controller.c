@@ -37,6 +37,7 @@ static const char* audioMenuOptions[MENU_AUDIO_COUNT] = {
     "Music Volume: %d", 
     "SFX Volume: %d",
     "Mute All: %s",
+    "Audio Mode: %s",
     "Back"
 };
 
@@ -159,6 +160,11 @@ void menu_controller_update(void) {
                         audio_toggle_mute();
                     }
                     break;
+                case MENU_AUDIO_STEREO_MODE:
+                    if (leftJustPressed || rightJustPressed) {
+                        audio_toggle_stereo_mode();
+                    }
+                    break;
             }
         }
         
@@ -166,6 +172,9 @@ void menu_controller_update(void) {
             switch (selectedOption) {
                 case MENU_AUDIO_MUTE_TOGGLE:
                     audio_toggle_mute();
+                    break;
+                case MENU_AUDIO_STEREO_MODE:
+                    audio_toggle_stereo_mode();
                     break;
                 case MENU_AUDIO_BACK:
                     currentMenu = MENU_MAIN;
@@ -311,6 +320,8 @@ void menu_controller_draw(void) {
                 sprintf(optionText, audioMenuOptions[i], audio_get_sfx_volume());
             } else if (i == MENU_AUDIO_MUTE_TOGGLE) {
                 sprintf(optionText, audioMenuOptions[i], audio_is_muted() ? "ON" : "OFF");
+            } else if (i == MENU_AUDIO_STEREO_MODE) {
+                sprintf(optionText, audioMenuOptions[i], audio_get_stereo_mode() ? "Stereo" : "Mono");
             } else {
                 strcpy(optionText, audioMenuOptions[i]);
             }

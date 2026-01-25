@@ -9,6 +9,7 @@ typedef struct {
     int musicVolume;
     int sfxVolume;
     bool globalMute;
+    bool stereoMode; // true = stereo, false = mono
     uint32_t checksum; // Simple validation
 } SaveData;
 
