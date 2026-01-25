@@ -136,6 +136,68 @@ static float roomY = -1.0f;
 // Title scene character facing: rotate to face down the hall
 static const float TITLE_CHARACTER_YAW = T3D_PI * 0.5f; // +90° around Y
 
+static bool screenTransition = false;
+static bool screenBreath = false;
+
+#define TITLE_DIALOG_COUNT (sizeof(titleDialogs) / sizeof(titleDialogs[0]))
+
+static const char *titleDialogs[] = {
+    ">The Demon\nking has\nforced\nthe land\ninto a\ncentury long\ndarkness.",
+    ">The King\nhas trained\na legion\nof powerful\nknights\nsworn to\nprotect the\nthrone.",
+    ">These\nbattle born\nknights are\ntaken from\ntheir\nfamilies and\ncast into\nservitude.",
+    ">Enduring\nblade and\ntorment\nuntil nothing\nremains but\nhollow armor."
+};
+
+
+static const char *phase1Dialogs[] = {
+    "^Those who approach the\nthrone of gold~ ^fall at my\nblade.",
+    "^A Knight?~ >Where is your\n^loyalty...",
+    "^Where is your...~ <Fear.",
+};
+bool cutsceneDialogActive = false;
+
+// Boss title fade control (shown during intro, fades out when fight starts)
+static float bossTitleFade = 0.0f;
+static float bossTitleFadeSpeed = 1.8f;
+
+// progress for boss/player UIs
+static float bossUiIntro = 1.0f;
+static float playerUiIntro = 1.0f;
+static float uiIntroSpeed = 1.5f;
+
+static CutsceneState cutsceneState = CUTSCENE_PHASE1_INTRO;
+static float cutsceneTimer = 0.0f;
+static float cutsceneCameraTimer = 0.0f;  // Separate timer for camera movement (doesn't reset)
+static bool bossActivated = false;
+static Boss* g_boss = NULL;  // Boss instance pointer
+static T3DVec3 cutsceneCamPosStart;  // Initial camera position (further back)
+static T3DVec3 cutsceneCamPosEnd;    // Final camera position (closer to boss)
+
+// Game state management
+static GameState gameState = GAME_STATE_TITLE;
+static bool lastMenuActive = false;
+
+// Input state tracking
+static bool lastAPressed = false;
+static bool lastZPressed = false;
+
+static const char *SCENE1_SFX_PATHS[SCENE1_SFX_COUNT] = {
+    [SCENE1_SFX_TITLE_WALK]  = "rom:/audio/sfx/title_screen_walk_effect-22k.wav64",
+
+    [SCENE1_SFX_BOSS_SWING1] = "rom:/audio/sfx/boss/boss_swing1.wav64",
+    [SCENE1_SFX_BOSS_SWING2] = "rom:/audio/sfx/boss/boss_swing2.wav64",
+    [SCENE1_SFX_BOSS_SWING3] = "rom:/audio/sfx/boss/boss_swing3.wav64",
+    [SCENE1_SFX_BOSS_SWING4] = "rom:/audio/sfx/boss/boss_swing4.wav64",
+
+    [SCENE1_SFX_BOSS_SMASH1] = "rom:/audio/sfx/boss/boss_smash1.wav64",
+    [SCENE1_SFX_BOSS_SMASH2] = "rom:/audio/sfx/boss/boss_smash2.wav64",
+    [SCENE1_SFX_BOSS_SMASH3] = "rom:/audio/sfx/boss/boss_smash3.wav64",
+
+    [SCENE1_SFX_BOSS_LUNGE]  = "rom:/audio/sfx/boss/boss_lunge_attack.wav64",
+    [SCENE1_SFX_BOSS_LAND1]  = "rom:/audio/sfx/boss/boss_land1.wav64",
+    [SCENE1_SFX_BOSS_LAND2]  = "rom:/audio/sfx/boss/boss_land2.wav64",
+};
+
 // --- Room collider helpers (depend on roomY) ---
 static void scene_init_room_colliders(void)
 {
@@ -259,56 +321,6 @@ static void scene_draw_room_colliders(T3DViewport *viewport)
     }
 }
 
-static bool screenTransition = false;
-static bool screenBreath = false;
-
-static const char *titleDialogs[] = {
-    ">The Demon\nking has\nforced\nthe land\ninto a\ncentury long\ndarkness.",
-    ">The King\nhas trained\na legion\nof powerful\nknights\nsworn to\nprotect the\nthrone.",
-    ">These\nbattle born\nknights are\ntaken from\ntheir\nfamilies and\ncast into\nservitude.",
-    ">Enduring\nblade and\ntorment\nuntil nothing\nremains but\nhollow armor."
-};
-#define TITLE_DIALOG_COUNT (sizeof(titleDialogs) / sizeof(titleDialogs[0]))
-
-static const char *phase1Dialogs[] = {
-    "^Those who approach the\nthrone of gold~ ^fall at my\nblade.",
-    "^A Knight?~ >Where is your\n^loyalty...",
-    "^Where is your...~ <Fear.",
-};
-bool cutsceneDialogActive = false;
-
-// Boss title fade control (shown during intro, fades out when fight starts)
-static float bossTitleFade = 0.0f;
-static float bossTitleFadeSpeed = 1.8f;
-
-// progress for boss/player UIs
-static float bossUiIntro = 1.0f;
-static float playerUiIntro = 1.0f;
-static float uiIntroSpeed = 1.5f;
-
-static CutsceneState cutsceneState = CUTSCENE_PHASE1_INTRO;
-static float cutsceneTimer = 0.0f;
-static float cutsceneCameraTimer = 0.0f;  // Separate timer for camera movement (doesn't reset)
-static bool bossActivated = false;
-static Boss* g_boss = NULL;  // Boss instance pointer
-static T3DVec3 cutsceneCamPosStart;  // Initial camera position (further back)
-static T3DVec3 cutsceneCamPosEnd;    // Final camera position (closer to boss)
-
-// Game state management
-static GameState gameState = GAME_STATE_TITLE;
-static bool lastMenuActive = false;
-
-// Input state tracking
-static bool lastAPressed = false;
-static bool lastZPressed = false;
-
-// All SFX:
-static wav64_t characterTitleSfx;
-
-void scene_load_sfx(){
-    wav64_open(&characterTitleSfx, "rom:/audio/sfx/title_screen_walk_effect-22k.wav64");
-    wav64_set_loop(&characterTitleSfx, false);
-}
 void scene_load_environment(){
 
     // ===== LOAD MAP =====
@@ -536,7 +548,7 @@ void scene_init(void)
 {
     // ==== Sounds ====
 
-    scene_load_sfx();
+    audio_scene_load_paths(SCENE1_SFX_PATHS, SCENE1_SFX_COUNT);
 
     // ==== Camera ====
 
@@ -1193,17 +1205,17 @@ void scene_update_title(void)
     if(gameState == GAME_STATE_TITLE_TRANSITION)
     {
         if(titleStartGameTimer >= titleStartGameTime){
-            audio_stop_sfx(0);
-            scene_init_cutscene();
             titleStartGameTimer = 0.0f;
+            scene_init_cutscene();
+            audio_stop_all_sfx(); // TODO: eventually we probably want a stop specific sound effect ID but that would add complexity at this point
         }
         else
         {
             if(btn.start || btn.b)
             {
-                scene_init_cutscene();
                 titleStartGameTimer = 0.0f;
-                audio_stop_sfx(0);
+                scene_init_cutscene();
+                audio_stop_all_sfx();  // TODO: eventually we probably want a stop specific sound effect ID but that would add complexity at this point
                 return;
             }
 
@@ -1238,7 +1250,11 @@ void scene_update_title(void)
         camera_breath_active(false); 
         screenBreath = false; 
         audio_stop_music_fade(6); // duration
-        audio_play_sfx(&characterTitleSfx, 0, 10);
+        audio_play_scene_sfx_dist(
+            SCENE1_SFX_TITLE_WALK, // sfx id
+            1.0f,                  // base volume
+            0.0f                   // distance
+        );
         return;
     }
 
@@ -2099,7 +2115,7 @@ void scene_delete_environment(void)
     if (roomFloorMatrix) { free_uncached(roomFloorMatrix); roomFloorMatrix = NULL; }
 }
 
-void scene_cleanup(void)
+void scene_cleanup(void) // Realistically we never want to call this for the jam.
 {
     //collision_mesh_cleanup();
     scene_delete_environment();
@@ -2113,4 +2129,5 @@ void scene_cleanup(void)
     }
 
     dialog_controller_free();
+    audio_scene_unload_sfx();
 }

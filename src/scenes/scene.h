@@ -27,6 +27,24 @@ typedef enum {
     CUTSCENE_PHASE1_INTRO_END
 } CutsceneState;
 
+typedef enum Scene1Sfx
+{
+    SCENE1_SFX_TITLE_WALK = 0,
+
+    SCENE1_SFX_BOSS_SWING1, 
+    SCENE1_SFX_BOSS_SWING2, 
+    SCENE1_SFX_BOSS_SWING3, 
+    SCENE1_SFX_BOSS_SWING4, 
+    SCENE1_SFX_BOSS_SMASH1, 
+    SCENE1_SFX_BOSS_SMASH2, 
+    SCENE1_SFX_BOSS_SMASH3, 
+    SCENE1_SFX_BOSS_LUNGE, 
+    SCENE1_SFX_BOSS_LAND1, 
+    SCENE1_SFX_BOSS_LAND2,
+
+    SCENE1_SFX_COUNT
+} Scene1Sfx; // TODO: Change this from a generic name to a scene specific name.
+
 void scene_init(void);
 void scene_reset(void);
 void scene_restart(void);
