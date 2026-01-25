@@ -51,7 +51,7 @@ static float apply_volume_settings(int specificVolume) {
 }
 
 /* ============================================================================
- * Scene SFX Cache (Option A)
+ * Scene SFX Cache
  * ============================================================================
  *
  * The scene owns the IDs (enum values) and the path table.
@@ -73,7 +73,7 @@ typedef struct {
 
     int   sceneIndex;
     float baseVolMul;
-    float distance;        // last provided distance
+    float distance; // last provided distance
 } SfxSlot;
 
 static SfxSlot sfxSlots[MIXER_NUM_CHANNELS];
@@ -190,7 +190,7 @@ static void audio_refresh_all_channel_volumes(void)
 }
 
 /* ============================================================================
- * Scene SFX API (Option A)
+ * Scene SFX API
  * ============================================================================
  */
 
@@ -248,7 +248,6 @@ void audio_initialize(void)
     mixer_init(MIXER_NUM_CHANNELS);
     wav64_init_compression(1);
 
-    // Base channel only; stereo uses +1 internally
     mixer_ch_set_limits(CHANNEL_MUSIC, 0, 22050, 0);
 
     // clear scene cache
