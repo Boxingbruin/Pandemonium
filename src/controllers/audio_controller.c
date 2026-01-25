@@ -58,6 +58,7 @@ static void apply_stereo_volume(int ch, float volume) {
         mixer_ch_set_vol(ch, volume, volume);
     } else {
         // Mono mode: sum both channels and output to both speakers
+        // TODO: Not implemented yet, just use same volume for both
         mixer_ch_set_vol(ch, volume, volume);
     }
 }
