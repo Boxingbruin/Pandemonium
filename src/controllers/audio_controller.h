@@ -25,8 +25,8 @@ void audio_resume_music(void);
 void audio_stop_music_fade(float durationSec);
 void audio_update_fade(float dt);
 
-// Scene SFX Loading (Option A)
-#define AUDIO_SCENE_MAX_SFX  14
+// Scene SFX Loading
+#define AUDIO_SCENE_MAX_SFX  64
 
 void audio_scene_load_paths(const char *const *paths, int count);
 void audio_scene_unload_sfx(void);
