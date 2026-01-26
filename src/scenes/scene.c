@@ -10,6 +10,9 @@
 #include <stdio.h>
 #include <stdint.h>
 
+#include "scene.h"
+#include "scene_sfx.h"
+
 #include "audio_controller.h"
 
 #include "camera_controller.h"
@@ -22,7 +25,6 @@
 
 #include "globals.h"
 
-#include "scene.h"
 #include "character.h"
 #include "game/bosses/boss.h"
 #include "game/bosses/boss_anim.h"
@@ -184,18 +186,20 @@ static bool lastZPressed = false;
 static const char *SCENE1_SFX_PATHS[SCENE1_SFX_COUNT] = {
     [SCENE1_SFX_TITLE_WALK]  = "rom:/audio/sfx/title_screen_walk_effect-22k.wav64",
 
-    [SCENE1_SFX_BOSS_SWING1] = "rom:/audio/sfx/boss/boss_swing1.wav64",
-    [SCENE1_SFX_BOSS_SWING2] = "rom:/audio/sfx/boss/boss_swing2.wav64",
-    [SCENE1_SFX_BOSS_SWING3] = "rom:/audio/sfx/boss/boss_swing3.wav64",
-    [SCENE1_SFX_BOSS_SWING4] = "rom:/audio/sfx/boss/boss_swing4.wav64",
+    [SCENE1_SFX_BOSS_SWING1] = "rom:/audio/sfx/boss/boss_swing1_22k.wav64",
+    [SCENE1_SFX_BOSS_SWING2] = "rom:/audio/sfx/boss/boss_swing2_22k.wav64",
+    [SCENE1_SFX_BOSS_SWING3] = "rom:/audio/sfx/boss/boss_swing3_22k.wav64",
+    [SCENE1_SFX_BOSS_SWING4] = "rom:/audio/sfx/boss/boss_swing4_22k.wav64",
 
-    [SCENE1_SFX_BOSS_SMASH1] = "rom:/audio/sfx/boss/boss_smash1.wav64",
-    [SCENE1_SFX_BOSS_SMASH2] = "rom:/audio/sfx/boss/boss_smash2.wav64",
-    [SCENE1_SFX_BOSS_SMASH3] = "rom:/audio/sfx/boss/boss_smash3.wav64",
+    [SCENE1_SFX_BOSS_SMASH1] = "rom:/audio/sfx/boss/boss_smash1_22k.wav64",
+    [SCENE1_SFX_BOSS_SMASH2] = "rom:/audio/sfx/boss/boss_smash2_22k.wav64",
+    [SCENE1_SFX_BOSS_SMASH3] = "rom:/audio/sfx/boss/boss_smash3_22k.wav64",
 
-    [SCENE1_SFX_BOSS_LUNGE]  = "rom:/audio/sfx/boss/boss_lunge_attack.wav64",
-    [SCENE1_SFX_BOSS_LAND1]  = "rom:/audio/sfx/boss/boss_land1.wav64",
-    [SCENE1_SFX_BOSS_LAND2]  = "rom:/audio/sfx/boss/boss_land2.wav64",
+    [SCENE1_SFX_BOSS_LUNGE]  = "rom:/audio/sfx/boss/boss_lunge_attack_22k.wav64",
+    [SCENE1_SFX_BOSS_LAND1]  = "rom:/audio/sfx/boss/boss_land1_22k.wav64",
+    [SCENE1_SFX_BOSS_LAND2]  = "rom:/audio/sfx/boss/boss_land2_22k.wav64",
+
+    [SCENE1_SFX_BOSS_STEP1]  = "rom:/audio/sfx/boss/boss_step1_22k.wav64",
 };
 
 // --- Room collider helpers (depend on roomY) ---

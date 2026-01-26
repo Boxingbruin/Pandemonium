@@ -226,4 +226,3 @@ void boss_free(Boss* boss);
 Boss* boss_get_instance(void);
 
 #endif // BOSS_H
-

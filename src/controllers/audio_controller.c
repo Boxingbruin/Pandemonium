@@ -17,9 +17,9 @@ static char currentMusicPath[256] = "";
 static bool currentMusicLoop = false;
 
 // Volume control (0-10 scale)
-static int masterVolume = 8;
-static int musicVolume  = 8;
-static int sfxVolume    = 8;
+static int masterVolume = 10;
+static int musicVolume  = 6;
+static int sfxVolume    = 10;
 
 static bool globalMute        = false;
 static bool isLoadingSettings = false;
@@ -92,8 +92,8 @@ typedef struct {
 static SfxSlot sfxSlots[MIXER_NUM_CHANNELS];
 
 // Distance attenuation parameters (tune to world scale)
-static float sfxMinDist = 1.0f;   // full volume at/inside this
-static float sfxMaxDist = 30.0f;  // silent at/after this
+static float sfxMinDist = 10.0f;   // full volume at/inside this
+static float sfxMaxDist = 200.0f;  // silent at/after this
 static float sfxMinGain = 0.0f;   // floor gain
 
 static inline bool ch_is_sfx_eligible(int ch)
@@ -177,6 +177,7 @@ static void sfx_update_volumes(void)
 
         float gain = sfx_distance_gain(slot->distance);
         float v = sfxBase * slot->baseVolMul * gain;
+        v = clamp01(v);
         apply_stereo_volume(ch, v);
     }
 }
@@ -387,7 +388,7 @@ void audio_stop_music_fade(float durationSec)
 }
 
 /* ============================================================================
- * SFX: dynamic + distance-aware (Option A: scene index)
+ * SFX: dynamic + distance-aware
  * ============================================================================
  */
 
@@ -411,6 +412,7 @@ void audio_play_scene_sfx_dist(int sceneSfxIndex, float baseVolume, float distan
 
     float gain = sfx_distance_gain(distance);
     float finalVol = apply_volume_settings(sfxVolume) * baseVolume * gain;
+    finalVol = clamp01(finalVol);
     apply_stereo_volume(slot->ch, finalVol);
 
     wav64_play(&sceneWavs[sceneSfxIndex], slot->ch);

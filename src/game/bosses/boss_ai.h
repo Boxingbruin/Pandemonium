@@ -2,6 +2,7 @@
 #define BOSS_AI_H
 
 #include "boss.h"
+#include "boss_sfx.h"
 
 // AI module - decides intent (states/attacks)
 // Must NOT include tiny3d animation headers
