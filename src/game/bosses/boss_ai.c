@@ -7,6 +7,7 @@
 
 #include "boss_ai.h"
 #include "boss.h"
+#include "boss_sfx.h"
 
 #include <math.h>
 #include <stdlib.h>
@@ -955,6 +956,11 @@ void boss_ai_update(Boss* boss, BossIntent* out_intent) {
                 }
                 boss->strafeDirection = bossStrafeDirection;
                 out_intent->anim = (boss->strafeDirection > 0.0f) ? BOSS_ANIM_STRAFE_RIGHT : BOSS_ANIM_STRAFE_LEFT;
+                // Set initial attack cooldown when entering strafe to ensure minimum strafe duration
+                if (boss->attackCooldown <= 0.0f) {
+                    boss->attackCooldown = 2.0f;
+                }
+
                 break;
             case BOSS_STATE_CHASE:
                 out_intent->anim = BOSS_ANIM_WALK;
@@ -981,44 +987,9 @@ void boss_ai_update(Boss* boss, BossIntent* out_intent) {
     
     // Sound triggers on state entry (matching old boss code behavior)
     // Note: Sound system integration would go here when available
-    if (prevState != boss->state) {
-        switch (boss->state) {
-            case BOSS_STATE_POWER_JUMP:
-                bossPowerJumpImpactPlayed = false;
-                // boss_debug_sound("boss_power_jump_windup");
-                break;
-            case BOSS_STATE_FLIP_ATTACK:
-                // boss_debug_sound("boss_flip_attack_windup");
-                break;
-            case BOSS_STATE_COMBO_ATTACK:
-                // boss_debug_sound("boss_combo_sweep");
-                break;
-            case BOSS_STATE_COMBO_STARTER:
-                // boss_debug_sound("boss_combo_starter_throw");
-                break;
-            case BOSS_STATE_ROAR_STOMP:
-                bossRoarImpactSoundPlayed = false;
-                // boss_debug_sound("boss_roar_buildup");
-                break;
-            case BOSS_STATE_TRACKING_SLAM:
-                // boss_debug_sound("boss_tracking_slam_charge");
-                break;
-            case BOSS_STATE_CHARGE:
-                // boss_debug_sound("boss_charge_footsteps");
-                break;
-            case BOSS_STATE_CHASE:
-                // boss_debug_sound("boss_footstep_heavy");
-                break;
-            case BOSS_STATE_STRAFE:
-                // boss_debug_sound("boss_footstep_heavy");
-                // Set initial attack cooldown when entering strafe to ensure minimum strafe duration
-                if (boss->attackCooldown <= 0.0f) {
-                    boss->attackCooldown = 2.0f;
-                }
-                break;
-            default:
-                break;
-        }
+    if (prevState != boss->state) 
+    {
+        boss_reset_sfx();
     }
 }
 

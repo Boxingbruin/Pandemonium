@@ -1,0 +1,27 @@
+#ifndef SCENE_SFX_H
+#define SCENE_SFX_H
+
+typedef enum Scene1Sfx
+{
+    SCENE1_SFX_TITLE_WALK = 0,
+
+    SCENE1_SFX_BOSS_SWING1, 
+    SCENE1_SFX_BOSS_SWING2, 
+    SCENE1_SFX_BOSS_SWING3, 
+    SCENE1_SFX_BOSS_SWING4, 
+
+    SCENE1_SFX_BOSS_SMASH1, 
+    SCENE1_SFX_BOSS_SMASH2, 
+    SCENE1_SFX_BOSS_SMASH3, 
+
+    SCENE1_SFX_BOSS_LUNGE, 
+
+    SCENE1_SFX_BOSS_LAND1, 
+    SCENE1_SFX_BOSS_LAND2,
+
+    SCENE1_SFX_BOSS_STEP1,
+
+    SCENE1_SFX_COUNT
+} Scene1Sfx; // TODO: Change this from scene to a entity specific later.
+
+#endif

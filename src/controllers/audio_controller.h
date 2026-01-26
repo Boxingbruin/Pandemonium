@@ -10,6 +10,12 @@
 #define SFX_CH_FIRST         2
 #define SFX_CH_LAST          (MIXER_NUM_CHANNELS - 1)
 
+typedef struct MultiSfx {
+    int   sfxIndex;     // scene-local sfx index
+    float triggerTime;  // seconds into the attack
+    bool  played;
+} MultiSfx;
+
 // Init / Shutdown
 void audio_initialize(void);
 void audio_controller_free(void);

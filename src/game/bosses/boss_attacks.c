@@ -21,6 +21,7 @@
 
 #include "game_time.h"
 #include "character.h"
+#include "scene_sfx.h" // TODO: make sfx entity specific
 
 #include "utilities/collision_mesh.h"
 #include "utilities/simple_collision_utility.h"
@@ -28,79 +29,6 @@
 
 // Access global character instance
 extern Character character;
-
-// Forward declarations
-static void boss_attacks_handle_power_jump(Boss* boss, float dt);
-static void boss_attacks_handle_combo(Boss* boss, float dt);
-static void boss_attacks_handle_combo_starter(Boss* boss, float dt);
-static void boss_attacks_handle_roar_stomp(Boss* boss, float dt);
-static void boss_attacks_handle_tracking_slam(Boss* boss, float dt);
-static void boss_attacks_handle_charge(Boss* boss, float dt);
-static void boss_attacks_handle_flip_attack(Boss* boss, float dt);
-//static void boss_update_hand_attack_collider(Boss* boss);
-
-// Sound flags shared with AI module
-extern bool bossPowerJumpImpactPlayed;
-extern bool bossRoarImpactSoundPlayed;
-
-void boss_attacks_update(Boss* boss, float dt) {
-    if (!boss) return;
-    
-    // Check if boss is in an attack state and update hand collider
-    bool isAttackState = (boss->state == BOSS_STATE_POWER_JUMP ||
-                          boss->state == BOSS_STATE_COMBO_ATTACK ||
-                          boss->state == BOSS_STATE_COMBO_STARTER ||
-                          boss->state == BOSS_STATE_ROAR_STOMP ||
-                          boss->state == BOSS_STATE_TRACKING_SLAM ||
-                          boss->state == BOSS_STATE_CHARGE ||
-                          boss->state == BOSS_STATE_FLIP_ATTACK);
-    
-    // Always update collider position for debugging (even when not attacking)
-    //if (boss->handRightBoneIndex >= 0) {
-    //     boss_update_hand_attack_collider(boss);
-    // }
-    
-    if (isAttackState) {
-        boss->handAttackColliderActive = true;
-    } else {
-        boss->handAttackColliderActive = false;
-    }
-    
-    // Route to appropriate attack handler based on state
-    switch (boss->state) {
-        case BOSS_STATE_POWER_JUMP:
-            boss_attacks_handle_power_jump(boss, dt);
-            break;
-            
-        case BOSS_STATE_COMBO_ATTACK:
-            boss_attacks_handle_combo(boss, dt);
-            break;
-            
-        case BOSS_STATE_COMBO_STARTER:
-            boss_attacks_handle_combo_starter(boss, dt);
-            break;
-            
-        case BOSS_STATE_ROAR_STOMP:
-            boss_attacks_handle_roar_stomp(boss, dt);
-            break;
-            
-        case BOSS_STATE_TRACKING_SLAM:
-            boss_attacks_handle_tracking_slam(boss, dt);
-            break;
-            
-        case BOSS_STATE_CHARGE:
-            boss_attacks_handle_charge(boss, dt);
-            break;
-            
-        case BOSS_STATE_FLIP_ATTACK:
-            boss_attacks_handle_flip_attack(boss, dt);
-            break;
-            
-        default:
-            // Not an attack state, nothing to do
-            break;
-    }
-}
 
 static void boss_attacks_handle_power_jump(Boss* boss, float dt) {
     // Frame timings at 30 FPS: 0-41 idle, 41-83 jump+land, 83-136 land+recover
@@ -137,12 +65,14 @@ static void boss_attacks_handle_power_jump(Boss* boss, float dt) {
         }
     }
     // Phase 3: Landing impact + recovery (2.767 - 4.533s)
-    else if (boss->stateTimer < totalDuration) {
+    else if (boss->stateTimer < totalDuration) 
+    {
         // Boss hits ground and recovers
         boss->pos[1] = boss->powerJumpStartPos[1];
-        if (boss->stateTimer >= idleDuration + jumpDuration && !bossPowerJumpImpactPlayed) {
-            // Sound would be triggered here - boss_debug_sound("boss_power_jump_impact");
-            bossPowerJumpImpactPlayed = true;
+
+        if (boss->stateTimer >= idleDuration + jumpDuration) 
+        {
+            boss_multi_attack_sfx(boss, bossJumpForwardSfx, 2);
         }
         
         // Check for impact damage
@@ -207,20 +137,22 @@ static void boss_attacks_handle_combo(Boss* boss, float dt) {
         }
     }
     
+    boss_multi_attack_sfx(boss, bossComboAttack1Sfx, 3);  //(ComboAttack1)
     // Execute combo steps
     if (boss->comboStep == 0) {
-        // Step 1: Sweep attack
-        
+        // Step 1:
+
         if (boss->stateTimer > 0.5f && boss->stateTimer < 0.7f && !boss->currentAttackHasHit) {
             if (bossWeaponCollision) {
                 character_apply_damage(15.0f);
-                // boss_debug_sound("boss_attack_success");
                 boss->currentAttackHasHit = true;
             }
         }
     }
     else if (boss->comboStep == 1) {
         // Step 2: Forward thrust
+        //boss_play_attack_sfx(boss, SCENE1_SFX_BOSS_LUNGE, 0.0f);
+
         if (boss->stateTimer > stepDuration + 0.5f && boss->stateTimer < stepDuration + 0.7f) {
             float thrustSpeed = 300.0f;
             boss->velX = sinf(boss->rot[1]) * thrustSpeed * dt;
@@ -229,7 +161,6 @@ static void boss_attacks_handle_combo(Boss* boss, float dt) {
             if (!boss->currentAttackHasHit) {
                 if (bossWeaponCollision) {
                     character_apply_damage(20.0f);
-                    // boss_debug_sound("boss_attack_success");
                     boss->currentAttackHasHit = true;
                 }
             }
@@ -239,10 +170,10 @@ static void boss_attacks_handle_combo(Boss* boss, float dt) {
         // Step 3: Overhead slam
         if (boss->stateTimer > stepDuration * 2 + 0.6f && 
             boss->stateTimer < stepDuration * 2 + 0.8f && 
-            !boss->currentAttackHasHit) {
+            !boss->currentAttackHasHit) 
+        {
             if (bossWeaponCollision) {
                 character_apply_damage(30.0f);
-                // boss_debug_sound("boss_attack_success");
                 boss->currentAttackHasHit = true;
             }
         }
@@ -252,7 +183,8 @@ static void boss_attacks_handle_combo(Boss* boss, float dt) {
     // (AI will check stateTimer > stepDuration * 3 + 0.5f and transition to STRAFE)
 }
 
-static void boss_attacks_handle_combo_starter(Boss* boss, float dt) {
+static void boss_attacks_handle_throw(Boss* boss, float dt) // TODO: add after the jam
+{
     // Keep boss facing the target during the entire attack
     float dx = boss->comboStarterTargetPos[0] - boss->pos[0];
     float dz = boss->comboStarterTargetPos[2] - boss->pos[2];
@@ -285,11 +217,9 @@ static void boss_attacks_handle_combo_starter(Boss* boss, float dt) {
         float hitDz = character.pos[2] - boss->swordProjectilePos[2];
         float hitDy = character.pos[1] - boss->swordProjectilePos[1];
         float hitDist = sqrtf(hitDx*hitDx + hitDy*hitDy + hitDz*hitDz);
-        
         if (hitDist < 3.0f && !boss->currentAttackHasHit) {
             character_apply_damage(20.0f);
-            // boss_debug_sound("boss_combo_starter_impact");
-            // boss_debug_sound("boss_attack_success");
+            //boss_play_attack_sfx(boss, SCENE1_SFX_BOSS_SMASH2, 0.0f);
             boss->currentAttackHasHit = true;
             boss->comboStarterSlamHasHit = true;
         }
@@ -315,8 +245,12 @@ static void boss_attacks_handle_combo_starter(Boss* boss, float dt) {
             boss->currentAttackHasHit = true;
         }
     }
-    
-    // Phase 4: Boss stays in place (1.5s - 2.0s)
+}
+
+static void boss_attacks_handle_combo_starter(Boss* boss, float dt) 
+{
+    boss_play_attack_sfx(boss, SCENE1_SFX_BOSS_SWING2, 1.0f);
+    // Boss stays in place (1.5s - 2.0s)
     // Combo starter does not move the boss - only the charge attack moves the boss
     if (boss->stateTimer >= 1.5f && boss->stateTimer < 2.0f) {
         // Ensure boss doesn't move during combo starter
@@ -340,11 +274,8 @@ static void boss_attacks_handle_roar_stomp(Boss* boss, float dt) {
     }
     // Phase 2: Stomp impact (1.0s)
     else if (boss->stateTimer >= 1.0f && boss->stateTimer < 1.1f) {
-        if (!bossRoarImpactSoundPlayed) {
-            // boss_debug_sound("boss_roar_stomp_impact");
-            // boss_debug_sound("shockwave_rumble");
-            bossRoarImpactSoundPlayed = true;
-        }
+
+        //boss_play_attack_sfx(boss, SCENE1_SFX_BOSS_LAND1, 0.0f);
         
         // Roar stomp uses shockwave, so use distance check for ground-based attack
         // (hand collider is not appropriate for ground shockwave)
@@ -373,6 +304,7 @@ static void boss_attacks_handle_tracking_slam(Boss* boss, float dt) {
     float dz = boss->lockedTargetingPos[2] - boss->pos[2];
     boss->rot[1] = -atan2f(-dz, dx) + T3D_PI;
 
+    boss_multi_attack_sfx(boss, bossSlowAttackSfx, 2);
     // Check for hit during slam (check against actual character position for damage)
     if (!boss->currentAttackHasHit) {
         if (bossWeaponCollision) {
@@ -386,6 +318,7 @@ static void boss_attacks_handle_tracking_slam(Boss* boss, float dt) {
 }
 
 static void boss_attacks_handle_charge(Boss* boss, float dt) {
+    boss_play_attack_sfx(boss, SCENE1_SFX_BOSS_LUNGE, 0.0f);
     // Charge attack - boss moves toward position behind player
     // Face the locked targeting position (behind player)
     float dx = boss->lockedTargetingPos[0] - boss->pos[0];
@@ -412,6 +345,8 @@ static void boss_attacks_handle_flip_attack(Boss* boss, float dt) {
     const float recoverDuration = 1.0f;   // 1.0s recovery on ground
     const float totalDuration = idleDuration + jumpDuration + recoverDuration;
 
+    boss_multi_attack_sfx(boss, bossFlipAttackSfx, 3);
+    
     // Phase 1: Idle preparation (0.0 - 2.0s)
     if (boss->stateTimer < idleDuration) {
         // Stay in place, smoothly face target direction (don't snap)
@@ -470,12 +405,72 @@ static void boss_attacks_handle_flip_attack(Boss* boss, float dt) {
             
             if (dist < 6.0f) {
                 character_apply_damage(30.0f); // Slightly less damage than power jump
-                // boss_debug_sound("boss_attack_success");
+                //boss_play_attack_sfx(boss, SCENE1_SFX_BOSS_LAND1, 0.0f);
                 boss->currentAttackHasHit = true;
             }
         }
     }
     // End attack - transition handled by AI
     // (AI will check stateTimer >= totalDuration and transition to STRAFE)
+    
+}
+
+void boss_attacks_update(Boss* boss, float dt) {
+    if (!boss) return;
+    
+    // Check if boss is in an attack state and update hand collider
+    bool isAttackState = (boss->state == BOSS_STATE_POWER_JUMP ||
+                          boss->state == BOSS_STATE_COMBO_ATTACK ||
+                          boss->state == BOSS_STATE_COMBO_STARTER ||
+                          boss->state == BOSS_STATE_ROAR_STOMP ||
+                          boss->state == BOSS_STATE_TRACKING_SLAM ||
+                          boss->state == BOSS_STATE_CHARGE ||
+                          boss->state == BOSS_STATE_FLIP_ATTACK);
+    
+    // Always update collider position for debugging (even when not attacking)
+    //if (boss->handRightBoneIndex >= 0) {
+    //     boss_update_hand_attack_collider(boss);
+    // }
+    
+    if (isAttackState) {
+        boss->handAttackColliderActive = true;
+    } else {
+        boss->handAttackColliderActive = false;
+    }
+    
+    // Route to appropriate attack handler based on state
+    switch (boss->state) {
+        case BOSS_STATE_POWER_JUMP:
+            boss_attacks_handle_power_jump(boss, dt);
+            break;
+            
+        case BOSS_STATE_COMBO_ATTACK:
+            boss_attacks_handle_combo(boss, dt);
+            break;
+            
+        case BOSS_STATE_COMBO_STARTER:
+            boss_attacks_handle_combo_starter(boss, dt);
+            break;
+            
+        case BOSS_STATE_ROAR_STOMP:
+            boss_attacks_handle_roar_stomp(boss, dt);
+            break;
+            
+        case BOSS_STATE_TRACKING_SLAM:
+            boss_attacks_handle_tracking_slam(boss, dt);
+            break;
+            
+        case BOSS_STATE_CHARGE:
+            boss_attacks_handle_charge(boss, dt);
+            break;
+            
+        case BOSS_STATE_FLIP_ATTACK:
+            boss_attacks_handle_flip_attack(boss, dt);
+            break;
+            
+        default:
+            // Not an attack state, nothing to do
+            break;
+    }
 }
 
