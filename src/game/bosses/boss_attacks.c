@@ -30,6 +30,75 @@
 // Access global character instance
 extern Character character;
 
+// Forward declarations
+static void boss_attacks_handle_power_jump(Boss* boss, float dt);
+static void boss_attacks_handle_combo(Boss* boss, float dt);
+static void boss_attacks_handle_combo_starter(Boss* boss, float dt);
+static void boss_attacks_handle_roar_stomp(Boss* boss, float dt);
+static void boss_attacks_handle_tracking_slam(Boss* boss, float dt);
+static void boss_attacks_handle_charge(Boss* boss, float dt);
+static void boss_attacks_handle_flip_attack(Boss* boss, float dt);
+
+void boss_attacks_update(Boss* boss, float dt) {
+    if (!boss) return;
+    
+    // Check if boss is in an attack state and update hand collider
+    bool isAttackState = (boss->state == BOSS_STATE_POWER_JUMP ||
+                          boss->state == BOSS_STATE_COMBO_ATTACK ||
+                          boss->state == BOSS_STATE_COMBO_STARTER ||
+                          boss->state == BOSS_STATE_ROAR_STOMP ||
+                          boss->state == BOSS_STATE_TRACKING_SLAM ||
+                          boss->state == BOSS_STATE_CHARGE ||
+                          boss->state == BOSS_STATE_FLIP_ATTACK);
+    
+    // Always update collider position for debugging (even when not attacking)
+    //if (boss->handRightBoneIndex >= 0) {
+    //     boss_update_hand_attack_collider(boss);
+    // }
+    
+    if (isAttackState) {
+        boss->handAttackColliderActive = true;
+    } else {
+        boss->handAttackColliderActive = false;
+    }
+    
+    // Route to appropriate attack handler based on state
+    switch (boss->state) {
+        case BOSS_STATE_POWER_JUMP:
+            boss_attacks_handle_power_jump(boss, dt);
+            break;
+            
+        case BOSS_STATE_COMBO_ATTACK:
+            boss_attacks_handle_combo(boss, dt);
+            break;
+            
+        case BOSS_STATE_COMBO_STARTER:
+            boss_attacks_handle_combo_starter(boss, dt);
+            break;
+            
+        case BOSS_STATE_ROAR_STOMP:
+            boss_attacks_handle_roar_stomp(boss, dt);
+            break;
+            
+        case BOSS_STATE_TRACKING_SLAM:
+            boss_attacks_handle_tracking_slam(boss, dt);
+            break;
+            
+        case BOSS_STATE_CHARGE:
+            boss_attacks_handle_charge(boss, dt);
+            break;
+            
+        case BOSS_STATE_FLIP_ATTACK:
+            boss_attacks_handle_flip_attack(boss, dt);
+            break;
+            
+        default:
+            // Not an attack state, nothing to do
+            break;
+    }
+}
+
+
 static void boss_attacks_handle_power_jump(Boss* boss, float dt) {
     // Frame timings at 30 FPS: 0-41 idle, 41-83 jump+land, 83-136 land+recover
     const float idleDuration = 41.0f / 25.0f;      // 1.367s
@@ -414,63 +483,3 @@ static void boss_attacks_handle_flip_attack(Boss* boss, float dt) {
     // (AI will check stateTimer >= totalDuration and transition to STRAFE)
     
 }
-
-void boss_attacks_update(Boss* boss, float dt) {
-    if (!boss) return;
-    
-    // Check if boss is in an attack state and update hand collider
-    bool isAttackState = (boss->state == BOSS_STATE_POWER_JUMP ||
-                          boss->state == BOSS_STATE_COMBO_ATTACK ||
-                          boss->state == BOSS_STATE_COMBO_STARTER ||
-                          boss->state == BOSS_STATE_ROAR_STOMP ||
-                          boss->state == BOSS_STATE_TRACKING_SLAM ||
-                          boss->state == BOSS_STATE_CHARGE ||
-                          boss->state == BOSS_STATE_FLIP_ATTACK);
-    
-    // Always update collider position for debugging (even when not attacking)
-    //if (boss->handRightBoneIndex >= 0) {
-    //     boss_update_hand_attack_collider(boss);
-    // }
-    
-    if (isAttackState) {
-        boss->handAttackColliderActive = true;
-    } else {
-        boss->handAttackColliderActive = false;
-    }
-    
-    // Route to appropriate attack handler based on state
-    switch (boss->state) {
-        case BOSS_STATE_POWER_JUMP:
-            boss_attacks_handle_power_jump(boss, dt);
-            break;
-            
-        case BOSS_STATE_COMBO_ATTACK:
-            boss_attacks_handle_combo(boss, dt);
-            break;
-            
-        case BOSS_STATE_COMBO_STARTER:
-            boss_attacks_handle_combo_starter(boss, dt);
-            break;
-            
-        case BOSS_STATE_ROAR_STOMP:
-            boss_attacks_handle_roar_stomp(boss, dt);
-            break;
-            
-        case BOSS_STATE_TRACKING_SLAM:
-            boss_attacks_handle_tracking_slam(boss, dt);
-            break;
-            
-        case BOSS_STATE_CHARGE:
-            boss_attacks_handle_charge(boss, dt);
-            break;
-            
-        case BOSS_STATE_FLIP_ATTACK:
-            boss_attacks_handle_flip_attack(boss, dt);
-            break;
-            
-        default:
-            // Not an attack state, nothing to do
-            break;
-    }
-}
-
