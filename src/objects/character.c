@@ -98,13 +98,17 @@ static const float KNOCKDOWN_BACK_IMPULSE = 25.0f;
 
 // Input state tracking for edge detection
 static bool lastBPressed = false;
-static bool lastLPressed = false;
+static bool lastAPressed = false;
 static bool leftTriggerHeld = false;
 static float leftTriggerHoldTime = 0.0f;
 
 // Input and tuning constants
 static const float STICK_MAX = 80.0f;
 static const float INPUT_DEADZONE = 0.12f;
+// Strafe activation tuning (to avoid accidental strafing on resting sticks)
+static const float STRAFE_LATERAL_AXIS_DEADZONE = 0.08f;   // min |stick.x| to consider sideways intent
+static const float STRAFE_ACTIVATION_RATIO     = 0.22f;    // ratio threshold to turn strafe on
+static const float STRAFE_DEACTIVATION_RATIO   = 0.12f;    // ratio threshold to turn strafe off (hysteresis)
 static const float TURN_RATE = 8.0f;           // rad/sec turn rate cap
 static const float IDLE_THRESHOLD = 0.001f;
 static const float WALK_THRESHOLD = 0.03f;
@@ -122,6 +126,9 @@ static float currentActionDuration = 1.0f; // seconds for normalized action time
 static bool animLockOnStrafingFlag = false; // true when lateral motion dominates in lock-on
 static int animStrafeDirFlag = 0;           // -1 = left, +1 = right
 static float animStrafeBlendRatio = 0.0f;   // 0 = pure run, 1 = pure strafe
+static float lastBaseSpeed = -1.0f;
+static float lastStrafeSpeed = -1.0f;
+
 
 static CharacterState prevState = CHAR_STATE_NORMAL;
 
@@ -240,7 +247,7 @@ void character_reset(void)
     movementVelocityZ = 0.0f;
     currentSpeed = 0.0f;
     lastBPressed = false;
-    lastLPressed = false;
+    lastAPressed = false;
     leftTriggerHeld = false;
     leftTriggerHoldTime = 0.0f;
     character.currentAnimation = 0;
@@ -254,6 +261,8 @@ void character_reset(void)
     lastAttachedMain = -1;
     lastAttachedBlend = -1;
     lastAnimSpeed = -1.0f;
+    lastBaseSpeed = -1.0f;
+    lastStrafeSpeed = -1.0f;
 
     footstepTimer = 0.0f;
 
@@ -262,9 +271,9 @@ void character_reset(void)
 void character_reset_button_state(void)
 {
     // Sync button state to current state to prevent false "just pressed" events
-    joypad_buttons_t buttons = joypad_get_buttons_pressed(JOYPAD_PORT_1);
-    lastBPressed = buttons.b;
-    lastLPressed = buttons.l;
+    // Use globals from joypad_utility
+    lastBPressed = btn.b;
+    lastAPressed = btn.a;
     leftTriggerHeld = false;
     leftTriggerHoldTime = 0.0f;
 }
@@ -397,7 +406,7 @@ static inline void clear_lockon_strafe_flags_on_action(void) {
 }
 
 static inline bool can_roll_now(const joypad_buttons_t* buttons, const StickInput* stick) {
-    if (!(buttons->a && characterState == CHAR_STATE_NORMAL)) return false;
+    if (!(buttons->b && characterState == CHAR_STATE_NORMAL)) return false;
     // Allow rolling from neutral stick too
     return true;
 }
@@ -470,7 +479,7 @@ static inline void try_start_attack(bool leftJustPressed) {
 
 static bool strongAttackUpgradedFlag = false;
 static inline void upgrade_to_strong_attack(bool leftHeldNow) {
-    // Charge attack: if player holds L button for STRONG_ATTACK_HOLD_THRESHOLD seconds
+    // Charge attack: if player holds A button for STRONG_ATTACK_HOLD_THRESHOLD seconds
     // during the first 30% of a normal attack, upgrade it to a charged attack
     if (characterState == CHAR_STATE_ATTACKING && leftHeldNow &&
         leftTriggerHoldTime >= STRONG_ATTACK_HOLD_THRESHOLD &&
@@ -731,7 +740,6 @@ static inline void anim_stop(T3DAnim** set, int idx)
 
 static inline bool try_lockon_locomotion_blend(float speedRatio, CharacterState state, float dt) {
     if (is_action_state(state)) return false;
-    // If we're already blending (e.g., roll handoff), let the generic blend path run
     if (character.isBlending) return false;
     if (!(state == CHAR_STATE_NORMAL && cameraLockOnActive && animStrafeDirFlag != 0 && character.animationsBlend)) return false;
 
@@ -747,26 +755,48 @@ static inline bool try_lockon_locomotion_blend(float speedRatio, CharacterState 
     int strafeAnim = (speedRatio < IDLE_THRESHOLD) ? ANIM_IDLE : (!running ? ((animStrafeDirFlag > 0) ? ANIM_STRAFE_WALK_RIGHT : ANIM_STRAFE_WALK_LEFT)
                                                         : ((animStrafeDirFlag > 0) ? ANIM_STRAFE_RUN_RIGHT : ANIM_STRAFE_RUN_LEFT));
 
-    // Stop any previous drivers that differ
-    if (activeMainAnim != -1 && activeMainAnim != baseAnim) {
-        anim_stop(character.animations, activeMainAnim);
+    // *** OPTIMIZATION: Only attach/restart when animations actually change ***
+    bool baseChanged = (lastBaseAnimLock != baseAnim);
+    bool strafeChanged = (lastStrafeAnimLock != strafeAnim);
+    
+    if (baseChanged) {
+        if (activeMainAnim != -1 && activeMainAnim != baseAnim) {
+            anim_stop(character.animations, activeMainAnim);
+        }
+        activeMainAnim = baseAnim;
+        anim_bind_and_play(character.animations, baseAnim, character.skeleton, true, true);
+        lastBaseAnimLock = baseAnim;
     }
-    if (activeBlendAnim != -1 && activeBlendAnim != strafeAnim) {
-        anim_stop(character.animationsBlend, activeBlendAnim);
+    
+    if (strafeChanged) {
+        if (activeBlendAnim != -1 && activeBlendAnim != strafeAnim) {
+            anim_stop(character.animationsBlend, activeBlendAnim);
+        }
+        activeBlendAnim = strafeAnim;
+        anim_bind_and_play(character.animationsBlend, strafeAnim, character.skeletonBlend, true, true);
+        lastStrafeAnimLock = strafeAnim;
     }
 
-    bool restartBase   = (activeMainAnim  != baseAnim);
-    bool restartStrafe = (activeBlendAnim != strafeAnim);
-    activeMainAnim  = baseAnim;
-    activeBlendAnim = strafeAnim;
-
-    anim_bind_and_play(character.animations,      baseAnim,   character.skeleton,      true, restartBase);
-    anim_bind_and_play(character.animationsBlend, strafeAnim, character.skeletonBlend, true, restartStrafe);
-
-    float baseSpeed   = running ? fmaxf(speedRatio * 0.8f + 0.2f, 0.7f) : fmaxf(speedRatio * 2.0f + 0.3f, 0.6f);
+    // *** OPTIMIZATION: Cache speeds and only set when changed ***
+    float baseSpeed = running ? fmaxf(speedRatio * 0.8f + 0.2f, 0.7f) : fmaxf(speedRatio * 2.0f + 0.3f, 0.6f);
     float strafeSpeed = running ? fmaxf(speedRatio * 0.9f + 0.2f, 0.7f) : fmaxf(speedRatio * 1.8f + 0.3f, 0.6f);
-    if (character.animations[baseAnim])        t3d_anim_set_speed(character.animations[baseAnim], baseSpeed);
-    if (character.animationsBlend[strafeAnim]) t3d_anim_set_speed(character.animationsBlend[strafeAnim], strafeSpeed);
+    
+    static float lastBaseSpeed = -1.0f;
+    static float lastStrafeSpeed = -1.0f;
+    
+    if (fabsf(baseSpeed - lastBaseSpeed) > 0.01f) {
+        if (character.animations[baseAnim]) {
+            t3d_anim_set_speed(character.animations[baseAnim], baseSpeed);
+        }
+        lastBaseSpeed = baseSpeed;
+    }
+    
+    if (fabsf(strafeSpeed - lastStrafeSpeed) > 0.01f) {
+        if (character.animationsBlend[strafeAnim]) {
+            t3d_anim_set_speed(character.animationsBlend[strafeAnim], strafeSpeed);
+        }
+        lastStrafeSpeed = strafeSpeed;
+    }
 
     t3d_anim_update(character.animations[baseAnim], dt);
     t3d_anim_update(character.animationsBlend[strafeAnim], dt);
@@ -1268,16 +1298,15 @@ void character_update(void)
         return;
     }
 
-    joypad_inputs_t joypad = joypad_get_inputs(JOYPAD_PORT_1);
-    joypad_buttons_t buttons = joypad_get_buttons_pressed(JOYPAD_PORT_1);
-    joypad_buttons_t buttonsReleased = joypad_get_buttons_released(JOYPAD_PORT_1);
+    // Use globals updated by joypad_update()
+    // joypad: stick values; btn: pressed; rel: released
 
     // Jump removed
     bool jumpJustPressed = false;
     lastBPressed = false;
 
-    // Handle left trigger hold time tracking for charge attacks
-    bool leftJustPressed = buttons.l && !lastLPressed;
+    // Handle A button hold time tracking for charge attacks (repurposed from L)
+    bool leftJustPressed = btn.a && !lastAPressed;
     
     if (leftJustPressed) {
         // Button just pressed this frame - start tracking hold time
@@ -1290,16 +1319,16 @@ void character_update(void)
         leftTriggerHoldTime += deltaTime;
     }
     
-    if (buttonsReleased.l) {
+    if (rel.a) {
         // Button released - stop tracking
         leftTriggerHeld = false;
         leftTriggerHoldTime = 0.0f;
     }
     
-    lastLPressed = buttons.l;
+    lastAPressed = btn.a;
 
     StickInput stick = normalize_stick((float)joypad.stick_x, (float)joypad.stick_y);
-    update_actions(&buttons, leftTriggerHeld, leftJustPressed, jumpJustPressed, &stick, deltaTime);
+    update_actions(&btn, leftTriggerHeld, leftJustPressed, jumpJustPressed, &stick, deltaTime);
 
     if (characterState != CHAR_STATE_ATTACKING && characterState != CHAR_STATE_ATTACKING_STRONG && characterState != CHAR_STATE_KNOCKDOWN && stick.magnitude > 0.0f) {
         float desiredVelX, desiredVelZ;
@@ -1334,12 +1363,26 @@ void character_update(void)
             // Right-hand perpendicular in XZ: right = normalize(cross(forward, up))
             T3DVec3 rightDir = {{ -toTargetDir.v[2], 0.0f, toTargetDir.v[0] }}; // perpendicular in XZ
             float forward = desiredVelX * toTargetDir.v[0] + desiredVelZ * toTargetDir.v[2];
-            float lateral = desiredVelX * rightDir.v[0] + desiredVelZ * rightDir.v[2];
-            // Blend ratio from direction components
+            float lateral  = desiredVelX * rightDir.v[0] + desiredVelZ * rightDir.v[2];
+            // Compute lateral proportion of motion
             float sum = fabsf(forward) + fabsf(lateral) + 0.0001f;
-            animStrafeBlendRatio = fminf(1.0f, fmaxf(0.0f, fabsf(lateral) / sum));
-            animLockOnStrafingFlag = (fabsf(lateral) > 0.01f);
-            animStrafeDirFlag = (lateral > 0.0f) ? +1 : (lateral < 0.0f ? -1 : 0);
+            float lateralRatio = fminf(1.0f, fmaxf(0.0f, fabsf(lateral) / sum));
+            // Require a minimum sideways axis intent to avoid drift-induced strafing
+            bool sidewaysEnough = fabsf(stick.x) >= STRAFE_LATERAL_AXIS_DEADZONE;
+            // Hysteresis: activate at higher ratio, deactivate at lower
+            if (!animLockOnStrafingFlag) {
+                animLockOnStrafingFlag = sidewaysEnough && (lateralRatio >= STRAFE_ACTIVATION_RATIO);
+            } else {
+                animLockOnStrafingFlag = sidewaysEnough && (lateralRatio >= STRAFE_DEACTIVATION_RATIO);
+            }
+            // Apply strafe flags/blend only when active
+            if (animLockOnStrafingFlag) {
+                animStrafeBlendRatio = lateralRatio;
+                animStrafeDirFlag = (lateral > 0.0f) ? +1 : (lateral < 0.0f ? -1 : 0);
+            } else {
+                animStrafeBlendRatio = 0.0f;
+                animStrafeDirFlag = 0;
+            }
 
             float targetAngle = atan2f(-(cameraLockOnTarget.v[0] - character.pos[0]), (cameraLockOnTarget.v[2] - character.pos[2]));
             float currentAngle = character.rot[1];
