@@ -2045,7 +2045,8 @@ void scene_draw(T3DViewport *viewport)
         // Full-screen overlay with prompt to restart
         rdpq_sync_pipe();
         rdpq_set_mode_standard();
-        rdpq_set_prim_color(RGBA32(0, 0, 0, 160));
+        // Use semi-transparent black to keep scene visible underneath
+        rdpq_set_prim_color(RGBA32(0, 0, 0, 140));
         rdpq_fill_rectangle(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT);
         rdpq_set_prim_color(RGBA32(255, 255, 255, 255));
         
