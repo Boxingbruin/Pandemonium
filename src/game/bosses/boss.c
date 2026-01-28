@@ -589,7 +589,11 @@ void boss_init(Boss* boss) {
     boss->flipAttackTargetPos[1] = 0.0f;
     boss->flipAttackTargetPos[2] = 0.0f;
     boss->flipAttackHeight = 0.0f;
-    
+    boss->flipAttackMidReaimed = false;
+    boss->flipAttackTravelYaw = boss->rot[1];
+    boss->flipAttackPastDist  = 0.0f;
+
+
     boss->visible = true;
     boss->pendingRequests = 0;
     

@@ -177,6 +177,9 @@ typedef struct Boss {
     float flipAttackStartPos[3];
     float flipAttackTargetPos[3];
     float flipAttackHeight;
+    bool  flipAttackMidReaimed;     // ensures mid re-aim happens only once
+    float flipAttackTravelYaw;      // baseline yaw used for +/- clamp
+    float flipAttackPastDist;       // cached overshoot distance
     
     // Targeting system
     float debugTargetingPos[3];

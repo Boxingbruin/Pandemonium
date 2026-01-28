@@ -562,79 +562,118 @@ static void boss_attacks_handle_charge(Boss* boss, float dt)
     }
 }
 
-static void boss_attacks_handle_flip_attack(Boss* boss, float dt) {
-    // Flip attack: 2s idle, 1s jump arc, 1s recovery
-    const float idleDuration = 2.0f;      // 2.0s idle preparation
-    const float jumpDuration = 1.0f;      // 1.0s jump arc through air
-    const float recoverDuration = 1.0f;   // 1.0s recovery on ground
-    const float totalDuration = idleDuration + jumpDuration + recoverDuration;
+static void boss_attacks_handle_flip_attack(Boss* boss, float dt)
+{
+    const float idleDuration    = 2.0f;
+    const float jumpDuration    = 1.5f;
+    const float recoverDuration = 0.5f;
+    const float totalDuration   = idleDuration + jumpDuration + recoverDuration;
 
     boss_multi_attack_sfx(boss, bossFlipAttackSfx, 3);
-    
-    // Phase 1: Idle preparation (0.0 - 2.0s)
+
+    // --------------------------------
+    // Phase 1: Idle / windup
+    // --------------------------------
     if (boss->stateTimer < idleDuration) {
-        // Stay in place, smoothly face target direction (don't snap)
-        float dx = boss->flipAttackTargetPos[0] - boss->pos[0];
-        float dz = boss->flipAttackTargetPos[2] - boss->pos[2];
+
+        float dx = character.pos[0] - boss->pos[0];
+        float dz = character.pos[2] - boss->pos[2];
+
         if (dx != 0.0f || dz != 0.0f) {
-            float targetAngle = -atan2f(-dz, dx) + T3D_PI;
-            
-            // Smoothly rotate toward target angle using boss turn rate
-            float currentAngle = boss->rot[1];
-            float angleDelta = targetAngle - currentAngle;
-            
-            // Normalize angle delta to [-PI, PI]
-            while (angleDelta > T3D_PI) angleDelta -= 2.0f * T3D_PI;
-            while (angleDelta < -T3D_PI) angleDelta += 2.0f * T3D_PI;
-            
-            // Apply smooth rotation with turn rate
-            float maxTurnRate = boss->turnRate * dt;
-            if (angleDelta > maxTurnRate) angleDelta = maxTurnRate;
-            else if (angleDelta < -maxTurnRate) angleDelta = -maxTurnRate;
-            
-            boss->rot[1] = currentAngle + angleDelta;
+            float targetYaw = -atan2f(-dz, dx) + T3D_PI;
+
+            float cur = boss->rot[1];
+            float d = targetYaw - cur;
+            while (d >  T3D_PI) d -= 2.0f * T3D_PI;
+            while (d < -T3D_PI) d += 2.0f * T3D_PI;
+
+            float maxTurn = boss->turnRate * dt;
+            if (d >  maxTurn) d =  maxTurn;
+            if (d < -maxTurn) d = -maxTurn;
+
+            boss->rot[1] = cur + d;
         }
     }
-    // Phase 2: Jump arc (2.0 - 3.0s)
+
+    // --------------------------------
+    // Phase 2: Jump arc
+    // --------------------------------
     else if (boss->stateTimer < idleDuration + jumpDuration) {
+
+        // === Jump start: compute initial travel ===
+        if (boss->stateTimer - dt < idleDuration) {
+
+            const float leadTime = 0.25f;
+
+            float aimX = character.pos[0] + boss->lastPlayerVel[0] * leadTime;
+            float aimZ = character.pos[2] + boss->lastPlayerVel[1] * leadTime;
+
+            float sx = boss->flipAttackStartPos[0];
+            float sz = boss->flipAttackStartPos[2];
+
+            float dirX = aimX - sx;
+            float dirZ = aimZ - sz;
+            float len  = sqrtf(dirX*dirX + dirZ*dirZ);
+
+            float past = len * 0.25f;
+            if (past < 20.0f)  past = 20.0f;
+            if (past > 60.0f)  past = 60.0f;
+
+            boss->flipAttackPastDist = past;
+            boss->flipAttackMidReaimed = false;
+
+            if (len > 0.001f) {
+                dirX /= len;
+                dirZ /= len;
+
+                boss->flipAttackTravelYaw =
+                    -atan2f(-dirZ, dirX) + T3D_PI;
+
+                boss->flipAttackTargetPos[0] = aimX + dirX * past;
+                boss->flipAttackTargetPos[1] = boss->flipAttackStartPos[1];
+                boss->flipAttackTargetPos[2] = aimZ + dirZ * past;
+            } else {
+                boss->flipAttackTravelYaw = boss->rot[1];
+            }
+        }
+
         float t = (boss->stateTimer - idleDuration) / jumpDuration;
-        
-        // Smooth arc from start to target
-        boss->pos[0] = boss->flipAttackStartPos[0] + (boss->flipAttackTargetPos[0] - boss->flipAttackStartPos[0]) * t;
-        boss->pos[2] = boss->flipAttackStartPos[2] + (boss->flipAttackTargetPos[2] - boss->flipAttackStartPos[2]) * t;
-        
-        // Parabolic height (lower than power jump)
-        boss->pos[1] = boss->flipAttackStartPos[1] + boss->flipAttackHeight * sinf(t * T3D_PI);
-        
-        // Face movement direction - use consistent rotation formula
-        float dx = boss->flipAttackTargetPos[0] - boss->flipAttackStartPos[0];
-        float dz = boss->flipAttackTargetPos[2] - boss->flipAttackStartPos[2];
-        if (dx != 0.0f || dz != 0.0f) {
-            boss->rot[1] = -atan2f(-dz, dx) + T3D_PI;
+
+        // === Move along arc ===
+        boss->pos[0] = boss->flipAttackStartPos[0]
+                     + (boss->flipAttackTargetPos[0] - boss->flipAttackStartPos[0]) * t;
+
+        boss->pos[2] = boss->flipAttackStartPos[2]
+                     + (boss->flipAttackTargetPos[2] - boss->flipAttackStartPos[2]) * t;
+
+        // boss->pos[1] = boss->flipAttackStartPos[1]
+        //              + boss->flipAttackHeight * sinf(t * T3D_PI);
+
+        float mdx = boss->flipAttackTargetPos[0] - boss->flipAttackStartPos[0];
+        float mdz = boss->flipAttackTargetPos[2] - boss->flipAttackStartPos[2];
+        if (mdx != 0.0f || mdz != 0.0f) {
+            boss->rot[1] = -atan2f(-mdz, mdx) + T3D_PI;
         }
     }
-    // Phase 3: Landing impact + recovery (3.0 - 4.0s)
+
+    // --------------------------------
+    // Phase 3: Recovery
+    // --------------------------------
     else if (boss->stateTimer < totalDuration) {
-        // Boss hits ground and recovers
         boss->pos[1] = boss->flipAttackStartPos[1];
-        
-        // Check for impact damage
-        if (boss->stateTimer >= idleDuration + jumpDuration && 
-            boss->stateTimer < idleDuration + jumpDuration + 0.1f && 
-            !boss->currentAttackHasHit) {
-            // Flip attack uses ground impact, so use distance check
+
+        if (!boss->currentAttackHasHit &&
+            boss->stateTimer >= idleDuration + jumpDuration &&
+            boss->stateTimer <  idleDuration + jumpDuration + 0.1f) {
+
             float dx = character.pos[0] - boss->pos[0];
             float dz = character.pos[2] - boss->pos[2];
             float dist = sqrtf(dx*dx + dz*dz);
-            
+
             if (dist < 6.0f) {
-                character_apply_damage(30.0f); // Slightly less damage than power jump
-                //boss_play_attack_sfx(boss, SCENE1_SFX_BOSS_LAND1, 0.0f);
+                character_apply_damage(30.0f);
                 boss->currentAttackHasHit = true;
             }
         }
     }
-    // End attack - transition handled by AI
-    // (AI will check stateTimer >= totalDuration and transition to STRAFE)
-    
 }

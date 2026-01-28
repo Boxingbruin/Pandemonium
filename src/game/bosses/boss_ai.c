@@ -284,30 +284,60 @@ static void boss_ai_select_attack(Boss* boss, float dist) {
         boss->stateTimer = 0.0f;
         boss->flipAttackCooldown = 10.0f;
         boss->currentAttackHasHit = false;
-        // Clamp position values to prevent denormals
+
+        boss->flipAttackMidReaimed = false;
+        boss->flipAttackTravelYaw = boss->rot[1];
+        boss->flipAttackPastDist  = 0.0f;
+
+        // Clamp start position values to prevent denormals
         float startX = boss->pos[0];
         float startY = boss->pos[1];
         float startZ = boss->pos[2];
         if (fabsf(startX) < 1e-6f) startX = 0.0f;
         if (fabsf(startY) < 1e-6f) startY = 0.0f;
         if (fabsf(startZ) < 1e-6f) startZ = 0.0f;
+
         boss->flipAttackStartPos[0] = startX;
         boss->flipAttackStartPos[1] = startY;
         boss->flipAttackStartPos[2] = startZ;
-        predict_character_position(boss->lockedTargetingPos, 0.7f); // Shorter prediction time
+
+        // Predict player position (aim point)
+        predict_character_position(boss->lockedTargetingPos, 0.7f);
         boss->targetingLocked = true;
+
         float targetX = boss->lockedTargetingPos[0];
         float targetY = boss->lockedTargetingPos[1];
         float targetZ = boss->lockedTargetingPos[2];
+
         // Clamp target position values
         if (fabsf(targetX) < 1e-6f) targetX = 0.0f;
         if (fabsf(targetY) < 1e-6f) targetY = 0.0f;
         if (fabsf(targetZ) < 1e-6f) targetZ = 0.0f;
-        boss->flipAttackTargetPos[0] = targetX;
-        boss->flipAttackTargetPos[1] = targetY;
-        boss->flipAttackTargetPos[2] = targetZ;
 
-        boss->flipAttackHeight = startY;
+        // Aim THROUGH and PAST the player
+        const float FLIP_PAST_DIST = 250.0f;  // tune (e.g., 150..400)
+
+        float dirX = targetX - startX;
+        float dirZ = targetZ - startZ;
+        float len  = sqrtf(dirX*dirX + dirZ*dirZ);
+
+        if (len > 0.001f) {
+            dirX /= len;
+            dirZ /= len;
+
+            boss->flipAttackTargetPos[0] = targetX + dirX * FLIP_PAST_DIST;
+            boss->flipAttackTargetPos[1] = targetY;
+            boss->flipAttackTargetPos[2] = targetZ + dirZ * FLIP_PAST_DIST;
+        } else {
+            // Degenerate fallback: just go to predicted point
+            boss->flipAttackTargetPos[0] = targetX;
+            boss->flipAttackTargetPos[1] = targetY;
+            boss->flipAttackTargetPos[2] = targetZ;
+        }
+
+        // Constant height (no randomness)
+        boss->flipAttackHeight = 18.0f;   // tune to taste
+
         boss->currentAttackName = "Flip Attack";
         boss->attackNameDisplayTimer = 2.0f;
         boss->currentAttackId = BOSS_ATTACK_FLIP_ATTACK;
