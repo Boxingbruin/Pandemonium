@@ -63,6 +63,7 @@ static const float STRONG_ATTACK_HOLD_THRESHOLD = 0.4f;
 static const float STRONG_ATTACK_DAMAGE = 20.0f;
 static const float STRONG_ATTACK_HIT_START = 0.35f;
 static const float STRONG_ATTACK_HIT_END = 0.9f;
+static const float JUMP_DURATION = 0.75f; // unused (jump removed)
 static const float JUMP_HEIGHT = 40.0f;   // retained for shadow math
 static const float ROLL_SPEED = MAX_MOVEMENT_SPEED; // Dont think we should speed boost roll, rolling becomes too stronk
 static const float ROLL_STEER_ACCELERATION = 14.0f; // steering responsiveness during roll
@@ -154,10 +155,10 @@ static inline void play_anim_on_skeleton(int animIndex, T3DSkeleton* skel, T3DAn
 static int lastBaseAnimLock = -1;
 static int lastStrafeAnimLock = -1;
 
-// Animation attachment/speed tracking (must be declared before first use)
-static int lastAttachedMain = -1;
-static int lastAttachedBlend = -1;
-static float lastAnimSpeed = -1.0f;
+// Track last attached animations and last speed (forward declarations for early use)
+static int lastAttachedMain;
+static int lastAttachedBlend;
+static float lastAnimSpeed;
 
 // Forward declaration for shadow matrix helper
 static inline void character_update_shadow_mat(void);
@@ -655,6 +656,11 @@ static inline bool is_action_state(CharacterState state) {
 static int activeMainAnim = -1;
 static int activeBlendAnim = -1;
 
+// Track what's currently attached to avoid redundant attach calls
+static int lastAttachedMain = -1;
+static int lastAttachedBlend = -1;
+static float lastAnimSpeed = -1.0f;
+
 static inline void anim_bind_and_play(T3DAnim** set, int idx, T3DSkeleton* skel, bool loop, bool restart)
 {
     if (!set || !skel) return;
@@ -786,6 +792,37 @@ static void switch_to_action_animation(int targetAnim) {
     // Bind and restart target action anim on main skeleton
     anim_bind_and_play(character.animations, targetAnim, character.skeleton, false, true);
     // Mark as needing attach next frame
+    lastAttachedMain = targetAnim;
+}
+
+// Immediate animation switch for reactive animations (knockdown, hit reactions)
+// Skips blending for instant response
+static void switch_to_action_animation_immediate(int targetAnim) {
+    // Stop any lock-on locomotion drivers
+    if (activeMainAnim != -1) {
+        anim_stop(character.animations, activeMainAnim);
+        activeMainAnim = -1;
+    }
+    if (activeBlendAnim != -1) {
+        anim_stop(character.animationsBlend, activeBlendAnim);
+        activeBlendAnim = -1;
+    }
+
+    // Stop previous animation
+    if (character.previousAnimation >= 0 && character.animations[character.previousAnimation]) {
+        anim_stop(character.animations, character.previousAnimation);
+    }
+    if (character.currentAnimation >= 0 && character.animations[character.currentAnimation]) {
+        anim_stop(character.animations, character.currentAnimation);
+    }
+
+    character.previousAnimation = character.currentAnimation;
+    character.currentAnimation = targetAnim;
+    character.isBlending = false;  // No blend, immediate switch
+
+    // Bind and restart target action anim on main skeleton
+    anim_bind_and_play(character.animations, targetAnim, character.skeleton, false, true);
+    // Mark as attached
     lastAttachedMain = targetAnim;
 }
 
@@ -1583,19 +1620,8 @@ void character_apply_damage(float amount)
             movementVelocityX += bx * KNOCKDOWN_BACK_IMPULSE;
             movementVelocityZ += bz * KNOCKDOWN_BACK_IMPULSE;
 
-            // Force-start knockdown animation immediately
-            int a = ANIM_KNOCKDOWN;
-            if (a >= 0 && a < character.animationCount && character.animations[a]) {
-                character.previousAnimation = -1;
-                character.currentAnimation = a;
-                character.isBlending = false;
-
-                t3d_skeleton_reset(character.skeleton);
-                t3d_anim_attach(character.animations[a], character.skeleton);
-                t3d_anim_set_time(character.animations[a], 0.0f);
-                t3d_anim_set_looping(character.animations[a], false);
-                t3d_anim_set_playing(character.animations[a], true);
-            }
+            // Use immediate animation switch for instant reaction
+            switch_to_action_animation_immediate(ANIM_KNOCKDOWN);
         }
     }
 	character.damageFlashTimer = 0.3f;
