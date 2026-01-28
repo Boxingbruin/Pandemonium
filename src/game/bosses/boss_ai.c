@@ -5,6 +5,8 @@
  * Must NOT include tiny3d animation headers
  */
 
+#include <t3d/t3dmath.h>
+
 #include "boss_ai.h"
 #include "boss.h"
 #include "boss_sfx.h"
@@ -55,6 +57,9 @@ void boss_ai_init(Boss* boss) {
     boss->currentAttackHasHit = false;
     boss->currentAttackId = BOSS_ATTACK_COUNT;
     
+    boss->comboLungeTracksPlayer = false;
+    boss->comboLungeLockedYaw = 0.0f;
+
     bossWasActive = false;
     bossStrafeDirection = 1.0f;
     strafeDirectionTimer = 0.0f;
@@ -62,7 +67,8 @@ void boss_ai_init(Boss* boss) {
 }
 
 static bool boss_ai_state_is_attack(BossState state) {
-    return state == BOSS_STATE_CHARGE
+    return state == BOSS_STATE_LUNGE_STARTER
+        || state == BOSS_STATE_COMBO_LUNGE
         || state == BOSS_STATE_POWER_JUMP
         || state == BOSS_STATE_COMBO_ATTACK
         || state == BOSS_STATE_COMBO_STARTER
@@ -90,7 +96,11 @@ static void boss_ai_update_targeting_system(Boss* boss, float dt) {
     boss->lastPlayerVel[0] = velX;
     boss->lastPlayerVel[1] = velZ;
     
-    bool shouldLockTargeting = boss_ai_state_is_attack(boss->state) && !boss->targetingLocked;
+    bool shouldLockTargeting =
+        boss_ai_state_is_attack(boss->state) &&
+        boss->state != BOSS_STATE_COMBO_LUNGE &&
+        boss->state != BOSS_STATE_LUNGE_STARTER &&
+        !boss->targetingLocked;
     
     if (shouldLockTargeting) {
         float predictionTime = 0.3f;
@@ -146,6 +156,103 @@ static void boss_ai_update_cooldowns(Boss* boss, float dt) {
     
     if (boss->attackNameDisplayTimer > 0.0f) boss->attackNameDisplayTimer -= dt;
     if (boss->hitMessageTimer > 0.0f) boss->hitMessageTimer -= dt;
+
+    if (boss->comboLungeCooldown > 0.0f) boss->comboLungeCooldown -= dt;
+}
+
+static void boss_ai_setup_combo_lunge(Boss* boss, float dist, float dx, float dz)
+{
+    const float CLOSE_RANGE = 80.0f;
+    const float pastDistance = 400.0f;
+
+    // Distance-closer: stop short of the player by this much
+    const float STOP_SHORT_DIST = 50.0f;
+
+    // Safety clamps
+    if (dist != dist || dist < 0.0f) dist = 0.0f;
+    if (dist > 0.0f && dist < 1e-6f) dist = 0.0f;
+
+    if (dist <= CLOSE_RANGE) {
+        // Close-range: fixed point through + past the player, yaw can settle later
+        boss->comboLungeTracksPlayer = true;
+
+        float toPlayerX = 1.0f, toPlayerZ = 0.0f;
+        if (dist > 0.001f) {
+            toPlayerX = dx / dist;
+            toPlayerZ = dz / dist;
+        }
+
+        // Freeze direction once (optional; useful for debugging)
+        boss->comboLungeFixedDir[0] = toPlayerX;
+        boss->comboLungeFixedDir[1] = toPlayerZ;
+
+        // Fixed past point (doesn't orbit)
+        boss->lockedTargetingPos[0] = character.pos[0] + toPlayerX * pastDistance;
+        boss->lockedTargetingPos[1] = character.pos[1];
+        boss->lockedTargetingPos[2] = character.pos[2] + toPlayerZ * pastDistance;
+
+        // Lock yaw to travel direction (stable during travel)
+        boss->comboLungeLockedYaw = -atan2f(-toPlayerZ, toPlayerX) + T3D_PI;
+    }
+    else
+    {
+        // Distance-closer: snapshot target, but stop SHORT in front of the player
+        boss->comboLungeTracksPlayer = false;
+
+        // Direction from boss to player at start
+        float toPlayerX = character.pos[0] - boss->pos[0];
+        float toPlayerZ = character.pos[2] - boss->pos[2];
+        float d = sqrtf(toPlayerX * toPlayerX + toPlayerZ * toPlayerZ);
+
+        if (d > 0.001f) {
+            float dirX = toPlayerX / d;
+            float dirZ = toPlayerZ / d;
+
+            // Stop short by 30 units
+            boss->lockedTargetingPos[0] = character.pos[0] - dirX * STOP_SHORT_DIST;
+            boss->lockedTargetingPos[1] = character.pos[1];
+            boss->lockedTargetingPos[2] = character.pos[2] - dirZ * STOP_SHORT_DIST;
+
+            // Lock yaw to travel direction
+            boss->comboLungeLockedYaw = -atan2f(-dirZ, dirX) + T3D_PI;
+        } else {
+            // Degenerate fallback
+            boss->lockedTargetingPos[0] = boss->pos[0];
+            boss->lockedTargetingPos[1] = boss->pos[1];
+            boss->lockedTargetingPos[2] = boss->pos[2];
+            boss->comboLungeLockedYaw = boss->rot[1];
+        }
+
+        // Snap yaw at start (optional)
+        boss->rot[1] = boss->comboLungeLockedYaw;
+    }
+
+    boss->targetingLocked = true;
+    boss->targetingUpdateTimer = 0.0f;
+
+    boss->currentAttackName = "Combo Lunge";
+    boss->attackNameDisplayTimer = 2.0f;
+}
+
+static void boss_ai_combo_lunge_helper(Boss* boss, float dist, float dx, float dz)
+{
+    boss->state = BOSS_STATE_COMBO_LUNGE;
+    boss->stateTimer = 0.0f;
+
+    boss->attackCooldown = 2.0f;              // short “don’t instantly spam attacks”
+    boss->comboLungeCooldown = 10.0f;         // the real lunge cooldown you want
+
+    boss->currentAttackId = BOSS_ATTACK_COMBO_LUNGE;
+    boss->currentAttackHasHit = false;
+
+    boss->isAttacking = true;
+    boss->attackAnimTimer = 0.0f;
+    boss->animationTransitionTimer = 0.0f;
+
+    boss->velX = 0.0f;
+    boss->velZ = 0.0f;
+
+    boss_ai_setup_combo_lunge(boss, dist, dx, dz);
 }
 
 static void boss_ai_select_attack(Boss* boss, float dist) {
@@ -153,7 +260,7 @@ static void boss_ai_select_attack(Boss* boss, float dist) {
     
     // Check combo starter first when distance is approximately 75 units
     // This allows combo starter to trigger, which then enables charge and combo attacks
-    if (dist >= 70.0f && dist <= 80.0f && boss->comboStarterCooldown <= 0.0f) {
+    if (dist >= 0.0f && dist <= 80.0f && boss->comboStarterCooldown <= 0.0f) {
         boss->state = BOSS_STATE_COMBO_STARTER;
         boss->stateTimer = 0.0f;
         boss->comboStarterCooldown = 10.0f;
@@ -294,23 +401,10 @@ static void boss_ai_select_attack(Boss* boss, float dist) {
         // When under 50 distance, boss should only attack, not chase or strafe
         if (dist < 50.0f) {
             // Force an attack when close - prefer charge if available, otherwise wait for cooldowns
-            if (boss->attackCooldown <= 0.0f && dist > 0.0f && dist <= 200.0f && boss->comboStarterCompleted) {
-                // Use charge attack
+            if (boss->attackCooldown <= 0.0f && boss->comboStarterCompleted) {
                 float dx = character.pos[0] - boss->pos[0];
                 float dz = character.pos[2] - boss->pos[2];
-                float toPlayerX = dx / dist;
-                float toPlayerZ = dz / dist;
-                float pastDistance = 20.0f; // Reduced from 50.0f to prevent going too far
-                boss->state = BOSS_STATE_CHARGE;
-                boss->stateTimer = 0.0f;
-                boss->attackCooldown = 2.0f;
-                boss->currentAttackId = BOSS_ATTACK_CHARGE;
-                boss->currentAttackHasHit = false;
-                boss->lockedTargetingPos[0] = character.pos[0] + toPlayerX * pastDistance;
-                boss->lockedTargetingPos[1] = character.pos[1];
-                boss->lockedTargetingPos[2] = character.pos[2] + toPlayerZ * pastDistance;
-                boss->targetingLocked = true;
-                boss->targetingUpdateTimer = 0.0f;
+                boss_ai_combo_lunge_helper(boss, dist, dx, dz);
             } else if (boss->comboCooldown <= 0.0f && boss->comboStarterCompleted) {
                 // Use combo attack
                 boss->state = BOSS_STATE_COMBO_ATTACK;
@@ -458,40 +552,49 @@ void boss_ai_update(Boss* boss, BossIntent* out_intent) {
                 boss_ai_select_attack(boss, dist);
                 break;
             }
+            // Distance-closer lunge: allowed WITHOUT combo starter, but only when far enough
+            if (boss->comboLungeCooldown <= 0.0f && dist >= 80.0f && dist <= 300.0f) {
+                boss->state = BOSS_STATE_LUNGE_STARTER;
+                boss->stateTimer = 0.0f;
+
+                boss->currentAttackId = BOSS_ATTACK_LUNGE_STARTER;
+                boss->currentAttackHasHit = false;
+
+                boss->isAttacking = true;
+                boss->attackAnimTimer = 0.0f;
+                boss->animationTransitionTimer = 0.0f;
+
+                boss->velX = 0.0f;
+                boss->velZ = 0.0f;
+
+                boss->targetingLocked = true;          // prevents other lock logic / debug uses
+                boss->targetingUpdateTimer = 0.0f;
+
+                boss->currentAttackName = "Lunge Starter";
+                boss->attackNameDisplayTimer = 2.0f;
+                break;
+            }
+
             // Force attack if chasing for too long
             if (boss->stateTimer >= MAX_CHASE_TIME) {
                 boss_ai_select_attack(boss, dist);
                 break;
             }
             // Trigger attack selection when at combo starter range (75 units), flip attack range (100-200), or long range (power jump)
-            if ((dist >= 70.0f && dist <= 80.0f) || (dist >= 100.0f && dist < 200.0f) || dist >= 250.0f) {
+            if ((dist >= 0.0f && dist <= 80.0f) || (dist >= 100.0f && dist < 200.0f) || dist >= 250.0f) {
                 boss_ai_select_attack(boss, dist);
                 break;
             }
-            // Charge attack: only trigger when player is within 200 distance AND combo starter has completed
-            if (boss->attackCooldown <= 0.0f && dist > 0.0f && dist <= 200.0f && boss->comboStarterCompleted) {
+            // Charge past attack: only trigger when player is within 80 distance AND combo starter has completed
+            if (boss->comboLungeCooldown <= 0.0f && dist > 0.0f && dist < 80.0f && boss->comboStarterCompleted) {
                 float r = (float)(rand() % 100) / 100.0f;
                 if (r < 0.5f) { // 50% chance for charge after combo starter
-                    boss->state = BOSS_STATE_CHARGE;
-                    boss->stateTimer = 0.0f;
-                    boss->attackCooldown = 2.0f;
-                    boss->currentAttackId = BOSS_ATTACK_CHARGE;
-                    boss->currentAttackHasHit = false;
-                    // Calculate position past the player (same direction from boss to player, extended further)
-                    // Direction from boss to player
-                    float toPlayerX = dx / dist;
-                    float toPlayerZ = dz / dist;
-                    // Position past player: player position plus direction to player (scaled by distance to go past)
-                    float pastDistance = 20.0f; // Reduced from 50.0f to prevent going too far // Distance past player to target
-                    boss->lockedTargetingPos[0] = character.pos[0] + toPlayerX * pastDistance;
-                    boss->lockedTargetingPos[1] = character.pos[1];
-                    boss->lockedTargetingPos[2] = character.pos[2] + toPlayerZ * pastDistance;
-                    boss->targetingLocked = true;
-                    boss->targetingUpdateTimer = 0.0f;
+                    boss_ai_combo_lunge_helper(boss, dist, dx, dz);
                 } else {
                     boss_ai_select_attack(boss, dist);
                 }
             }
+
             break;
             
         case BOSS_STATE_STRAFE:
@@ -505,75 +608,68 @@ void boss_ai_update(Boss* boss, BossIntent* out_intent) {
                 boss->stateTimer = 0.0f;
                 break;
             }
+            // Distance-closer lunge: allowed WITHOUT combo starter, but only when far enough
+            if (boss->comboLungeCooldown <= 0.0f && dist >= 80.0f && dist <= 300.0f) {
+                boss->state = BOSS_STATE_LUNGE_STARTER;
+                boss->stateTimer = 0.0f;
+
+                boss->currentAttackId = BOSS_ATTACK_LUNGE_STARTER;
+                boss->currentAttackHasHit = false;
+
+                boss->isAttacking = true;
+                boss->attackAnimTimer = 0.0f;
+                boss->animationTransitionTimer = 0.0f;
+
+                boss->velX = 0.0f;
+                boss->velZ = 0.0f;
+
+                boss->targetingLocked = true;          // prevents other lock logic / debug uses
+                boss->targetingUpdateTimer = 0.0f;
+
+                boss->currentAttackName = "Lunge Starter";
+                boss->attackNameDisplayTimer = 2.0f;
+                break;
+            }
+
             // Force attack if strafing for too long
             if (boss->stateTimer >= MAX_STRAFE_TIME) {
                 boss_ai_select_attack(boss, dist);
                 break;
             }
             // Trigger attack selection when at combo starter range (75 units) or flip attack range (100-200)
-            if ((dist >= 70.0f && dist <= 80.0f) || (dist >= 100.0f && dist < 200.0f)) {
+            if ((dist >= 0.0f && dist <= 80.0f) || (dist >= 100.0f && dist < 200.0f)) {
                 boss_ai_select_attack(boss, dist);
                 break;
             }
-            // Charge attack: only trigger when player is within 200 distance AND combo starter has completed
-            if (boss->attackCooldown <= 0.0f && boss->stateTimer >= 3.0f && dist > 0.0f && dist <= 200.0f && boss->comboStarterCompleted) {
+            // Charge past attack: only trigger when player is within 80 distance AND combo starter has completed
+            if (boss->comboLungeCooldown <= 0.0f && boss->stateTimer >= 3.0f && dist > 0.0f && dist < 80.0f && boss->comboStarterCompleted) {
                 float r = (float)(rand() % 100) / 100.0f;
                 if (r < 0.5f) { // 50% chance for charge after combo starter
-                    boss->state = BOSS_STATE_CHARGE;
-                    boss->stateTimer = 0.0f;
-                    boss->attackCooldown = 2.0f;
-                    boss->currentAttackId = BOSS_ATTACK_CHARGE;
-                    boss->currentAttackHasHit = false;
-                    // Calculate position past the player (same direction from boss to player, extended further)
-                    // Direction from boss to player
-                    float toPlayerX = dx / dist;
-                    float toPlayerZ = dz / dist;
-                    // Position past player: player position plus direction to player (scaled by distance to go past)
-                    float pastDistance = 20.0f; // Reduced from 50.0f to prevent going too far // Distance past player to target
-                    boss->lockedTargetingPos[0] = character.pos[0] + toPlayerX * pastDistance;
-                    boss->lockedTargetingPos[1] = character.pos[1];
-                    boss->lockedTargetingPos[2] = character.pos[2] + toPlayerZ * pastDistance;
-                    boss->targetingLocked = true;
-                    boss->targetingUpdateTimer = 0.0f;
+                    boss_ai_combo_lunge_helper(boss, dist, dx, dz);
                 } else {
                     boss_ai_select_attack(boss, dist);
                 }
             }
             break;
             
-        case BOSS_STATE_CHARGE:
-            {
-                // Ensure targeting is locked (in case it wasn't set when entering state)
-                if (!boss->targetingLocked) {
-                    // Calculate position past the player (same direction from boss to player, extended further)
-                    float toPlayerX = dx / dist;
-                    float toPlayerZ = dz / dist;
-                    float pastDistance = 20.0f; // Reduced from 50.0f to prevent going too far // Distance past player to target
-                    boss->lockedTargetingPos[0] = character.pos[0] + toPlayerX * pastDistance;
-                    boss->lockedTargetingPos[1] = character.pos[1];
-                    boss->lockedTargetingPos[2] = character.pos[2] + toPlayerZ * pastDistance;
-                    boss->targetingLocked = true;
-                    boss->targetingUpdateTimer = 0.0f;
-                }
-                
-                float targetDx = boss->lockedTargetingPos[0] - boss->pos[0];
-                float targetDz = boss->lockedTargetingPos[2] - boss->pos[2];
-                float distToTarget = sqrtf(targetDx*targetDx + targetDz*targetDz);
-                
-                // End charge when: reached target (close enough) AND minimum time elapsed, OR max time exceeded
-                bool reachedTarget = distToTarget < 5.0f;
-                // Minimum charge time to allow animation to play (2.5 seconds)
-                bool minimumChargeTime = boss->stateTimer >= 2.5f;
-                bool maximumChargeTime = boss->stateTimer > 5.0f;
-                
-                if ((reachedTarget && minimumChargeTime) || maximumChargeTime) {
-                    // Reset combo starter flag after using charge
-                    boss->comboStarterCompleted = false;
-                    // Immediately do another attack after charge finishes
-                    boss_ai_select_attack(boss, dist);
-                }
+        case BOSS_STATE_COMBO_LUNGE:
+        {
+            float targetDx = boss->lockedTargetingPos[0] - boss->pos[0];
+            float targetDz = boss->lockedTargetingPos[2] - boss->pos[2];
+            float distToTarget = sqrtf(targetDx*targetDx + targetDz*targetDz);
+
+            bool reachedTarget = distToTarget < 5.0f;
+
+            bool minimumChargeTime = boss->stateTimer >= 2.3f;
+            bool maximumChargeTime = boss->stateTimer > 2.8f;
+
+            if ((reachedTarget && minimumChargeTime) || maximumChargeTime) {
+                boss->comboStarterCompleted = false;
+                boss_ai_select_attack(boss, dist);
             }
-            break;
+        }
+        break;
+
             
         case BOSS_STATE_RECOVER:
             // When under 50 distance, chain attacks immediately (no delay)
@@ -647,7 +743,7 @@ void boss_ai_update(Boss* boss, BossIntent* out_intent) {
             {
                 const float idleDuration = 2.0f;      // 2.0s idle preparation
                 const float jumpDuration = 1.0f;      // 1.0s jump arc through air
-                const float recoverDuration = 1.0f;   // 1.0s recovery on ground
+                const float recoverDuration = 2.5f;   // 1.0s recovery on ground
                 const float totalDuration = idleDuration + jumpDuration + recoverDuration;
                 
                 // Clamp stateTimer to prevent denormals in comparison
@@ -682,7 +778,7 @@ void boss_ai_update(Boss* boss, BossIntent* out_intent) {
                 boss->lockedTargetingPos[2] += (character.pos[2] - boss->lockedTargetingPos[2]) * targetLerpSpeed;
                 
                 const float stepDuration = 0.8f;
-                const float totalDuration = stepDuration * 3 + 1.5f; // Increased recovery time to let animation finish
+                const float totalDuration = stepDuration * 3 + 4.5f; // Increased recovery time to let animation finish
                 
                 if (boss->comboInterrupted) {
                     // Already transitioned to RECOVER by attack handler
@@ -706,7 +802,22 @@ void boss_ai_update(Boss* boss, BossIntent* out_intent) {
                 }
             }
             break;
-            
+        case BOSS_STATE_LUNGE_STARTER:
+            {
+                const float starterDuration = 2.5f; // tune to anim length
+
+                // Stay in wind-up; no movement handled here (attacks module will zero vel)
+                if (boss->stateTimer >= starterDuration) {
+                    float dx = character.pos[0] - boss->pos[0];
+                    float dz = character.pos[2] - boss->pos[2];
+                    float distNow = sqrtf(dx*dx + dz*dz);
+
+                    // IMPORTANT: this re-evaluates the distance NOW.
+                    // If the player rushed in, distNow <= 50 and setup will choose close-range mode.
+                    boss_ai_combo_lunge_helper(boss, distNow, dx, dz);
+                }
+            }
+            break;
         case BOSS_STATE_COMBO_STARTER:
             // Combo starter attack: 4 phases over 2.0 seconds
             // Phase 1: Throw sword (0.0 - 0.5s)
@@ -725,28 +836,14 @@ void boss_ai_update(Boss* boss, BossIntent* out_intent) {
                 
                 // Immediately check for charge or combo attack after combo starter completes
                 // Randomly choose between charge and combo attack when both are available
-                bool chargeAvailable = (boss->attackCooldown <= 0.0f && dist > 0.0f && dist <= 200.0f);
+                bool chargeAvailable = (boss->attackCooldown <= 0.0f && dist > 0.0f && dist <= 300.0f);
                 bool comboAvailable = (boss->comboCooldown <= 0.0f);
                 
                 if (chargeAvailable && comboAvailable) {
                     // Both available - randomly choose
                     float r = (float)(rand() % 100) / 100.0f;
                     if (r < 0.5f) {
-                        // Choose charge attack
-                        boss->state = BOSS_STATE_CHARGE;
-                        boss->stateTimer = 0.0f;
-                        boss->attackCooldown = 2.0f;
-                        boss->currentAttackId = BOSS_ATTACK_CHARGE;
-                        boss->currentAttackHasHit = false;
-                        // Calculate position past the player
-                        float toPlayerX = dx / dist;
-                        float toPlayerZ = dz / dist;
-                        float pastDistance = 20.0f; // Reduced from 50.0f to prevent going too far
-                        boss->lockedTargetingPos[0] = character.pos[0] + toPlayerX * pastDistance;
-                        boss->lockedTargetingPos[1] = character.pos[1];
-                        boss->lockedTargetingPos[2] = character.pos[2] + toPlayerZ * pastDistance;
-                        boss->targetingLocked = true;
-                        boss->targetingUpdateTimer = 0.0f;
+                        boss_ai_combo_lunge_helper(boss, dist, dx, dz);
                         break;
                     } else {
                         // Choose combo attack
@@ -767,20 +864,7 @@ void boss_ai_update(Boss* boss, BossIntent* out_intent) {
                     }
                 } else if (chargeAvailable) {
                     // Only charge available
-                    boss->state = BOSS_STATE_CHARGE;
-                    boss->stateTimer = 0.0f;
-                    boss->attackCooldown = 2.0f;
-                    boss->currentAttackId = BOSS_ATTACK_CHARGE;
-                    boss->currentAttackHasHit = false;
-                    // Calculate position past the player
-                    float toPlayerX = dx / dist;
-                    float toPlayerZ = dz / dist;
-                    float pastDistance = 20.0f; // Reduced from 50.0f to prevent going too far
-                    boss->lockedTargetingPos[0] = character.pos[0] + toPlayerX * pastDistance;
-                    boss->lockedTargetingPos[1] = character.pos[1];
-                    boss->lockedTargetingPos[2] = character.pos[2] + toPlayerZ * pastDistance;
-                    boss->targetingLocked = true;
-                    boss->targetingUpdateTimer = 0.0f;
+                    boss_ai_combo_lunge_helper(boss, dist, dx, dz);
                     break;
                 } else if (comboAvailable) {
                     // Only combo available
@@ -884,13 +968,18 @@ void boss_ai_update(Boss* boss, BossIntent* out_intent) {
                 out_intent->anim = BOSS_ANIM_FLIP_ATTACK;
                 out_intent->priority = BOSS_ANIM_PRIORITY_HIGH;
                 break;
-            case BOSS_STATE_CHARGE:
+            case BOSS_STATE_COMBO_LUNGE:
                 out_intent->anim = BOSS_ANIM_COMBO_LUNGE;
                 out_intent->priority = BOSS_ANIM_PRIORITY_HIGH;
                 // Force restart animation when entering charge state (not on every frame)
                 if (boss->state != prevState) {
                     out_intent->force_restart = true;
                 }
+                break;
+            case BOSS_STATE_LUNGE_STARTER:
+                out_intent->anim = BOSS_ANIM_LUNGE_STARTER;
+                out_intent->priority = BOSS_ANIM_PRIORITY_HIGH;
+                if (boss->state != prevState) out_intent->force_restart = true;
                 break;
             case BOSS_STATE_TRACKING_SLAM:
             case BOSS_STATE_ROAR_STOMP:

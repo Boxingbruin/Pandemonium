@@ -139,26 +139,6 @@ static void boss_update_movement(Boss* boss, float dt) {
             maxSpeed = SPEED_STRAFE;
             break;
             
-        case BOSS_STATE_CHARGE:
-            // Charge toward locked targeting position
-            {
-                float targetDx = boss->lockedTargetingPos[0] - boss->pos[0];
-                float targetDz = boss->lockedTargetingPos[2] - boss->pos[2];
-                float targetDist = sqrtf(targetDx*targetDx + targetDz*targetDz);
-                // Stop movement when very close to target to prevent oscillation
-                if (targetDist > 10.0f) {
-                    desiredX = targetDx / targetDist;
-                    desiredZ = targetDz / targetDist;
-                    maxSpeed = SPEED_CHARGE;
-                } else {
-                    // Close enough - stop moving
-                    desiredX = 0.0f;
-                    desiredZ = 0.0f;
-                    maxSpeed = 0.0f;
-                }
-            }
-            break;
-            
         case BOSS_STATE_RECOVER:
             // Slow movement
             maxSpeed = SPEED_ORBIT * 0.5f;
@@ -176,7 +156,9 @@ static void boss_update_movement(Boss* boss, float dt) {
         boss->state != BOSS_STATE_COMBO_STARTER && 
         boss->state != BOSS_STATE_TRACKING_SLAM && 
         boss->state != BOSS_STATE_COMBO_ATTACK && 
-        boss->state != BOSS_STATE_ROAR_STOMP) {
+        boss->state != BOSS_STATE_ROAR_STOMP &&
+        boss->state != BOSS_STATE_COMBO_LUNGE &&
+        boss->state != BOSS_STATE_LUNGE_STARTER) {
         
         boss->velX += (desiredX * maxSpeed - boss->velX) * ACCEL * dt;
         boss->velZ += (desiredZ * maxSpeed - boss->velZ) * ACCEL * dt;
@@ -219,71 +201,52 @@ static void boss_update_movement(Boss* boss, float dt) {
     // } else {
     //     boss->velZ = 0.0f;
     // }
-    
+
     // Update facing direction
     if (boss->state == BOSS_STATE_STRAFE || boss->state == BOSS_STATE_CHASE) {
-        // During strafe/chase, smoothly face the character (don't snap)
-        extern Character character;
+        // During strafe/chase, smoothly face the character
         float faceDx = character.pos[0] - boss->pos[0];
         float faceDz = character.pos[2] - boss->pos[2];
-        float targetAngle = -atan2f(-faceDz, faceDx) + T3D_PI; // T3D_PI
-        
-        // Smoothly rotate toward target angle
+        float targetAngle = -atan2f(-faceDz, faceDx) + T3D_PI;
+
         float currentAngle = boss->rot[1];
         float angleDelta = targetAngle - currentAngle;
-        
-        // Normalize angle delta to [-PI, PI]
-        while (angleDelta > T3D_PI) angleDelta -= 2.0f * T3D_PI;
+        while (angleDelta >  T3D_PI) angleDelta -= 2.0f * T3D_PI;
         while (angleDelta < -T3D_PI) angleDelta += 2.0f * T3D_PI;
-        
-        // Apply smooth rotation with turn rate
+
         float maxTurnRate = boss->turnRate * dt;
-        if (angleDelta > maxTurnRate) angleDelta = maxTurnRate;
-        else if (angleDelta < -maxTurnRate) angleDelta = -maxTurnRate;
-        
+        if (angleDelta >  maxTurnRate) angleDelta =  maxTurnRate;
+        if (angleDelta < -maxTurnRate) angleDelta = -maxTurnRate;
+
         boss->rot[1] = currentAngle + angleDelta;
-    } else if (boss->state == BOSS_STATE_CHARGE) {
-        // During charge, smoothly face the locked targeting position
-        float faceDx = boss->lockedTargetingPos[0] - boss->pos[0];
-        float faceDz = boss->lockedTargetingPos[2] - boss->pos[2];
-        float faceDist = sqrtf(faceDx*faceDx + faceDz*faceDz);
-        
-        // Only rotate if we're not too close to the target (prevents oscillation)
-        if (faceDist > 10.0f) {
-            float targetAngle = -atan2f(-faceDz, faceDx) + T3D_PI;
-            
-            // Smoothly rotate toward target angle
-            float currentAngle = boss->rot[1];
-            float angleDelta = targetAngle - currentAngle;
-            
-            // Normalize angle delta to [-PI, PI]
-            while (angleDelta > T3D_PI) angleDelta -= 2.0f * T3D_PI;
-            while (angleDelta < -T3D_PI) angleDelta += 2.0f * T3D_PI;
-            
-            // Apply smooth rotation with turn rate
-            float maxTurnRate = boss->turnRate * dt;
-            if (angleDelta > maxTurnRate) angleDelta = maxTurnRate;
-            else if (angleDelta < -maxTurnRate) angleDelta = -maxTurnRate;
-            
-            boss->rot[1] = currentAngle + angleDelta;
-        }
-        // If too close, stop rotating (keep current rotation)
-    } else if (boss->state >= BOSS_STATE_POWER_JUMP && boss->state != BOSS_STATE_CHARGE) {
-        // Attack states handle their own rotation
-        // (handled by attack handlers, except charge which is handled above)
-    } else {
-        // Default: face movement direction (for other states)
+    }
+    else if (
+        boss->state == BOSS_STATE_POWER_JUMP ||
+        boss->state == BOSS_STATE_FLIP_ATTACK ||
+        boss->state == BOSS_STATE_COMBO_STARTER ||
+        boss->state == BOSS_STATE_TRACKING_SLAM ||
+        boss->state == BOSS_STATE_COMBO_ATTACK ||
+        boss->state == BOSS_STATE_ROAR_STOMP ||
+        boss->state == BOSS_STATE_COMBO_LUNGE ||     // <-- CRITICAL
+        boss->state == BOSS_STATE_LUNGE_STARTER      // <-- also good
+    ) {
+        // Attack states: rotation is handled by boss_attacks_* (do nothing here)
+    }
+    else {
+        // Default: face movement direction
         float targetAngle = atan2f(-boss->velX, boss->velZ);
         float currentAngle = boss->rot[1];
         float angleDelta = targetAngle - currentAngle;
-        while (angleDelta > T3D_PI) angleDelta -= 2.0f * T3D_PI;
+        while (angleDelta >  T3D_PI) angleDelta -= 2.0f * T3D_PI;
         while (angleDelta < -T3D_PI) angleDelta += 2.0f * T3D_PI;
-        
+
         float maxTurnRate = boss->turnRate * dt;
-        if (angleDelta > maxTurnRate) angleDelta = maxTurnRate;
-        else if (angleDelta < -maxTurnRate) angleDelta = -maxTurnRate;
+        if (angleDelta >  maxTurnRate) angleDelta =  maxTurnRate;
+        if (angleDelta < -maxTurnRate) angleDelta = -maxTurnRate;
+
         boss->rot[1] = currentAngle + angleDelta;
     }
+
 }
 
 // Public API implementation
@@ -427,7 +390,8 @@ void boss_init(Boss* boss) {
         "ComboStarter1",
         "FlipAttack1",
         "Phase1Kneel",
-        "Phase1KneelCutscene1"
+        "Phase1KneelCutscene1",
+        "LungeStarter1"
     };
     const bool animationsLooping[] = {
         true,  // Idle - loop
@@ -442,6 +406,7 @@ void boss_init(Boss* boss) {
         false,  // FlipAttack - one-shot
         true, // Kneel - loop
         false, // Kneel cutscene "FEAR"
+        false, // Lunge Starter
     };
     
     T3DAnim** animations = malloc_uncached(animationCount * sizeof(T3DAnim*));
@@ -583,6 +548,7 @@ void boss_init(Boss* boss) {
     boss->comboStarterCooldown = 0.0f;
     boss->roarStompCooldown = 0.0f;
     boss->trackingSlamCooldown = 0.0f;
+    boss->comboLungeCooldown = 0.0f;
     
     // Initialize combo state
     boss->comboStep = 0;
