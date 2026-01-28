@@ -172,11 +172,11 @@ void boss_anim_update(Boss* boss) {
         // Use longer duration for attacks that need to complete their animation
         float attackDuration = 0.9f; // Default duration
         if (boss->state == BOSS_STATE_TRACKING_SLAM) {
-            attackDuration = 6.0f;
+            attackDuration = 5.0f;
         } else if (boss->state == BOSS_STATE_POWER_JUMP) {
             attackDuration = 6.0f; // Allow power jump animation to complete and blend properly
         } else if (boss->state == BOSS_STATE_FLIP_ATTACK) {
-            attackDuration = 5.5f; // Allow flip attack animation to complete
+            attackDuration = 7.5f; // Allow flip attack animation to complete
         }
         if (boss->attackAnimTimer >= attackDuration) {
             boss->isAttacking = false;

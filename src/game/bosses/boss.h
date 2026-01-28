@@ -16,16 +16,17 @@ typedef enum {
     BOSS_STATE_STAGGER,
     BOSS_STATE_DEAD,
     // Attack-specific states
-    BOSS_STATE_CHARGE,
+    BOSS_STATE_COMBO_LUNGE,
     BOSS_STATE_POWER_JUMP,
     BOSS_STATE_COMBO_ATTACK,
     BOSS_STATE_COMBO_STARTER,
     BOSS_STATE_ROAR_STOMP,
     BOSS_STATE_TRACKING_SLAM,
-    BOSS_STATE_FLIP_ATTACK
+    BOSS_STATE_FLIP_ATTACK,
+    BOSS_STATE_LUNGE_STARTER // used for distance lunges as anticipation
 } BossState;
 
-typedef enum {
+typedef enum { // TODO: only the first = 0 is needed here
     BOSS_ANIM_IDLE = 0,
     BOSS_ANIM_WALK = 1,
     BOSS_ANIM_ATTACK = 2,
@@ -38,17 +39,19 @@ typedef enum {
     BOSS_ANIM_FLIP_ATTACK = 9,
     BOSS_ANIM_KNEEL = 10,
     BOSS_ANIM_KNEEL_CUTSCENE = 11,
-    BOSS_ANIM_COUNT = 12
+    BOSS_ANIM_LUNGE_STARTER = 12,
+    BOSS_ANIM_COUNT = 13
 } BossAnimState;
 
 typedef enum {
-    BOSS_ATTACK_CHARGE,
+    BOSS_ATTACK_COMBO_LUNGE,
     BOSS_ATTACK_POWER_JUMP,
     BOSS_ATTACK_COMBO,
     BOSS_ATTACK_COMBO_STARTER,
     BOSS_ATTACK_ROAR_STOMP,
     BOSS_ATTACK_TRACKING_SLAM,
     BOSS_ATTACK_FLIP_ATTACK,
+    BOSS_ATTACK_LUNGE_STARTER,
     BOSS_ATTACK_COUNT
 } BossAttackId;
 
@@ -134,6 +137,7 @@ typedef struct Boss {
     float powerJumpCooldown;
     float comboCooldown;
     float comboStarterCooldown;
+    float comboLungeCooldown;
     float roarStompCooldown;
     float trackingSlamCooldown;
     float flipAttackCooldown;
@@ -143,19 +147,24 @@ typedef struct Boss {
     float attackAnimTimer;
     bool currentAttackHasHit;
     BossAttackId currentAttackId;
-    
+
     // Combo state
     int comboStep;
     bool comboInterrupted;
     float comboVulnerableTimer;
     
-    // Combo starter state
     float swordProjectilePos[3];
     bool swordThrown;
+
+    // Combo starter state
     bool comboStarterSlamHasHit;
     float comboStarterTargetPos[3];
     bool comboStarterCompleted; // Flag to track if combo starter has finished
     
+    bool comboLungeTracksPlayer;   // false = distance closer (yaw locked), true = close-range (tracks)
+    float comboLungeLockedYaw;     // yaw to hold in distance-closer mode
+    float comboLungeFixedDir[2];
+
     // Tracking slam state
     float trackingSlamTargetAngle;
     
