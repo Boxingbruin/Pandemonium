@@ -23,7 +23,7 @@
 
 /*
  Character Controller
- - Responsibilities: input handling, action state (roll/attack/jump), movement + rotation,
+ - Responsibilities: input handling, action state (roll/attack), movement + rotation,
      animation selection, and third-person camera follow.
  - Conventions: model forward is +Z at yaw 0, world up is +Y, camera yaw uses `cameraAngleX`.
 */
@@ -63,7 +63,6 @@ static const float STRONG_ATTACK_HOLD_THRESHOLD = 0.4f;
 static const float STRONG_ATTACK_DAMAGE = 20.0f;
 static const float STRONG_ATTACK_HIT_START = 0.35f;
 static const float STRONG_ATTACK_HIT_END = 0.9f;
-static const float JUMP_DURATION = 0.75f; // unused (jump removed)
 static const float JUMP_HEIGHT = 40.0f;   // retained for shadow math
 static const float ROLL_SPEED = MAX_MOVEMENT_SPEED; // Dont think we should speed boost roll, rolling becomes too stronk
 static const float ROLL_STEER_ACCELERATION = 14.0f; // steering responsiveness during roll
@@ -517,7 +516,7 @@ static inline void progress_action_timers(float dt) {
     }
 }
 
-static inline void update_actions(const joypad_buttons_t* buttons, bool leftHeldNow, bool leftJustPressed, bool jumpJustPressed, const StickInput* stick, float dt) {
+static inline void update_actions(const joypad_buttons_t* buttons, bool leftHeldNow, bool leftJustPressed, const StickInput* stick, float dt) {
     // Roll
     try_start_roll(buttons, stick);
     // Attacks
@@ -1183,8 +1182,6 @@ void character_update(void)
     joypad_buttons_t buttons = joypad_get_buttons_pressed(JOYPAD_PORT_1);
     joypad_buttons_t buttonsReleased = joypad_get_buttons_released(JOYPAD_PORT_1);
 
-    // Jump removed
-    bool jumpJustPressed = false;
     lastBPressed = false;
 
     // Handle left trigger hold time tracking for charge attacks
@@ -1210,7 +1207,7 @@ void character_update(void)
     lastLPressed = buttons.l;
 
     StickInput stick = normalize_stick((float)joypad.stick_x, (float)joypad.stick_y);
-    update_actions(&buttons, leftTriggerHeld, leftJustPressed, jumpJustPressed, &stick, deltaTime);
+    update_actions(&buttons, leftTriggerHeld, leftJustPressed, &stick, deltaTime);
 
     if (characterState != CHAR_STATE_ATTACKING && characterState != CHAR_STATE_ATTACKING_STRONG && characterState != CHAR_STATE_KNOCKDOWN && stick.magnitude > 0.0f) {
         float desiredVelX, desiredVelZ;
@@ -1299,20 +1296,11 @@ void character_update(void)
             }
 
         }
-    // } else if (characterState == CHAR_STATE_JUMPING) {
-    //     // Keep horizontal velocity from the takeoff; no air drag so run speed carries through jump
-    //     apply_friction(deltaTime, JUMP_FRICTION_SCALE);
-    //     float jumpPhase = fminf(1.0f, actionTimer / JUMP_DURATION);
-    //     character.pos[1] = fm_sinf(jumpPhase * T3D_PI) * JUMP_HEIGHT;
     } else {
         // Apply friction when not providing input; include roll-specific decay
         float friction = (characterState == CHAR_STATE_ROLLING) ? ROLL_FRICTION_SCALE : 1.0f;
         apply_friction(deltaTime, friction);
     }
-
-    // if (characterState != CHAR_STATE_JUMPING) {
-    //     character.pos[1] = 0.0f;
-    // }
 
     update_current_speed(stick.magnitude, deltaTime);
     // Drive animation speed from actual movement velocity to avoid idle flicker after actions
