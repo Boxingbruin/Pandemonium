@@ -32,6 +32,11 @@ T3DModel* characterModel;
 T3DModel* characterShadowModel;
 Character character;
 
+// Sword collider config (player)
+static int   characterSwordBoneIndex = -1;     // cached bone index for sword/hand
+static const float SWORD_LENGTH = 640.0f;      // local-space length of sword capsule segment
+static const float SWORD_COLLIDER_RADIUS = 5.0f; // sword collider radius in world units
+
 // Shadow tuning
 static const float SHADOW_GROUND_Y = 0.0f;
 static const float SHADOW_Y_OFFSET = 0.2f;     // prevent z-fighting with the ground
@@ -291,45 +296,48 @@ static inline void compute_desired_velocity_lockon(float inputX, float inputY, c
 // ===== PLEASE DONT USE THE FIXED POINT API =====  
 // NOTE: CHECK collision_system.c for a demo
 static inline bool attack_hit_test(void) {
-    SCU_CapsuleFixed cc;
-    float sx = character.scale[0];
-    float ax = character.capsuleCollider.localCapA.v[0] * sx;
-    float ay = character.capsuleCollider.localCapA.v[1] * sx;
-    float az = character.capsuleCollider.localCapA.v[2] * sx;
-    float bx = character.capsuleCollider.localCapB.v[0] * sx;
-    float by = character.capsuleCollider.localCapB.v[1] * sx;
-    float bz = character.capsuleCollider.localCapB.v[2] * sx;
-    cc.a.v[0] = TO_FIXED(character.pos[0] + ax);
-    cc.a.v[1] = TO_FIXED(character.pos[1] + ay);
-    cc.a.v[2] = TO_FIXED(character.pos[2] + az);
-    cc.b.v[0] = TO_FIXED(character.pos[0] + bx);
-    cc.b.v[1] = TO_FIXED(character.pos[1] + by);
-    cc.b.v[2] = TO_FIXED(character.pos[2] + bz);
-    cc.radius = TO_FIXED(character.capsuleCollider.radius * sx);
-
-    SCU_CapsuleFixed bc;
     Boss* boss = boss_get_instance();
     if (!boss) {
         return false;  // No boss to hit
     }
-    float bs = boss->scale[0];
-    float bax = boss->capsuleCollider.localCapA.v[0] * bs;
-    float bay = boss->capsuleCollider.localCapA.v[1] * bs;
-    float baz = boss->capsuleCollider.localCapA.v[2] * bs;
-    float bbx = boss->capsuleCollider.localCapB.v[0] * bs;
-    float bby = boss->capsuleCollider.localCapB.v[1] * bs;
-    float bbz = boss->capsuleCollider.localCapB.v[2] * bs;
-    bc.a.v[0] = TO_FIXED(boss->pos[0] + bax);
-    bc.a.v[1] = TO_FIXED(boss->pos[1] + bay);
-    bc.a.v[2] = TO_FIXED(boss->pos[2] + baz);
-    bc.b.v[0] = TO_FIXED(boss->pos[0] + bbx);
-    bc.b.v[1] = TO_FIXED(boss->pos[1] + bby);
-    bc.b.v[2] = TO_FIXED(boss->pos[2] + bbz);
-    bc.radius = TO_FIXED(boss->capsuleCollider.radius * bs);
 
-    // ===== PLEASE DONT USE THE FIXED POINT API =====  
-    // NOTE: CHECK collision_system.c for a demo
-    bool attackHit = scu_fixed_capsule_vs_capsule(&cc, &bc);
+    // Boss body capsule (WORLD space)
+    const float bossCapA[3] = {
+        boss->pos[0] + boss->capsuleCollider.localCapA.v[0],
+        boss->pos[1] + boss->capsuleCollider.localCapA.v[1],
+        boss->pos[2] + boss->capsuleCollider.localCapA.v[2],
+    };
+    const float bossCapB[3] = {
+        boss->pos[0] + boss->capsuleCollider.localCapB.v[0],
+        boss->pos[1] + boss->capsuleCollider.localCapB.v[1],
+        boss->pos[2] + boss->capsuleCollider.localCapB.v[2],
+    };
+    const float bossRadius = boss->capsuleCollider.radius;
+
+    bool attackHit = false;
+
+    // Sword collider derived from bone + model matrices
+    if (characterSwordBoneIndex >= 0 && character.skeleton && character.modelMat) {
+        T3DSkeleton *sk = (T3DSkeleton*)character.skeleton;
+        const T3DMat4FP *B = &sk->boneMatricesFP[characterSwordBoneIndex]; // bone in MODEL space
+        const T3DMat4FP *M = (const T3DMat4FP*)character.modelMat;         // model in WORLD space
+
+        // Bone-local segment: hilt (0,0,0) to tip along -X
+        const float p0_local[3] = { 0.0f, 0.0f, 0.0f };
+        const float p1_local[3] = { -SWORD_LENGTH, 0.0f, 0.0f };
+
+        // bone-local -> MODEL space
+        float p0_model[3], p1_model[3];
+        mat4fp_mul_point_f32_row3_colbasis(B, p0_local, p0_model);
+        mat4fp_mul_point_f32_row3_colbasis(B, p1_local, p1_model);
+
+        // MODEL -> WORLD space
+        float p0_world[3], p1_world[3];
+        mat4fp_mul_point_f32_row3_colbasis(M, p0_model, p0_world);
+        mat4fp_mul_point_f32_row3_colbasis(M, p1_model, p1_world);
+
+        attackHit = scu_capsule_vs_capsule_f(p0_world, p1_world, SWORD_COLLIDER_RADIUS, bossCapA, bossCapB, bossRadius);
+    }
 
     // Fallback: reach check in front of the player to approximate sword length
     if (!attackHit) {
@@ -341,8 +349,8 @@ static inline bool attack_hit_test(void) {
         float dx = boss->pos[0] - hitX;
         float dz = boss->pos[2] - hitZ;
         float dist = sqrtf(dx * dx + dz * dz);
-        float bossRadius = boss->capsuleCollider.radius * boss->scale[0];
-        if (dist <= (reachEnd + bossRadius)) {
+        float bossRadiusReach = boss->capsuleCollider.radius;
+        if (dist <= (reachEnd + bossRadiusReach)) {
             attackHit = true;
         }
     }
@@ -1027,6 +1035,9 @@ void character_init(void)
 
     T3DSkeleton* skeletonBlend = malloc(sizeof(T3DSkeleton));
     *skeletonBlend = t3d_skeleton_clone(skeleton, false);
+
+    // Cache sword/hand bone index for collider attachment (try common names)
+    characterSwordBoneIndex = t3d_skeleton_find_bone(skeleton, "Hand-Right");
 
     const int animationCount = ANIM_COUNT;
     const char* animationNames[] = {
