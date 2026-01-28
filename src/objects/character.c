@@ -20,6 +20,9 @@
 #include "collision_mesh.h"
 #include "game_math.h"
 #include "display_utility.h"
+#include "controllers/audio_controller.h"
+#include "scenes/scene_sfx.h"
+#include "utilities/general_utility.h"
 
 /*
  Character Controller
@@ -121,6 +124,29 @@ static int animStrafeDirFlag = 0;           // -1 = left, +1 = right
 static float animStrafeBlendRatio = 0.0f;   // 0 = pure run, 1 = pure strafe
 
 static CharacterState prevState = CHAR_STATE_NORMAL;
+
+// Character SFX state
+static float footstepTimer = 0.0f;
+static const float FOOTSTEP_WALK_INTERVAL = 0.45f;
+static const float FOOTSTEP_RUN_INTERVAL  = 0.28f;
+
+static inline void character_play_swing(void) {
+    audio_play_scene_sfx_dist(SCENE1_SFX_CHAR_SWING1, 1.0f, 0.0f);
+}
+
+static inline int character_random_hit_sfx(void) {
+    return SCENE1_SFX_CHAR_ATTACK_HIT1 + (int)(rand_custom_u32() % 6);
+}
+
+static inline void character_play_hit(void) {
+    audio_play_scene_sfx_dist(character_random_hit_sfx(), 1.0f, 0.0f);
+}
+
+static inline void character_play_footstep(bool run) {
+    int base = run ? SCENE1_SFX_CHAR_FOOTSTEP_RUN1 : SCENE1_SFX_CHAR_FOOTSTEP_WALK1;
+    int idx  = base + (int)(rand_custom_u32() % 4);
+    audio_play_scene_sfx_dist(idx, 1.0f, 0.0f);
+}
 
 static void character_anim_apply_pose(void)
 {
@@ -228,6 +254,9 @@ void character_reset(void)
     lastAttachedMain = -1;
     lastAttachedBlend = -1;
     lastAnimSpeed = -1.0f;
+
+    footstepTimer = 0.0f;
+
 }
 
 void character_reset_button_state(void)
@@ -430,6 +459,7 @@ static inline void try_start_attack(bool leftJustPressed) {
         float fz =  fm_cosf(yaw);
         movementVelocityX += fx * ATTACK_FORWARD_IMPULSE;
         movementVelocityZ += fz * ATTACK_FORWARD_IMPULSE;
+        character_play_swing();
     } else if (characterState == CHAR_STATE_ATTACKING && !attackEnding) {
         // Queue input only if we're in the window
         if (actionTimer >= ATTACK_QUEUE_OPEN && actionTimer <= ATTACK_QUEUE_CLOSE) {
@@ -455,6 +485,7 @@ static inline void upgrade_to_strong_attack(bool leftHeldNow) {
         character.currentAttackHasHit = false;
         movementVelocityX = 0.0f;
         movementVelocityZ = 0.0f;
+        character_play_swing();
     }
     if (characterState == CHAR_STATE_NORMAL) {
         strongAttackUpgradedFlag = false;
@@ -1354,6 +1385,7 @@ void character_update(void)
                     boss_apply_damage(boss, damage);
                 }
                 character.currentAttackHasHit = true; // Mark attack as having hit
+                character_play_hit();
             }
 
         }
@@ -1378,6 +1410,24 @@ void character_update(void)
     float animationSpeedRatio = fminf(1.0f, velMag / MAX_MOVEMENT_SPEED);
     update_animations(animationSpeedRatio, characterState, deltaTime);
     prevState = characterState;
+
+    // Footstep SFX for locomotion
+    if (characterState == CHAR_STATE_NORMAL) {
+        bool isRunning = (animationSpeedRatio >= RUN_THRESHOLD);
+        bool isWalking = (!isRunning) && (animationSpeedRatio >= WALK_THRESHOLD);
+        if (isRunning || isWalking) {
+            float interval = isRunning ? FOOTSTEP_RUN_INTERVAL : FOOTSTEP_WALK_INTERVAL;
+            footstepTimer += deltaTime;
+            if (footstepTimer >= interval) {
+                character_play_footstep(isRunning);
+                footstepTimer = 0.0f;
+            }
+        } else {
+            footstepTimer = 0.0f;
+        }
+    } else {
+        footstepTimer = 0.0f;
+    }
 
     // Calculate proposed new position
     float newPosX = character.pos[0] + movementVelocityX * deltaTime;
