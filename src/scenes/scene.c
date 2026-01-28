@@ -762,7 +762,8 @@ void scene_init_playing(){
     character.scale[1] = MODEL_SCALE * 0.5f;
     character.scale[2] = MODEL_SCALE * 0.5f;
 
-    character.rot[1] = TITLE_CHARACTER_YAW;
+    // Face towards boss
+    character.rot[1] = TITLE_CHARACTER_YAW + T3D_PI;
 
     character_update_position();
 
