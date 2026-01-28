@@ -306,10 +306,8 @@ static void boss_ai_select_attack(Boss* boss, float dist) {
         boss->flipAttackTargetPos[0] = targetX;
         boss->flipAttackTargetPos[1] = targetY;
         boss->flipAttackTargetPos[2] = targetZ;
-        float height = 10.0f + ((float)(rand() % 10));
-        // Clamp height values to prevent denormals
-        if (fabsf(height) < 1e-6f) height = 0.0f;
-        boss->flipAttackHeight = height;
+
+        boss->flipAttackHeight = startY;
         boss->currentAttackName = "Flip Attack";
         boss->attackNameDisplayTimer = 2.0f;
         boss->currentAttackId = BOSS_ATTACK_FLIP_ATTACK;
