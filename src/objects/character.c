@@ -23,7 +23,7 @@
 
 /*
  Character Controller
- - Responsibilities: input handling, action state (roll/attack), movement + rotation,
+ - Responsibilities: input handling, action state (roll/attack/jump), movement + rotation,
      animation selection, and third-person camera follow.
  - Conventions: model forward is +Z at yaw 0, world up is +Y, camera yaw uses `cameraAngleX`.
 */
@@ -154,6 +154,11 @@ static inline void play_anim_on_skeleton(int animIndex, T3DSkeleton* skel, T3DAn
 static int lastBaseAnimLock = -1;
 static int lastStrafeAnimLock = -1;
 
+// Animation attachment/speed tracking (must be declared before first use)
+static int lastAttachedMain = -1;
+static int lastAttachedBlend = -1;
+static float lastAnimSpeed = -1.0f;
+
 // Forward declaration for shadow matrix helper
 static inline void character_update_shadow_mat(void);
 
@@ -212,6 +217,11 @@ void character_reset(void)
     character.blendFactor = 0.0f;
     character.blendTimer = 0.0f;
     walkThroughFog = false;
+    
+    // Reset attach cache
+    lastAttachedMain = -1;
+    lastAttachedBlend = -1;
+    lastAnimSpeed = -1.0f;
 }
 
 void character_reset_button_state(void)
@@ -516,7 +526,7 @@ static inline void progress_action_timers(float dt) {
     }
 }
 
-static inline void update_actions(const joypad_buttons_t* buttons, bool leftHeldNow, bool leftJustPressed, const StickInput* stick, float dt) {
+static inline void update_actions(const joypad_buttons_t* buttons, bool leftHeldNow, bool leftJustPressed, bool jumpJustPressed, const StickInput* stick, float dt) {
     // Roll
     try_start_roll(buttons, stick);
     // Attacks
@@ -674,24 +684,11 @@ static inline void anim_stop(T3DAnim** set, int idx)
     t3d_anim_set_playing(set[idx], false);
 }
 
-static inline void anim_frame_begin(void)
-{
-    // Avoid per-frame skeleton resets during actions with blending
-    // When blending, animations need to maintain their poses, not reset to T-pose
-    if (characterState == CHAR_STATE_ROLLING) return;
-    if (is_action_state(characterState) && character.isBlending) return;
-    
-    if (character.skeleton)      t3d_skeleton_reset(character.skeleton);
-    if (character.skeletonBlend) t3d_skeleton_reset(character.skeletonBlend);
-}
-
 static inline bool try_lockon_locomotion_blend(float speedRatio, CharacterState state, float dt) {
     if (is_action_state(state)) return false;
     // If we're already blending (e.g., roll handoff), let the generic blend path run
     if (character.isBlending) return false;
     if (!(state == CHAR_STATE_NORMAL && cameraLockOnActive && animStrafeDirFlag != 0 && character.animationsBlend)) return false;
-
-    anim_frame_begin();
 
     float yaw = character.rot[1];
     float fwdX = -fm_sinf(yaw);
@@ -777,6 +774,8 @@ static void switch_to_action_animation(int targetAnim) {
         
         // Bind previous to blend skeleton using the BLEND array
         anim_bind_and_play(character.animationsBlend, character.previousAnimation, character.skeletonBlend, false, false);
+        // Mark as needing attach next frame
+        lastAttachedBlend = character.previousAnimation;
     }
 
     // Stop previous main clip AFTER we've copied its time
@@ -786,6 +785,8 @@ static void switch_to_action_animation(int targetAnim) {
 
     // Bind and restart target action anim on main skeleton
     anim_bind_and_play(character.animations, targetAnim, character.skeleton, false, true);
+    // Mark as needing attach next frame
+    lastAttachedMain = targetAnim;
 }
 
 static void switch_to_locomotion_animation(int targetAnim) {
@@ -808,6 +809,7 @@ static void switch_to_locomotion_animation(int targetAnim) {
             t3d_anim_attach(character.animationsBlend[prevClip], character.skeletonBlend);
             t3d_anim_set_looping(character.animationsBlend[prevClip], false);
             t3d_anim_set_playing(character.animationsBlend[prevClip], true);
+            lastAttachedBlend = prevClip;
         }
     } else {
         character.isBlending = false;
@@ -816,6 +818,7 @@ static void switch_to_locomotion_animation(int targetAnim) {
     if (character.animations[targetAnim]) {
         t3d_skeleton_reset(character.skeleton);
         t3d_anim_attach(character.animations[targetAnim], character.skeleton);
+        lastAttachedMain = targetAnim;
         bool shouldLoop = (targetAnim == ANIM_IDLE || targetAnim == ANIM_IDLE_TITLE || targetAnim == ANIM_WALK ||
                            targetAnim == ANIM_RUN || targetAnim == ANIM_WALK_BACK ||
                            targetAnim == ANIM_RUN_BACK || targetAnim == ANIM_STRAFE_WALK_LEFT ||
@@ -904,14 +907,15 @@ static inline void update_animations(float speedRatio, CharacterState state, flo
         }
     }
 
-    // Reset skeletons for deterministic per-frame application
-    anim_frame_begin();
-
     // Update current animation
     if (character.currentAnimation >= 0 && character.animations[character.currentAnimation]) {
         T3DAnim* currentAnim = character.animations[character.currentAnimation];
-        // Ensure anim is attached every frame after reset to avoid T-pose
-        t3d_anim_attach(currentAnim, character.skeleton);
+        
+        // Only attach if the animation changed - attaching is expensive!
+        if (lastAttachedMain != character.currentAnimation) {
+            t3d_anim_attach(currentAnim, character.skeleton);
+            lastAttachedMain = character.currentAnimation;
+        }
         
         // Set speed based on state and movement
         float animSpeed = 1.0f;
@@ -936,18 +940,25 @@ static inline void update_animations(float speedRatio, CharacterState state, flo
             if (len > 0.0f && t >= len) t3d_anim_set_time(currentAnim, 0.0f);
         }
 
-        t3d_anim_set_speed(currentAnim, animSpeed);
+        // Only set speed when it actually changes - set_speed can be expensive
+        if (fabsf(animSpeed - lastAnimSpeed) > 0.001f) {
+            t3d_anim_set_speed(currentAnim, animSpeed);
+            lastAnimSpeed = animSpeed;
+        }
         t3d_anim_update(currentAnim, dt);
     }
 
     // Update previous animation if blending - use animationsBlend[]
     if (character.isBlending && character.previousAnimation >= 0 && 
         character.animationsBlend[character.previousAnimation]) {
-        // Ensure previous anim is attached to blend skeleton this frame
-        t3d_anim_attach(character.animationsBlend[character.previousAnimation], character.skeletonBlend);
+        
+        // Only attach if the blend animation changed - attaching is expensive!
+        if (lastAttachedBlend != character.previousAnimation) {
+            t3d_anim_attach(character.animationsBlend[character.previousAnimation], character.skeletonBlend);
+            lastAttachedBlend = character.previousAnimation;
+        }
         
         // Update with dt=0 to apply the pose to the skeleton without advancing time
-        // This is critical - without this, skeletonBlend stays in T-pose after anim_frame_begin()
         t3d_anim_update(character.animationsBlend[character.previousAnimation], 0.0f);
 
         // Blend between previous and current
@@ -1182,6 +1193,8 @@ void character_update(void)
     joypad_buttons_t buttons = joypad_get_buttons_pressed(JOYPAD_PORT_1);
     joypad_buttons_t buttonsReleased = joypad_get_buttons_released(JOYPAD_PORT_1);
 
+    // Jump removed
+    bool jumpJustPressed = false;
     lastBPressed = false;
 
     // Handle left trigger hold time tracking for charge attacks
@@ -1207,7 +1220,7 @@ void character_update(void)
     lastLPressed = buttons.l;
 
     StickInput stick = normalize_stick((float)joypad.stick_x, (float)joypad.stick_y);
-    update_actions(&buttons, leftTriggerHeld, leftJustPressed, &stick, deltaTime);
+    update_actions(&buttons, leftTriggerHeld, leftJustPressed, jumpJustPressed, &stick, deltaTime);
 
     if (characterState != CHAR_STATE_ATTACKING && characterState != CHAR_STATE_ATTACKING_STRONG && characterState != CHAR_STATE_KNOCKDOWN && stick.magnitude > 0.0f) {
         float desiredVelX, desiredVelZ;
@@ -1296,11 +1309,20 @@ void character_update(void)
             }
 
         }
+    // } else if (characterState == CHAR_STATE_JUMPING) {
+    //     // Keep horizontal velocity from the takeoff; no air drag so run speed carries through jump
+    //     apply_friction(deltaTime, JUMP_FRICTION_SCALE);
+    //     float jumpPhase = fminf(1.0f, actionTimer / JUMP_DURATION);
+    //     character.pos[1] = fm_sinf(jumpPhase * T3D_PI) * JUMP_HEIGHT;
     } else {
         // Apply friction when not providing input; include roll-specific decay
         float friction = (characterState == CHAR_STATE_ROLLING) ? ROLL_FRICTION_SCALE : 1.0f;
         apply_friction(deltaTime, friction);
     }
+
+    // if (characterState != CHAR_STATE_JUMPING) {
+    //     character.pos[1] = 0.0f;
+    // }
 
     update_current_speed(stick.magnitude, deltaTime);
     // Drive animation speed from actual movement velocity to avoid idle flicker after actions
@@ -1474,28 +1496,35 @@ void character_update_camera(void)
 
 // ==== Drawing Functions ====
 
+// Draw only the shadow - should be called in a batched shadow pass with zbuf(true, false)
+void character_draw_shadow(void)
+{
+    if (!character.visible) return;
+    if (!character.dpl_shadow || !character.shadowMat) return;
+
+    float h = character.pos[1] - SHADOW_GROUND_Y;
+    if (h < 0.0f) h = 0.0f;
+    float t = h / JUMP_HEIGHT;
+    if (t > 1.0f) t = 1.0f;
+
+    // Smooth fade: (1 - t)^2
+    float fade = 1.0f - t;
+    fade *= fade;
+    uint8_t a = (uint8_t)(SHADOW_BASE_ALPHA * fade);
+
+    if (a > 0) {
+        rdpq_set_prim_color(RGBA32(0, 0, 0, a));
+        t3d_matrix_set(character.shadowMat, true);
+        rspq_block_run(character.dpl_shadow);
+    }
+}
+
 void character_draw(void) 
 {
 	if (!character.visible) return;
 
-	// --- Shadow (ground-locked) ---
-	if (character.dpl_shadow && character.shadowMat) {
-        float h = character.pos[1] - SHADOW_GROUND_Y;
-        if (h < 0.0f) h = 0.0f;
-        float t = h / JUMP_HEIGHT;
-        if (t > 1.0f) t = 1.0f;
-
-        // Smooth fade: (1 - t)^2
-        float fade = 1.0f - t;
-        fade *= fade;
-        uint8_t a = (uint8_t)(SHADOW_BASE_ALPHA * fade);
-
-        if (a > 0) {
-            rdpq_set_prim_color(RGBA32(0, 0, 0, a));
-            t3d_matrix_set(character.shadowMat, true);
-            rspq_block_run(character.dpl_shadow);
-        }
-	}
+	// Shadow is now drawn separately via character_draw_shadow() in a batched pass
+	// This avoids expensive mode changes per character
 
 	// --- Character ---
     // Set prim color with optional red flash on recent damage
