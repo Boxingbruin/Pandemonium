@@ -1317,9 +1317,16 @@ void scene_update(void)
     }
     lastMenuActive = menuActive;
 
-    // If player is dead or victorious, wait for restart input and halt gameplay updates
+    // If player is dead or victorious, disable player control but keep boss/UI moving
     if (gameState == GAME_STATE_DEAD || gameState == GAME_STATE_VICTORY) {
+        // Keep boss AI updating so it continues moving during end screen
+        if (bossActivated && g_boss) {
+            boss_update(g_boss);
+        }
+        // Continue letterbox animation updates
+        letterbox_update();
 
+        // Allow restart prompt via A button
         if (btn.a) {
             scene_restart();
         }
