@@ -20,10 +20,11 @@ typedef enum {
     BOSS_STATE_POWER_JUMP,
     BOSS_STATE_COMBO_ATTACK,
     BOSS_STATE_COMBO_STARTER,
-    BOSS_STATE_ROAR_STOMP,
     BOSS_STATE_TRACKING_SLAM,
     BOSS_STATE_FLIP_ATTACK,
-    BOSS_STATE_LUNGE_STARTER // used for distance lunges as anticipation
+    BOSS_STATE_LUNGE_STARTER, // used for distance lunges as anticipation
+    BOSS_STATE_STOMP,
+    BOSS_STATE_ATTACK1,
 } BossState;
 
 typedef enum { // TODO: only the first = 0 is needed here
@@ -40,7 +41,9 @@ typedef enum { // TODO: only the first = 0 is needed here
     BOSS_ANIM_KNEEL = 10,
     BOSS_ANIM_KNEEL_CUTSCENE = 11,
     BOSS_ANIM_LUNGE_STARTER = 12,
-    BOSS_ANIM_COUNT = 13
+    BOSS_ANIM_ATTACK1 = 13,
+    BOSS_ANIM_STOMP1 = 14,
+    BOSS_ANIM_COUNT = 15
 } BossAnimState;
 
 typedef enum {
@@ -48,10 +51,11 @@ typedef enum {
     BOSS_ATTACK_POWER_JUMP,
     BOSS_ATTACK_COMBO,
     BOSS_ATTACK_COMBO_STARTER,
-    BOSS_ATTACK_ROAR_STOMP,
     BOSS_ATTACK_TRACKING_SLAM,
     BOSS_ATTACK_FLIP_ATTACK,
     BOSS_ATTACK_LUNGE_STARTER,
+    BOSS_ATTACK_STOMP,
+    BOSS_ATTACK_ATTACK1,
     BOSS_ATTACK_COUNT
 } BossAttackId;
 
@@ -138,10 +142,13 @@ typedef struct Boss {
     float comboCooldown;
     float comboStarterCooldown;
     float comboLungeCooldown;
-    float roarStompCooldown;
     float trackingSlamCooldown;
     float flipAttackCooldown;
-    
+    // close range stomp knockback
+    float stompCooldown;
+    // fast close range attack
+    float attack1Cooldown;
+
     // Attack state tracking
     bool isAttacking;
     float attackAnimTimer;

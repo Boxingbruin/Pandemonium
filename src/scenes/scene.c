@@ -792,7 +792,7 @@ void scene_init_playing(){
     bossActivated = true;
     // Switch music from intro cinematic to boss fight
     audio_stop_music();
-    audio_play_music("rom:/audio/music/boss_phase1-not_looping-22k.wav64", true);
+    audio_play_music("rom:/audio/music/boss_phase1-looping-mono-22k.wav64", true);
     // Hide letterbox bars with animation
     letterbox_hide();
     // Return camera control to the player

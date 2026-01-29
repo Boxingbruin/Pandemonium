@@ -39,18 +39,22 @@ static void boss_attacks_handle_tracking_slam(Boss* boss, float dt);
 static void boss_attacks_handle_charge(Boss* boss, float dt);
 static void boss_attacks_handle_flip_attack(Boss* boss, float dt);
 static void boss_attacks_handle_lunge_starter(Boss* boss, float dt);
+static void boss_attacks_handle_stomp(Boss* boss, float dt);
+static void boss_attacks_handle_attack1(Boss* boss, float dt);
 
 void boss_attacks_update(Boss* boss, float dt) {
     if (!boss) return;
     
     // Check if boss is in an attack state and update hand collider
     bool isAttackState = (boss->state == BOSS_STATE_POWER_JUMP ||
-                          boss->state == BOSS_STATE_COMBO_ATTACK ||
-                          boss->state == BOSS_STATE_COMBO_STARTER ||
-                          boss->state == BOSS_STATE_ROAR_STOMP ||
-                          boss->state == BOSS_STATE_TRACKING_SLAM ||
-                          boss->state == BOSS_STATE_COMBO_LUNGE ||
-                          boss->state == BOSS_STATE_FLIP_ATTACK);
+                        boss->state == BOSS_STATE_COMBO_ATTACK ||
+                        boss->state == BOSS_STATE_COMBO_STARTER ||
+                        boss->state == BOSS_STATE_TRACKING_SLAM ||
+                        boss->state == BOSS_STATE_COMBO_LUNGE ||
+                        boss->state == BOSS_STATE_FLIP_ATTACK ||
+                        boss->state == BOSS_STATE_LUNGE_STARTER ||
+                        boss->state == BOSS_STATE_STOMP ||
+                        boss->state == BOSS_STATE_ATTACK1);
     
     // Always update collider position for debugging (even when not attacking)
     //if (boss->handRightBoneIndex >= 0) {
@@ -77,10 +81,6 @@ void boss_attacks_update(Boss* boss, float dt) {
             boss_attacks_handle_combo_starter(boss, dt);
             break;
             
-        case BOSS_STATE_ROAR_STOMP:
-            boss_attacks_handle_roar_stomp(boss, dt);
-            break;
-            
         case BOSS_STATE_TRACKING_SLAM:
             boss_attacks_handle_tracking_slam(boss, dt);
             break;
@@ -94,6 +94,13 @@ void boss_attacks_update(Boss* boss, float dt) {
             break;
         case BOSS_STATE_LUNGE_STARTER:
             boss_attacks_handle_lunge_starter(boss, dt);
+            break;
+        case BOSS_STATE_STOMP:
+            boss_attacks_handle_stomp(boss, dt);
+            break;
+
+        case BOSS_STATE_ATTACK1:
+            boss_attacks_handle_attack1(boss, dt);
             break;
         default:
             // Not an attack state, nothing to do
@@ -557,6 +564,85 @@ static void boss_attacks_handle_charge(Boss* boss, float dt)
     if (boss->stateTimer > 0.2f && boss->stateTimer < 0.5f && !boss->currentAttackHasHit) {
         if (bossWeaponCollision) {
             character_apply_damage(15.0f);
+            boss->currentAttackHasHit = true;
+        }
+    }
+}
+
+static void boss_attacks_handle_stomp(Boss* boss, float dt)
+{
+    // Short, nasty close stomp
+    // Phase 1: quick windup (0.0 - 0.35)
+    // Phase 2: impact window (0.35 - 0.50)
+    // Phase 3: recovery (0.50+)
+    const float windupEnd = 0.35f;
+    const float impactEnd = 0.50f;
+
+    // Stationary
+    boss->velX = 0.0f;
+    boss->velZ = 0.0f;
+
+    // Face player
+    float dx = character.pos[0] - boss->pos[0];
+    float dz = character.pos[2] - boss->pos[2];
+    if (dx != 0.0f || dz != 0.0f) {
+        boss->rot[1] = -atan2f(-dz, dx) + T3D_PI;
+    }
+
+    // SFX (reuse if you have something better)
+    // If you don't have a stomp SFX, you can reuse bossSlowAttackSfx or a land sound.
+    // boss_multi_attack_sfx(boss, bossStompSfx, 2);
+
+    // Impact hit
+    if (!boss->currentAttackHasHit &&
+        boss->stateTimer >= windupEnd &&
+        boss->stateTimer <  impactEnd)
+    {
+        float px = character.pos[0] - boss->pos[0];
+        float pz = character.pos[2] - boss->pos[2];
+        float dist = sqrtf(px*px + pz*pz);
+
+        const float radius = 12.0f; // tight radius
+        if (dist <= radius) {
+            float damage = 22.0f * (1.0f - (dist / radius)); // falloff
+            if (damage < 6.0f) damage = 6.0f;               // minimum chip
+            character_apply_damage(damage);
+            boss->currentAttackHasHit = true;
+        }
+    }
+}
+
+static void boss_attacks_handle_attack1(Boss* boss, float dt)
+{
+    // Close-range primary slash
+    // Keep it snappy so it can be used more often.
+    const float hitStart = 0.25f;
+    const float hitEnd   = 0.45f;
+
+    // Mostly stationary (optional micro-step forward if you want)
+    boss->velX = 0.0f;
+    boss->velZ = 0.0f;
+
+    // Face player (slight lead)
+    const float leadTime = 0.10f;
+    float aimX = character.pos[0] + boss->lastPlayerVel[0] * leadTime;
+    float aimZ = character.pos[2] + boss->lastPlayerVel[1] * leadTime;
+
+    float dx = aimX - boss->pos[0];
+    float dz = aimZ - boss->pos[2];
+    if (dx != 0.0f || dz != 0.0f) {
+        boss->rot[1] = -atan2f(-dz, dx) + T3D_PI;
+    }
+
+    // SFX: reuse something similar (you already use SCENE1_SFX_BOSS_SWING2 in combo starter)
+    // boss_play_attack_sfx(boss, SCENE1_SFX_BOSS_SWING2, 1.0f);
+
+    if (!boss->currentAttackHasHit &&
+        boss->stateTimer >= hitStart &&
+        boss->stateTimer <  hitEnd)
+    {
+        if (bossWeaponCollision) {
+            character_apply_damage(18.0f);
             boss->currentAttackHasHit = true;
         }
     }

@@ -156,9 +156,10 @@ static void boss_update_movement(Boss* boss, float dt) {
         boss->state != BOSS_STATE_COMBO_STARTER && 
         boss->state != BOSS_STATE_TRACKING_SLAM && 
         boss->state != BOSS_STATE_COMBO_ATTACK && 
-        boss->state != BOSS_STATE_ROAR_STOMP &&
         boss->state != BOSS_STATE_COMBO_LUNGE &&
-        boss->state != BOSS_STATE_LUNGE_STARTER) {
+        boss->state != BOSS_STATE_LUNGE_STARTER &&
+        boss->state != BOSS_STATE_STOMP &&
+        boss->state != BOSS_STATE_ATTACK1) {
         
         boss->velX += (desiredX * maxSpeed - boss->velX) * ACCEL * dt;
         boss->velZ += (desiredZ * maxSpeed - boss->velZ) * ACCEL * dt;
@@ -220,15 +221,17 @@ static void boss_update_movement(Boss* boss, float dt) {
 
         boss->rot[1] = currentAngle + angleDelta;
     }
+    
     else if (
         boss->state == BOSS_STATE_POWER_JUMP ||
         boss->state == BOSS_STATE_FLIP_ATTACK ||
         boss->state == BOSS_STATE_COMBO_STARTER ||
         boss->state == BOSS_STATE_TRACKING_SLAM ||
         boss->state == BOSS_STATE_COMBO_ATTACK ||
-        boss->state == BOSS_STATE_ROAR_STOMP ||
-        boss->state == BOSS_STATE_COMBO_LUNGE ||     // <-- CRITICAL
-        boss->state == BOSS_STATE_LUNGE_STARTER      // <-- also good
+        boss->state == BOSS_STATE_COMBO_LUNGE ||   
+        boss->state == BOSS_STATE_LUNGE_STARTER  ||
+        boss->state == BOSS_STATE_STOMP ||
+        boss->state == BOSS_STATE_ATTACK1
     ) {
         // Attack states: rotation is handled by boss_attacks_* (do nothing here)
     }
@@ -391,7 +394,9 @@ void boss_init(Boss* boss) {
         "FlipAttack1",
         "Phase1Kneel",
         "Phase1KneelCutscene1",
-        "LungeStarter1"
+        "LungeStarter1",
+        "Attack1",
+        "Stomp"
     };
     const bool animationsLooping[] = {
         true,  // Idle - loop
@@ -407,6 +412,8 @@ void boss_init(Boss* boss) {
         true, // Kneel - loop
         false, // Kneel cutscene "FEAR"
         false, // Lunge Starter
+        false, // Attack1
+        false, // Stomp
     };
     
     T3DAnim** animations = malloc_uncached(animationCount * sizeof(T3DAnim*));
@@ -419,8 +426,11 @@ void boss_init(Boss* boss) {
     }
     
     boss->animations = (void**)animations;
-    boss->animationCount = animationCount;
-    
+    if (boss->animationCount <= 0 || boss->animationCount > 64) {
+        debugf("BAD boss->animationCount = %d\n", boss->animationCount);
+        boss->animationCount = BOSS_ANIM_COUNT;
+    }
+        
     // Set current animation index
     boss->currentAnimation = BOSS_ANIM_KNEEL;
     boss->currentAnimState = BOSS_ANIM_KNEEL;
@@ -546,10 +556,11 @@ void boss_init(Boss* boss) {
     boss->powerJumpCooldown = 0.0f;
     boss->comboCooldown = 0.0f;
     boss->comboStarterCooldown = 0.0f;
-    boss->roarStompCooldown = 0.0f;
     boss->trackingSlamCooldown = 0.0f;
     boss->comboLungeCooldown = 0.0f;
-    
+    boss->stompCooldown   = 0.0f;
+    boss->attack1Cooldown = 0.0f;
+
     // Initialize combo state
     boss->comboStep = 0;
     boss->comboInterrupted = false;
@@ -610,28 +621,59 @@ void boss_reset(Boss* boss) {
     if (!boss) return;
     
     boss->state = BOSS_STATE_INTRO;
-    boss->stateTimer = 0.0f;
     boss->health = boss->maxHealth;
+
     boss->phaseIndex = 1;
     
-    // Reset all cooldowns
+    // Initialize movement
+    boss->velX = 0.0f;
+    boss->velZ = 0.0f;
+    boss->currentSpeed = 0.0f;
+    boss->turnRate = 8.0f;
+    boss->orbitRadius = 6.0f;
+    boss->strafeDirection = 1.0f;
+    
+    // Initialize timers
+    boss->stateTimer = 0.0f;
     boss->attackCooldown = 0.0f;
+    boss->damageFlashTimer = 0.0f;
+    boss->attackAnimTimer = 0.0f;
+    boss->attackNameDisplayTimer = 0.0f;
+    boss->hitMessageTimer = 0.0f;
+    boss->animationTransitionTimer = 0.0f;
+    
+    // Initialize attack state
+    boss->isAttacking = false;
+    boss->currentAttackHasHit = false;
+    boss->currentAttackId = BOSS_ATTACK_COUNT;
+    boss->currentAttackName = NULL;
+    
+    // Initialize cooldowns
     boss->powerJumpCooldown = 0.0f;
     boss->comboCooldown = 0.0f;
     boss->comboStarterCooldown = 0.0f;
-    boss->roarStompCooldown = 0.0f;
     boss->trackingSlamCooldown = 0.0f;
+    boss->comboLungeCooldown = 0.0f;
+    boss->stompCooldown   = 0.0f;
+    boss->attack1Cooldown = 0.0f;
+
+    // Initialize combo state
+    boss->comboStep = 0;
+    boss->comboInterrupted = false;
+    boss->comboVulnerableTimer = 0.0f;
     
-    // Reset combo starter state
+    // Initialize combo starter state
+    boss->swordThrown = false;
+    boss->comboStarterSlamHasHit = false;
     boss->comboStarterCompleted = false;
+    boss->swordProjectilePos[0] = 0.0f;
+    boss->swordProjectilePos[1] = 0.0f;
+    boss->swordProjectilePos[2] = 0.0f;
+    boss->comboStarterTargetPos[0] = 0.0f;
+    boss->comboStarterTargetPos[1] = 0.0f;
+    boss->comboStarterTargetPos[2] = 0.0f;
     
-    // Reset attack state
-    boss->currentAttackHasHit = false;
-    boss->currentAttackName = NULL;
-    boss->attackNameDisplayTimer = 0.0f;
-    boss->animationTransitionTimer = 0.0f;
-    
-    // Reset targeting
+    // Initialize targeting
     boss->debugTargetingPos[0] = 0.0f;
     boss->debugTargetingPos[1] = 0.0f;
     boss->debugTargetingPos[2] = 0.0f;
@@ -646,14 +688,19 @@ void boss_reset(Boss* boss) {
     boss->lastPlayerVel[0] = 0.0f;
     boss->lastPlayerVel[1] = 0.0f;
     
-    // Reset velocity
-    boss->velX = 0.0f;
-    boss->velZ = 0.0f;
-    boss->strafeDirection = 1.0f;
-    
-    // Reset animation state
-    boss->isAttacking = false;
-    boss->attackAnimTimer = 0.0f;
+    // Initialize flip attack state
+    boss->flipAttackStartPos[0] = 0.0f;
+    boss->flipAttackStartPos[1] = 0.0f;
+    boss->flipAttackStartPos[2] = 0.0f;
+    boss->flipAttackTargetPos[0] = 0.0f;
+    boss->flipAttackTargetPos[1] = 0.0f;
+    boss->flipAttackTargetPos[2] = 0.0f;
+    boss->flipAttackHeight = 0.0f;
+    boss->flipAttackMidReaimed = false;
+    boss->flipAttackTravelYaw = boss->rot[1];
+    boss->flipAttackPastDist  = 0.0f;
+
+    boss->pendingRequests = 0;
     
     boss_ai_init(boss);
     boss_anim_init(boss);
@@ -685,14 +732,22 @@ void boss_free(Boss* boss) {
     
     if (boss->animations) {
         T3DAnim** anims = (T3DAnim**)boss->animations;
+
         for (int i = 0; i < boss->animationCount; i++) {
             if (anims[i]) {
                 t3d_anim_destroy(anims[i]);
+
+                // IMPORTANT: anims[i] was allocated with malloc_uncached
+                free_uncached(anims[i]);
+                anims[i] = NULL;
             }
         }
-        free(boss->animations);
+
+        // IMPORTANT: the anim pointer array was allocated with malloc_uncached
+        free_uncached(boss->animations);
+        boss->animations = NULL;
     }
-    
+        
     if (boss->modelMat) {
         rspq_wait();
         free_uncached(boss->modelMat);
