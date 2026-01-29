@@ -47,7 +47,6 @@ void boss_ai_init(Boss* boss) {
     boss->powerJumpCooldown = 0.0f;
     boss->comboCooldown = 0.0f;
     boss->comboStarterCooldown = 0.0f;
-    boss->roarStompCooldown = 0.0f;
     boss->trackingSlamCooldown = 0.0f;
     boss->flipAttackCooldown = 0.0f;
     
@@ -72,9 +71,10 @@ static bool boss_ai_state_is_attack(BossState state) {
         || state == BOSS_STATE_POWER_JUMP
         || state == BOSS_STATE_COMBO_ATTACK
         || state == BOSS_STATE_COMBO_STARTER
-        || state == BOSS_STATE_ROAR_STOMP
         || state == BOSS_STATE_TRACKING_SLAM
-        || state == BOSS_STATE_FLIP_ATTACK;
+        || state == BOSS_STATE_FLIP_ATTACK
+        || state == BOSS_STATE_STOMP
+        || state == BOSS_STATE_ATTACK1;
 }
 
 static void predict_character_position(float *predictedPos, float predictionTime) {
@@ -150,7 +150,6 @@ static void boss_ai_update_cooldowns(Boss* boss, float dt) {
     if (boss->powerJumpCooldown > 0.0f) boss->powerJumpCooldown -= dt;
     if (boss->comboCooldown > 0.0f) boss->comboCooldown -= dt;
     if (boss->comboStarterCooldown > 0.0f) boss->comboStarterCooldown -= dt;
-    if (boss->roarStompCooldown > 0.0f) boss->roarStompCooldown -= dt;
     if (boss->trackingSlamCooldown > 0.0f) boss->trackingSlamCooldown -= dt;
     if (boss->flipAttackCooldown > 0.0f) boss->flipAttackCooldown -= dt;
     
@@ -158,6 +157,9 @@ static void boss_ai_update_cooldowns(Boss* boss, float dt) {
     if (boss->hitMessageTimer > 0.0f) boss->hitMessageTimer -= dt;
 
     if (boss->comboLungeCooldown > 0.0f) boss->comboLungeCooldown -= dt;
+
+    if (boss->stompCooldown > 0.0f)   boss->stompCooldown -= dt;
+    if (boss->attack1Cooldown > 0.0f) boss->attack1Cooldown -= dt;
 }
 
 static void boss_ai_setup_combo_lunge(Boss* boss, float dist, float dx, float dz)
@@ -255,66 +257,173 @@ static void boss_ai_combo_lunge_helper(Boss* boss, float dist, float dx, float d
     boss_ai_setup_combo_lunge(boss, dist, dx, dz);
 }
 
+// - Stomp: super close (<= 22), highest priority
+// - Attack1: close band (50..80) to overlap tracking slam + close-lunge mode
+// - Combo starter gated to 60..80 so it doesn't steal 23..49 range
+// - Attack1 weighted slightly more frequent than tracking slam + close-lunge
+
 static void boss_ai_select_attack(Boss* boss, float dist) {
     boss->currentAttackHasHit = false;
-    
-    // Check combo starter first when distance is approximately 75 units
-    // This allows combo starter to trigger, which then enables charge and combo attacks
-    if (dist >= 0.0f && dist <= 80.0f && boss->comboStarterCooldown <= 0.0f) {
+
+    // ------------------------------------------------------------
+    // NEW: Stomp (super close) and Attack1 (close band)
+    // ------------------------------------------------------------
+    const float STOMP_RANGE = 22.0f;     // super close
+    const float CLOSE_MIN   = 50.0f;     // same as your slam band start
+    const float CLOSE_MAX   = 80.0f;     // overlap with close-lunge mode (<= 80)
+
+    // 1) Stomp: highest priority at super close
+    if (dist <= STOMP_RANGE && boss->stompCooldown <= 0.0f) {
+        boss->state = BOSS_STATE_STOMP;
+        boss->stateTimer = 0.0f;
+
+        boss->stompCooldown  = 6.0f;     // tune (not the duration)
+        boss->attackCooldown = 1.0f;     // global gate so it can’t instantly chain
+
+        boss->isAttacking = true;
+        boss->attackAnimTimer = 0.0f;
+        boss->animationTransitionTimer = 0.0f;
+
+        boss->velX = 0.0f;
+        boss->velZ = 0.0f;
+
+        boss->currentAttackName = "Stomp";
+        boss->attackNameDisplayTimer = 2.0f;
+        boss->currentAttackId = BOSS_ATTACK_STOMP;
+        return;
+    }
+
+    // 2) Attack1: close band, slightly more frequent than tracking slam + close-lunge
+    if (dist >= CLOSE_MIN && dist <= CLOSE_MAX) {
+
+        bool attack1Ready = (boss->attack1Cooldown <= 0.0f);
+        bool slamReady    = (boss->trackingSlamCooldown <= 0.0f);
+        bool lungeReady   = (boss->comboStarterCompleted &&
+                             boss->comboLungeCooldown <= 0.0f &&
+                             boss->attackCooldown <= 0.0f);
+
+        // weights (Attack1 slightly more frequent than both)
+        float wA1    = attack1Ready ? 0.45f : 0.0f;
+        float wSlam  = slamReady    ? 0.30f : 0.0f;
+        float wLunge = lungeReady   ? 0.25f : 0.0f;
+
+        float sum = wA1 + wSlam + wLunge;
+
+        if (sum > 0.0f) {
+            float r = (float)(rand() % 1000) / 1000.0f; // 0..1
+            r *= sum;
+
+            if (r < wA1) {
+                boss->state = BOSS_STATE_ATTACK1;
+                boss->stateTimer = 0.0f;
+
+                boss->attack1Cooldown = 6.0f;   // tune (not the duration)
+                boss->attackCooldown  = 1.0f;   // global gate
+
+                boss->isAttacking = true;
+                boss->attackAnimTimer = 0.0f;
+                boss->animationTransitionTimer = 0.0f;
+
+                boss->velX = 0.0f;
+                boss->velZ = 0.0f;
+
+                boss->currentAttackName = "Attack1";
+                boss->attackNameDisplayTimer = 2.0f;
+                boss->currentAttackId = BOSS_ATTACK_ATTACK1;
+                return;
+            }
+
+            r -= wA1;
+
+            if (r >= wSlam) {
+                // Lunge chosen
+                float dx = character.pos[0] - boss->pos[0];
+                float dz = character.pos[2] - boss->pos[2];
+                boss_ai_combo_lunge_helper(boss, dist, dx, dz);
+                return;
+            }
+
+            // else: Slam chosen -> fall through to your existing slam block below
+        }
+    }
+
+    // Combo starter gated so it doesn't steal point-blank range (23..49)
+    if (dist >= 60.0f && dist <= 80.0f && boss->comboStarterCooldown <= 0.0f) {
         boss->state = BOSS_STATE_COMBO_STARTER;
         boss->stateTimer = 0.0f;
         boss->comboStarterCooldown = 10.0f;
         boss->swordThrown = false;
         boss->comboStarterSlamHasHit = false;
         boss->comboStarterCompleted = false;
-        // Combo starter does not move the boss - ensure velocity is zero
+
         boss->velX = 0.0f;
         boss->velZ = 0.0f;
-        // Combo starter targets where player was at the time (current position, not predicted)
+
         boss->comboStarterTargetPos[0] = character.pos[0];
         boss->comboStarterTargetPos[1] = character.pos[1];
         boss->comboStarterTargetPos[2] = character.pos[2];
+
         boss->currentAttackName = "Combo Starter";
         boss->attackNameDisplayTimer = 2.0f;
         boss->currentAttackId = BOSS_ATTACK_COMBO_STARTER;
     }
-    // Check flip attack when at medium-long range (closer than power jump)
     else if (boss->flipAttackCooldown <= 0.0f && dist >= 100.0f && dist < 200.0f) {
         boss->state = BOSS_STATE_FLIP_ATTACK;
         boss->stateTimer = 0.0f;
         boss->flipAttackCooldown = 10.0f;
         boss->currentAttackHasHit = false;
-        // Clamp position values to prevent denormals
+
+        boss->flipAttackMidReaimed = false;
+        boss->flipAttackTravelYaw = boss->rot[1];
+        boss->flipAttackPastDist  = 0.0f;
+
         float startX = boss->pos[0];
         float startY = boss->pos[1];
         float startZ = boss->pos[2];
         if (fabsf(startX) < 1e-6f) startX = 0.0f;
         if (fabsf(startY) < 1e-6f) startY = 0.0f;
         if (fabsf(startZ) < 1e-6f) startZ = 0.0f;
+
         boss->flipAttackStartPos[0] = startX;
         boss->flipAttackStartPos[1] = startY;
         boss->flipAttackStartPos[2] = startZ;
-        predict_character_position(boss->lockedTargetingPos, 0.7f); // Shorter prediction time
+
+        predict_character_position(boss->lockedTargetingPos, 0.7f);
         boss->targetingLocked = true;
+
         float targetX = boss->lockedTargetingPos[0];
         float targetY = boss->lockedTargetingPos[1];
         float targetZ = boss->lockedTargetingPos[2];
-        // Clamp target position values
+
         if (fabsf(targetX) < 1e-6f) targetX = 0.0f;
         if (fabsf(targetY) < 1e-6f) targetY = 0.0f;
         if (fabsf(targetZ) < 1e-6f) targetZ = 0.0f;
-        boss->flipAttackTargetPos[0] = targetX;
-        boss->flipAttackTargetPos[1] = targetY;
-        boss->flipAttackTargetPos[2] = targetZ;
-        float height = 10.0f + ((float)(rand() % 10));
-        // Clamp height values to prevent denormals
-        if (fabsf(height) < 1e-6f) height = 0.0f;
-        boss->flipAttackHeight = height;
+
+        const float FLIP_PAST_DIST = 250.0f;
+
+        float dirX = targetX - startX;
+        float dirZ = targetZ - startZ;
+        float len  = sqrtf(dirX*dirX + dirZ*dirZ);
+
+        if (len > 0.001f) {
+            dirX /= len;
+            dirZ /= len;
+
+            boss->flipAttackTargetPos[0] = targetX + dirX * FLIP_PAST_DIST;
+            boss->flipAttackTargetPos[1] = targetY;
+            boss->flipAttackTargetPos[2] = targetZ + dirZ * FLIP_PAST_DIST;
+        } else {
+            boss->flipAttackTargetPos[0] = targetX;
+            boss->flipAttackTargetPos[1] = targetY;
+            boss->flipAttackTargetPos[2] = targetZ;
+        }
+
+        boss->flipAttackHeight = 18.0f;
+
         boss->currentAttackName = "Flip Attack";
         boss->attackNameDisplayTimer = 2.0f;
         boss->currentAttackId = BOSS_ATTACK_FLIP_ATTACK;
     }
-    // Check power jump when at very long range (only when combo starter is on cooldown or at extreme range)
     else if (boss->powerJumpCooldown <= 0.0f && dist >= 250.0f) {
         boss->state = BOSS_STATE_POWER_JUMP;
         boss->stateTimer = 0.0f;
@@ -323,15 +432,20 @@ static void boss_ai_select_attack(Boss* boss, float dist) {
         boss->attackAnimTimer = 0.0f;
         boss->animationTransitionTimer = 0.0f;
         boss->currentAttackHasHit = false;
+
         boss->powerJumpStartPos[0] = boss->pos[0];
         boss->powerJumpStartPos[1] = boss->pos[1];
         boss->powerJumpStartPos[2] = boss->pos[2];
+
         predict_character_position(boss->lockedTargetingPos, 1.0f);
         boss->targetingLocked = true;
+
         boss->powerJumpTargetPos[0] = boss->lockedTargetingPos[0];
         boss->powerJumpTargetPos[1] = boss->lockedTargetingPos[1];
         boss->powerJumpTargetPos[2] = boss->lockedTargetingPos[2];
+
         boss->powerJumpHeight = 250.0f + ((float)(rand() % 5));
+
         boss->currentAttackName = "Power Jump";
         boss->attackNameDisplayTimer = 2.0f;
         boss->currentAttackId = BOSS_ATTACK_POWER_JUMP;
@@ -343,35 +457,23 @@ static void boss_ai_select_attack(Boss* boss, float dist) {
         boss->isAttacking = true;
         boss->attackAnimTimer = 0.0f;
         boss->animationTransitionTimer = 0.0f;
-        
-        // Lock targeting position now (predicted player position)
-        // This ensures lockedTargetingPos is set before attack handler runs
+
         if (!boss->targetingLocked) {
-            float predictionTime = 0.3f; // Default prediction for tracking slam
+            float predictionTime = 0.3f;
             predict_character_position(boss->lockedTargetingPos, predictionTime);
             boss->targetingLocked = true;
             boss->targetingUpdateTimer = 0.0f;
         }
-        
-        // Use locked target position (predicted position) for aiming
+
         float dx = boss->lockedTargetingPos[0] - boss->pos[0];
         float dz = boss->lockedTargetingPos[2] - boss->pos[2];
         float angle = atan2f(-dx, dz);
         boss->trackingSlamTargetAngle = angle;
-        
+
         boss->currentAttackName = "Slow Attack";
         boss->attackNameDisplayTimer = 2.0f;
         boss->currentAttackId = BOSS_ATTACK_TRACKING_SLAM;
     }
-    // DISABLED: Roar/stomp attack for testing
-    // else if (dist <= 200.0f && boss->roarStompCooldown <= 0.0f) {
-    //     boss->state = BOSS_STATE_ROAR_STOMP;
-    //     boss->stateTimer = 0.0f;
-    //     boss->roarStompCooldown = 6.0f;
-    //     boss->currentAttackName = "Roar Stomp";
-    //     boss->attackNameDisplayTimer = 2.0f;
-    //     boss->currentAttackId = BOSS_ATTACK_ROAR_STOMP;
-    // }
     else if (boss->comboCooldown <= 0.0f && boss->comboStarterCompleted) {
         boss->state = BOSS_STATE_COMBO_ATTACK;
         boss->stateTimer = 0.0f;
@@ -379,84 +481,127 @@ static void boss_ai_select_attack(Boss* boss, float dist) {
         boss->comboStep = 0;
         boss->comboInterrupted = false;
         boss->comboVulnerableTimer = 0.0f;
-        // ComboAttack target updates slowly with player movement
+
         boss->lockedTargetingPos[0] = character.pos[0];
         boss->lockedTargetingPos[1] = character.pos[1];
         boss->lockedTargetingPos[2] = character.pos[2];
         boss->targetingLocked = true;
+
         boss->currentAttackName = "Combo Attack";
         boss->attackNameDisplayTimer = 2.0f;
         boss->currentAttackId = BOSS_ATTACK_COMBO;
     }
-    // DISABLED: Roar/stomp attack for testing (fallback case)
-    // else if (boss->roarStompCooldown <= 0.0f) {
-    //     boss->state = BOSS_STATE_ROAR_STOMP;
-    //     boss->stateTimer = 0.0f;
-    //     boss->roarStompCooldown = 6.0f;
-    //     boss->currentAttackName = "Roar Stomp";
-    //     boss->attackNameDisplayTimer = 2.0f;
-    //     boss->currentAttackId = BOSS_ATTACK_ROAR_STOMP;
-    // }
     else {
-        // When under 50 distance, boss should only attack, not chase or strafe
-        if (dist < 50.0f) {
-            // Force an attack when close - prefer charge if available, otherwise wait for cooldowns
-            if (boss->attackCooldown <= 0.0f && boss->comboStarterCompleted) {
-                float dx = character.pos[0] - boss->pos[0];
-                float dz = character.pos[2] - boss->pos[2];
-                boss_ai_combo_lunge_helper(boss, dist, dx, dz);
-            } else if (boss->comboCooldown <= 0.0f && boss->comboStarterCompleted) {
-                // Use combo attack
-                boss->state = BOSS_STATE_COMBO_ATTACK;
+        // ------------------------------------------------------------
+        // CLOSE RANGE (<50)
+        // ------------------------------------------------------------
+        if (dist < 50.0f)
+        {
+            if (dist <= 22.0f && boss->stompCooldown <= 0.0f) {
+                boss->state = BOSS_STATE_STOMP;
                 boss->stateTimer = 0.0f;
-                boss->comboCooldown = 15.0f;
-                boss->comboStep = 0;
-                boss->comboInterrupted = false;
-                boss->comboVulnerableTimer = 0.0f;
-                boss->lockedTargetingPos[0] = character.pos[0];
-                boss->lockedTargetingPos[1] = character.pos[1];
-                boss->lockedTargetingPos[2] = character.pos[2];
-                boss->targetingLocked = true;
-                boss->currentAttackName = "Combo Attack";
-                boss->attackNameDisplayTimer = 2.0f;
-                boss->currentAttackId = BOSS_ATTACK_COMBO;
-            } else if (boss->trackingSlamCooldown <= 0.0f) {
-                // Fallback to tracking slam if no other attacks available
-                boss->state = BOSS_STATE_TRACKING_SLAM;
-                boss->stateTimer = 0.0f;
-                boss->trackingSlamCooldown = 8.0f;
+
+                boss->stompCooldown  = 6.0f;
+                boss->attackCooldown = 0.8f;
+
                 boss->isAttacking = true;
                 boss->attackAnimTimer = 0.0f;
                 boss->animationTransitionTimer = 0.0f;
-                
-                // Lock targeting position now (predicted player position)
-                if (!boss->targetingLocked) {
-                    float predictionTime = 0.3f;
-                    predict_character_position(boss->lockedTargetingPos, predictionTime);
-                    boss->targetingLocked = true;
-                    boss->targetingUpdateTimer = 0.0f;
+
+                boss->velX = 0.0f;
+                boss->velZ = 0.0f;
+
+                boss->currentAttackName = "Stomp";
+                boss->attackNameDisplayTimer = 2.0f;
+                boss->currentAttackId = BOSS_ATTACK_STOMP;
+                return;
+            }
+
+            bool starterReady = (boss->comboStarterCooldown <= 0.0f);
+            bool comboReady   = (boss->comboCooldown <= 0.0f);          // combo itself
+            bool a1Ready      = (boss->attack1Cooldown <= 0.0f);
+            bool slamReady    = (boss->trackingSlamCooldown <= 0.0f);
+
+            // weights: ensure starter shows up often enough when close
+            float wStarter = starterReady ? 0.40f : 0.0f;
+            float wA1      = a1Ready      ? 0.20f : 0.0f;
+            float wSlam    = slamReady    ? 0.15f : 0.0f;
+
+            float sum = wStarter + wA1 + wSlam;
+
+            if (sum > 0.0f) {
+                float r = ((float)(rand() % 1000) / 1000.0f) * sum;
+
+                if (r < wStarter) {
+                    // COMBO STARTER (close-range allowed)
+                    boss->state = BOSS_STATE_COMBO_STARTER;
+                    boss->stateTimer = 0.0f;
+
+                    boss->comboStarterCooldown = 10.0f;
+                    boss->swordThrown = false;
+                    boss->comboStarterSlamHasHit = false;
+                    boss->comboStarterCompleted = false;
+
+                    boss->velX = 0.0f;
+                    boss->velZ = 0.0f;
+
+                    boss->comboStarterTargetPos[0] = character.pos[0];
+                    boss->comboStarterTargetPos[1] = character.pos[1];
+                    boss->comboStarterTargetPos[2] = character.pos[2];
+
+                    boss->isAttacking = true;
+                    boss->attackAnimTimer = 0.0f;
+                    boss->animationTransitionTimer = 0.0f;
+
+                    boss->currentAttackName = "Combo Starter";
+                    boss->attackNameDisplayTimer = 2.0f;
+                    boss->currentAttackId = BOSS_ATTACK_COMBO_STARTER;
+                    return;
                 }
-                
-                // Use locked target position for aiming
-                float dx = boss->lockedTargetingPos[0] - boss->pos[0];
-                float dz = boss->lockedTargetingPos[2] - boss->pos[2];
-                float angle = atan2f(-dx, dz);
-                boss->trackingSlamTargetAngle = angle;
-                
+                r -= wStarter;
+
+                if (r < wA1) {
+                    boss->state = BOSS_STATE_ATTACK1;
+                    boss->stateTimer = 0.0f;
+
+                    boss->attack1Cooldown = 4.0f;
+                    boss->attackCooldown  = 0.8f;
+
+                    boss->isAttacking = true;
+                    boss->attackAnimTimer = 0.0f;
+                    boss->animationTransitionTimer = 0.0f;
+
+                    boss->velX = 0.0f;
+                    boss->velZ = 0.0f;
+
+                    boss->currentAttackName = "Attack1";
+                    boss->attackNameDisplayTimer = 2.0f;
+                    boss->currentAttackId = BOSS_ATTACK_ATTACK1;
+                    return;
+                }
+
+                // Slam fallback
+                boss->state = BOSS_STATE_TRACKING_SLAM;
+                boss->stateTimer = 0.0f;
+
+                boss->trackingSlamCooldown = 6.0f;
+                boss->attackCooldown = 0.8f;
+
+                boss->isAttacking = true;
+                boss->attackAnimTimer = 0.0f;
+                boss->animationTransitionTimer = 0.0f;
+
                 boss->currentAttackName = "Slow Attack";
                 boss->attackNameDisplayTimer = 2.0f;
                 boss->currentAttackId = BOSS_ATTACK_TRACKING_SLAM;
-            } else {
-                // No attack available - use very short recover state to retry quickly
-                // This keeps boss aggressive when close without getting stuck
-                boss->state = BOSS_STATE_RECOVER;
-                boss->stateTimer = 0.0f;
+                return;
             }
-        } else {
-            // Only strafe if player is at least 50 units away
-            boss->state = BOSS_STATE_STRAFE;
+
+            boss->state = BOSS_STATE_RECOVER;
             boss->stateTimer = 0.0f;
+            return;
         }
+
     }
 }
 
@@ -896,26 +1041,6 @@ void boss_ai_update(Boss* boss, BossIntent* out_intent) {
             }
             break;
             
-        case BOSS_STATE_ROAR_STOMP:
-            // Roar stomp: 3 phases over 2.0s
-            // Phase 1: Roar buildup (0.0 - 1.0s)
-            // Phase 2: Stomp impact (1.0 - 1.1s)
-            // Phase 3: Recovery (1.1s+)
-            // End: Transition to strafe (2.0s+)
-            if (boss->stateTimer > 2.0f) {
-                // When under 50 distance, boss should only attack, not chase or strafe
-                if (dist < 50.0f) {
-                    boss_ai_select_attack(boss, dist);
-                } else if (dist >= 50.0f) {
-                    boss->state = BOSS_STATE_STRAFE;
-                } else {
-                    boss->state = BOSS_STATE_CHASE;
-                }
-                boss->stateTimer = 0.0f;
-                bossRoarImpactSoundPlayed = false; // Reset for next time
-            }
-            break;
-            
         case BOSS_STATE_TRACKING_SLAM:
             // Tracking slam: Stationary attack
             // Transitions when animation completes (isAttacking becomes false)
@@ -937,7 +1062,22 @@ void boss_ai_update(Boss* boss, BossIntent* out_intent) {
                 }
             }
             break;
-            
+            case BOSS_STATE_STOMP:
+                if (boss->stateTimer >= 3.0f) {
+                    if (dist < 50.0f) boss_ai_select_attack(boss, dist);
+                    else boss->state = BOSS_STATE_STRAFE;
+                    boss->stateTimer = 0.0f;
+                }
+                break;
+
+            case BOSS_STATE_ATTACK1:
+                // short slash duration
+                if (boss->stateTimer >= 2.0f) {
+                    if (dist < 50.0f) boss_ai_select_attack(boss, dist);
+                    else boss->state = BOSS_STATE_STRAFE;
+                    boss->stateTimer = 0.0f;
+                }
+                break;
     }
     
     // Output animation intent based on state
@@ -982,7 +1122,6 @@ void boss_ai_update(Boss* boss, BossIntent* out_intent) {
                 if (boss->state != prevState) out_intent->force_restart = true;
                 break;
             case BOSS_STATE_TRACKING_SLAM:
-            case BOSS_STATE_ROAR_STOMP:
                 out_intent->anim = BOSS_ANIM_ATTACK;
                 out_intent->priority = BOSS_ANIM_PRIORITY_HIGH;
                 break;
@@ -1061,6 +1200,16 @@ void boss_ai_update(Boss* boss, BossIntent* out_intent) {
             case BOSS_STATE_DEAD:
                 out_intent->anim = BOSS_ANIM_IDLE;
                 out_intent->priority = BOSS_ANIM_PRIORITY_CRITICAL;
+                break;
+            case BOSS_STATE_STOMP:
+                out_intent->anim = BOSS_ANIM_STOMP1;
+                out_intent->priority = BOSS_ANIM_PRIORITY_HIGH;
+                if (boss->state != prevState) out_intent->force_restart = true;
+                break;
+            case BOSS_STATE_ATTACK1:
+                out_intent->anim = BOSS_ANIM_ATTACK1;
+                out_intent->priority = BOSS_ANIM_PRIORITY_HIGH;
+                if (boss->state != prevState) out_intent->force_restart = true;
                 break;
             default:
                 out_intent->anim = BOSS_ANIM_IDLE;

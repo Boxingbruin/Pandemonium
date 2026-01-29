@@ -64,7 +64,6 @@ typedef struct {
     T3DSkeleton *skeletonBlend;
     T3DSkeleton *skeletonLocomotion;
     T3DAnim **animations;
-    T3DAnim **animationsBlend;
     int currentAnimation;
     int previousAnimation;
     int animationCount;

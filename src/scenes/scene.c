@@ -184,6 +184,12 @@ static bool lastMenuActive = false;
 static bool lastAPressed = false;
 static bool lastZPressed = false;
 
+// Cutscene skip - toggle button visibility
+static sprite_t* aButtonSprite = NULL;
+static surface_t aButtonSurf;
+static bool skipButtonVisible = false; // Whether the skip button is currently visible
+static bool lastCutsceneAPressed = false; // Track A button state for edge detection
+
 static const char *SCENE1_SFX_PATHS[SCENE1_SFX_COUNT] = {
     [SCENE1_SFX_TITLE_WALK]  = "rom:/audio/sfx/title_screen_walk_effect-22k.wav64",
 
@@ -612,8 +618,9 @@ void scene_init(void)
     // Transform will be updated in boss_update()
     
     // Make character face the boss
-    float dx = g_boss->pos[0] - character.pos[0];
-    float dz = g_boss->pos[2] - character.pos[2];
+    // Note: dx and dz were calculated but not used - keeping for potential future use
+    // float dx = g_boss->pos[0] - character.pos[0];
+    // float dz = g_boss->pos[2] - character.pos[2];
 
     // Initialize character
     character_init();
@@ -628,6 +635,12 @@ void scene_init(void)
 
     // Initialize dialog controller
     dialog_controller_init();
+
+    // Load A button sprite for cutscene skip indicator
+    aButtonSprite = sprite_load("rom:/buttons/WhiteOutlineButtons/A.sprite");
+    if (aButtonSprite) {
+        aButtonSurf = sprite_get_pixels(aButtonSprite);
+    }
 
     //scene_init_cinematic_camera();
     // Start boss music
@@ -704,6 +717,9 @@ void scene_reset(void)
     cutsceneState = CUTSCENE_PHASE1_INTRO;
     cutsceneTimer = 0.0f;
     cutsceneCameraTimer = 0.0f;
+    skipButtonVisible = false;
+    lastCutsceneAPressed = false;
+    // Note: skipButtonVisible is also used for title transition, so we reset it here
     bossActivated = false;
     gameState = GAME_STATE_TITLE;
     lastMenuActive = false;
@@ -792,7 +808,7 @@ void scene_init_playing(){
     bossActivated = true;
     // Switch music from intro cinematic to boss fight
     audio_stop_music();
-    audio_play_music("rom:/audio/music/boss_phase1-not_looping-22k.wav64", true);
+    audio_play_music("rom:/audio/music/boss_phase1-looping-mono-22k.wav64", true);
     // Hide letterbox bars with animation
     letterbox_hide();
     // Return camera control to the player
@@ -963,12 +979,6 @@ void scene_cutscene_update()
                 return;
             }
 
-            // Allow skipping intro with A button
-            if (btn.a) 
-            {
-                scene_init_playing();
-                return;
-            }
         } break;
         
         case CUTSCENE_PHASE1_CHAIN_CLOSEUP: {
@@ -994,11 +1004,6 @@ void scene_cutscene_update()
                 return;
             }
 
-            if (btn.a) 
-            {
-                scene_init_playing();
-                return;
-            }
         } break;
         
         case CUTSCENE_PHASE1_SWORDS_CLOSEUP:  {
@@ -1024,11 +1029,6 @@ void scene_cutscene_update()
                 return;
             }
 
-            if (btn.a) 
-            {
-                scene_init_playing();
-                return;
-            }
         } break;
 
         case CUTSCENE_PHASE1_FILLER:  {
@@ -1055,11 +1055,6 @@ void scene_cutscene_update()
                 return;
             }
 
-            if (btn.a) 
-            {
-                scene_init_playing();
-                return;
-            }
         } break;
 
         case CUTSCENE_PHASE1_LOYALTY:  {
@@ -1087,11 +1082,6 @@ void scene_cutscene_update()
                 return;
             }
 
-            if (btn.a) 
-            {
-                scene_init_playing();
-                return;
-            }
         } break;
 
         case CUTSCENE_PHASE1_FEAR:  {
@@ -1137,11 +1127,6 @@ void scene_cutscene_update()
                 return;
             }
 
-            if (btn.a) 
-            {
-                scene_init_playing();
-                return;
-            }
         } break;
         case CUTSCENE_PHASE1_BREAK_CHAINS:  {
 
@@ -1178,11 +1163,6 @@ void scene_cutscene_update()
                 return;
             }
 
-            if (btn.a) 
-            {
-                scene_init_playing();
-                return;
-            }
         } break;
         // Wait for boss to be activated before moving to the next state
         case CUTSCENE_PHASE1_INTRO_END:{
@@ -1214,13 +1194,30 @@ void scene_cutscene_update()
             break;
     }
 
-    if (btn.a) 
+    // Handle cutscene skip - toggle button on first A press, skip on second
+    bool aCurrentlyPressed = btn.a;
+    bool aJustPressed = aCurrentlyPressed && !lastCutsceneAPressed;
+    
+    if (aJustPressed)
     {
-        cutsceneTimer = 0.0f;
-        cutsceneCameraTimer = 0.0f;
-        scene_init_playing();
-        return;
+        if (!skipButtonVisible)
+        {
+            // First press - show the skip button
+            skipButtonVisible = true;
+        }
+        else
+        {
+            // Second press - skip the cutscene
+            skipButtonVisible = false;
+            cutsceneTimer = 0.0f;
+            cutsceneCameraTimer = 0.0f;
+            scene_init_playing();
+            return;
+        }
     }
+    
+    // Update last state for next frame
+    lastCutsceneAPressed = aCurrentlyPressed;
 }
 
 void scene_update_title(void)
@@ -1234,11 +1231,38 @@ void scene_update_title(void)
         }
         else
         {
-            if(btn.start || btn.a)
+            // Handle skip button - toggle button on first A press, skip on second
+            bool aCurrentlyPressed = btn.a;
+            bool aJustPressed = aCurrentlyPressed && !lastCutsceneAPressed;
+            
+            if (aJustPressed)
+            {
+                if (!skipButtonVisible)
+                {
+                    // First press - show the skip button
+                    skipButtonVisible = true;
+                }
+                else
+                {
+                    // Second press - skip to cutscene
+                    skipButtonVisible = false;
+                    titleStartGameTimer = 0.0f;
+                    scene_init_cutscene();
+                    audio_stop_all_sfx();
+                    lastCutsceneAPressed = aCurrentlyPressed;
+                    return;
+                }
+            }
+            
+            // Update last state for next frame
+            lastCutsceneAPressed = aCurrentlyPressed;
+            
+            // Allow start button to skip immediately (original behavior)
+            if(btn.start)
             {
                 titleStartGameTimer = 0.0f;
                 scene_init_cutscene();
-                audio_stop_all_sfx();  // TODO: eventually we probably want a stop specific sound effect ID but that would add complexity at this point
+                audio_stop_all_sfx();
                 return;
             }
 
@@ -1269,6 +1293,8 @@ void scene_update_title(void)
     if(btn.start || btn.a)
     {
         gameState = GAME_STATE_TITLE_TRANSITION;
+        skipButtonVisible = false; // Reset skip button state when entering transition
+        lastCutsceneAPressed = false;
 
         camera_breath_active(false); 
         screenBreath = false; 
@@ -1464,6 +1490,9 @@ static void draw_lockon_indicator(T3DViewport *viewport)
     rdpq_fill_rectangle(px - halfSize, py - halfSize, px + halfSize + 1, py + halfSize + 1);
 }
 
+// Forward declaration
+static void draw_cutscene_skip_indicator(void);
+
 void scene_draw_title(T3DViewport *viewport)
 {
     // ===== DRAW 3D =====
@@ -1508,6 +1537,26 @@ void scene_draw_title(T3DViewport *viewport)
         rdpq_set_prim_color(RGBA32(255, 255, 255, 255));
         rdpq_text_printf(NULL, FONT_UNBALANCED, 35, 50, "Play");
 
+        // Draw A button graphic at bottom middle of play button, half off
+        if (aButtonSprite) {
+            int buttonWidth = aButtonSurf.width;
+            int buttonHeight = aButtonSurf.height;
+            // Play button rectangle: (15, 35) to (75, 58)
+            // Center horizontally: (15 + 75) / 2 = 45
+            // Bottom of button: y = 58
+            // Position so half is below the button edge: y = 58 - buttonHeight/2
+            int aButtonX = 45 - (buttonWidth / 2);
+            int aButtonY = 62 - (buttonHeight / 2);
+            
+            // Draw the A button sprite on top
+            rdpq_sync_pipe();
+            rdpq_set_mode_standard();
+            rdpq_mode_alphacompare(1);
+            rdpq_mode_blender(RDPQ_BLENDER_MULTIPLY);
+            
+            rdpq_tex_blit(&aButtonSurf, aButtonX, aButtonY, NULL);
+        }
+
         if(titleTextActivationTimer >= titleTextActivationTime)
         {
             dialog_controller_draw(true, 190, 20, 120, 180);
@@ -1528,7 +1577,41 @@ void scene_draw_title(T3DViewport *viewport)
         {
             display_utility_solid_black_transition(false, 200.0f);
         }
+        
+        // Draw skip button on top during title transition (fog part)
+        draw_cutscene_skip_indicator();
     }
+}
+
+// Draw the A button skip indicator (only when visible after first A press)
+static void draw_cutscene_skip_indicator(void)
+{
+    // Only draw if button sprite is loaded, button is visible, and either:
+    // - cutscene is active, OR
+    // - we're in title transition (fog part)
+    bool isTitleTransition = (gameState == GAME_STATE_TITLE_TRANSITION);
+    bool isCutsceneActive = (cutsceneState != CUTSCENE_NONE);
+    
+    if (!aButtonSprite || !skipButtonVisible || (!isCutsceneActive && !isTitleTransition)) {
+        return;
+    }
+    
+    // Get actual sprite dimensions
+    int buttonWidth = aButtonSurf.width;
+    int buttonHeight = aButtonSurf.height;
+    
+    // Position at bottom right of screen, with margin from edges
+    int margin = 10; // Margin from screen edges
+    int buttonX = SCREEN_WIDTH - buttonWidth - margin;
+    int buttonY = SCREEN_HEIGHT - buttonHeight - margin;
+    
+    // Draw the A button sprite
+    rdpq_sync_pipe();
+    rdpq_set_mode_standard();
+    rdpq_mode_alphacompare(1);
+    rdpq_mode_blender(RDPQ_BLENDER_MULTIPLY);
+    
+    rdpq_tex_blit(&aButtonSurf, buttonX, buttonY, NULL);
 }
 
 void scene_draw_cutscene_fog(){
@@ -1937,6 +2020,8 @@ void scene_draw(T3DViewport *viewport)
         scene_draw_cutscene();
         // Draw letterbox bars during cutscenes
         letterbox_draw();
+        // Draw skip indicator on top of letterbox bars
+        draw_cutscene_skip_indicator();
         return;
     }
     // ===== DRAW 3D =====
@@ -2029,9 +2114,9 @@ void scene_draw(T3DViewport *viewport)
         draw_lockon_indicator(viewport);
 
     // Debug draw room colliders in gameplay
-    if (cutsceneState == CUTSCENE_NONE) {
-        scene_draw_room_colliders(viewport);
-    }
+    // if (cutsceneState == CUTSCENE_NONE) {
+    //     scene_draw_room_colliders(viewport);
+    // }
     
     bool cutsceneActive = scene_is_cutscene_active();
     GameState state = scene_get_game_state();

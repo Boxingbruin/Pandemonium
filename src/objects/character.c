@@ -160,6 +160,31 @@ static void character_anim_apply_pose(void)
     t3d_skeleton_update(character.skeleton);
 }
 
+// Helper to copy skeleton pose from source to destination by copying bone matrices
+// Both skeletons come from the same model, so they have the same structure
+// We update the source skeleton first to ensure it has the current pose, then copy
+static inline void skeleton_copy_pose(T3DSkeleton* dest, T3DSkeleton* src) {
+    if (!dest || !src) return;
+    
+    // Ensure source skeleton is updated with current animation state
+    t3d_skeleton_update(src);
+    
+    // Both skeletons are cloned from the same model, so they have identical structure
+    // Copy bone matrices directly - use a safe maximum (most characters have < 64 bones)
+    T3DSkeleton* dest_sk = (T3DSkeleton*)dest;
+    T3DSkeleton* src_sk = (T3DSkeleton*)src;
+    
+    // Check if bone matrices arrays exist
+    if (!dest_sk->boneMatricesFP || !src_sk->boneMatricesFP) return;
+    
+    // Copy bone matrices - use a conservative limit to avoid accessing invalid memory
+    // Most character models have 20-50 bones, so 64 is a safe upper bound
+    const int MAX_BONES = 64;
+    for (int i = 0; i < MAX_BONES; i++) {
+        dest_sk->boneMatricesFP[i] = src_sk->boneMatricesFP[i];
+    }
+}
+
 // Helper to detect locomotion animations
 static inline bool is_locomotion_anim(int a) {
     switch (a) {
@@ -741,7 +766,7 @@ static inline void anim_stop(T3DAnim** set, int idx)
 static inline bool try_lockon_locomotion_blend(float speedRatio, CharacterState state, float dt) {
     if (is_action_state(state)) return false;
     if (character.isBlending) return false;
-    if (!(state == CHAR_STATE_NORMAL && cameraLockOnActive && animStrafeDirFlag != 0 && character.animationsBlend)) return false;
+    if (!(state == CHAR_STATE_NORMAL && cameraLockOnActive && animStrafeDirFlag != 0 && character.animations)) return false;
 
     float yaw = character.rot[1];
     float fwdX = -fm_sinf(yaw);
@@ -770,10 +795,11 @@ static inline bool try_lockon_locomotion_blend(float speedRatio, CharacterState 
     
     if (strafeChanged) {
         if (activeBlendAnim != -1 && activeBlendAnim != strafeAnim) {
-            anim_stop(character.animationsBlend, activeBlendAnim);
+            anim_stop(character.animations, activeBlendAnim);
         }
         activeBlendAnim = strafeAnim;
-        anim_bind_and_play(character.animationsBlend, strafeAnim, character.skeletonBlend, true, true);
+        // Use main animations array, but attach to skeletonBlend for blending
+        anim_bind_and_play(character.animations, strafeAnim, character.skeletonBlend, true, true);
         lastStrafeAnimLock = strafeAnim;
     }
 
@@ -792,14 +818,14 @@ static inline bool try_lockon_locomotion_blend(float speedRatio, CharacterState 
     }
     
     if (fabsf(strafeSpeed - lastStrafeSpeed) > 0.01f) {
-        if (character.animationsBlend[strafeAnim]) {
-            t3d_anim_set_speed(character.animationsBlend[strafeAnim], strafeSpeed);
+        if (character.animations[strafeAnim]) {
+            t3d_anim_set_speed(character.animations[strafeAnim], strafeSpeed);
         }
         lastStrafeSpeed = strafeSpeed;
     }
 
     t3d_anim_update(character.animations[baseAnim], dt);
-    t3d_anim_update(character.animationsBlend[strafeAnim], dt);
+    t3d_anim_update(character.animations[strafeAnim], dt);
 
     float w = fminf(1.0f, fmaxf(0.0f, animStrafeBlendRatio));
     t3d_skeleton_blend(character.skeleton, character.skeleton, character.skeletonBlend, w);
@@ -827,7 +853,7 @@ static void switch_to_action_animation(int targetAnim) {
         activeMainAnim = -1;
     }
     if (activeBlendAnim != -1) {
-        anim_stop(character.animationsBlend, activeBlendAnim);
+        anim_stop(character.animations, activeBlendAnim);
         activeBlendAnim = -1;
     }
 
@@ -838,22 +864,20 @@ static void switch_to_action_animation(int targetAnim) {
     character.blendTimer = 0.0f;
     character.blendFactor = 0.0f;
 
-    // CRITICAL: Copy the current animation time to the blend version BEFORE switching
-    // This ensures we crossfade from the actual current pose, not from time=0
+    // CRITICAL: Snapshot the current skeleton pose into skeletonBlend for blending
+    // This captures the previous pose without needing a duplicate animation array
     if (character.previousAnimation >= 0 && 
         character.animations[character.previousAnimation] &&
-        character.animationsBlend[character.previousAnimation]) {
+        character.skeleton && character.skeletonBlend) {
         
-        float currentTime = t3d_anim_get_time(character.animations[character.previousAnimation]);
-        t3d_anim_set_time(character.animationsBlend[character.previousAnimation], currentTime);
-        
-        // Bind previous to blend skeleton using the BLEND array
-        anim_bind_and_play(character.animationsBlend, character.previousAnimation, character.skeletonBlend, false, false);
-        // Mark as needing attach next frame
+        // Snapshot the current skeleton pose into skeletonBlend for blending
+        // Update skeleton first to ensure it has the current pose, then copy bone matrices
+        t3d_skeleton_update(character.skeleton);
+        skeleton_copy_pose(character.skeletonBlend, character.skeleton);
         lastAttachedBlend = character.previousAnimation;
     }
 
-    // Stop previous main clip AFTER we've copied its time
+    // Stop previous main clip AFTER we've captured its pose
     if (character.previousAnimation >= 0 && character.animations[character.previousAnimation]) {
         anim_stop(character.animations, character.previousAnimation);
     }
@@ -873,7 +897,7 @@ static void switch_to_action_animation_immediate(int targetAnim) {
         activeMainAnim = -1;
     }
     if (activeBlendAnim != -1) {
-        anim_stop(character.animationsBlend, activeBlendAnim);
+        anim_stop(character.animations, activeBlendAnim);
         activeBlendAnim = -1;
     }
 
@@ -910,11 +934,11 @@ static void switch_to_locomotion_animation(int targetAnim) {
         // For attack states, prefer the current attack/end clip already selected
         else if (prevState == CHAR_STATE_ATTACKING || prevState == CHAR_STATE_ATTACKING_STRONG) prevClip = character.previousAnimation;
         character.previousAnimation = prevClip;
-        if (prevClip >= 0 && prevClip < character.animationCount && character.animationsBlend[prevClip]) {
-            // Bind previous pose to blend skeleton using animationsBlend
-            t3d_anim_attach(character.animationsBlend[prevClip], character.skeletonBlend);
-            t3d_anim_set_looping(character.animationsBlend[prevClip], false);
-            t3d_anim_set_playing(character.animationsBlend[prevClip], true);
+        if (prevClip >= 0 && prevClip < character.animationCount && character.animations[prevClip] && character.skeleton && character.skeletonBlend) {
+            // Snapshot the previous pose into skeletonBlend
+            // Update skeleton first to ensure it has the current pose, then copy bone matrices
+            t3d_skeleton_update(character.skeleton);
+            skeleton_copy_pose(character.skeletonBlend, character.skeleton);
             lastAttachedBlend = prevClip;
         }
     } else {
@@ -979,13 +1003,6 @@ static inline void update_animations(float speedRatio, CharacterState state, flo
     bool needsSwitch = (character.currentAnimation != targetAnim);
     
     if (needsSwitch) {
-        // Stop previous animation if blending
-        if (character.isBlending && character.previousAnimation >= 0 && 
-            character.previousAnimation < character.animationCount && 
-            character.animationsBlend[character.previousAnimation]) {
-            t3d_anim_set_playing(character.animationsBlend[character.previousAnimation], false);
-        }
-
         // For action states (attacks, rolls), start immediate transition with blend
         if (is_action_state(state)) {
             switch_to_action_animation(targetAnim);
@@ -1003,11 +1020,6 @@ static inline void update_animations(float speedRatio, CharacterState state, flo
             character.isBlending = false;
             character.blendFactor = 1.0f;
             character.blendTimer = 0.0f;
-            
-            // Stop previous animation
-            if (character.previousAnimation >= 0 && character.animationsBlend[character.previousAnimation]) {
-                t3d_anim_set_playing(character.animationsBlend[character.previousAnimation], false);
-            }
         } else {
             character.blendFactor = character.blendTimer / character.blendDuration;
         }
@@ -1054,20 +1066,10 @@ static inline void update_animations(float speedRatio, CharacterState state, flo
         t3d_anim_update(currentAnim, dt);
     }
 
-    // Update previous animation if blending - use animationsBlend[]
-    if (character.isBlending && character.previousAnimation >= 0 && 
-        character.animationsBlend[character.previousAnimation]) {
-        
-        // Only attach if the blend animation changed - attaching is expensive!
-        if (lastAttachedBlend != character.previousAnimation) {
-            t3d_anim_attach(character.animationsBlend[character.previousAnimation], character.skeletonBlend);
-            lastAttachedBlend = character.previousAnimation;
-        }
-        
-        // Update with dt=0 to apply the pose to the skeleton without advancing time
-        t3d_anim_update(character.animationsBlend[character.previousAnimation], 0.0f);
-
-        // Blend between previous and current
+    // Blend between previous and current skeletons if blending
+    // The previous pose was already captured in skeletonBlend during the transition
+    if (character.isBlending && character.skeleton && character.skeletonBlend) {
+        // Blend between previous (skeletonBlend) and current (skeleton)
         // t3d_skeleton_blend(dest, skeletonA, skeletonB, factor)
         // factor=0 → 100% A, factor=1 → 100% B
         // We want: factor=0 → 100% previous, factor=1 → 100% current
@@ -1151,19 +1153,14 @@ void character_init(void)
     };
 
     T3DAnim** animations = malloc_uncached(animationCount * sizeof(T3DAnim*));
-    T3DAnim** animationsBlend = malloc_uncached(animationCount * sizeof(T3DAnim*));
     for (int i = 0; i < animationCount; i++) {
-        animations[i] = malloc_uncached(sizeof(T3DAnim));
+        animations[i] = malloc(sizeof(T3DAnim));
+        assertf(animations[i], "OOM anim struct %d", i);
+        
         *animations[i] = t3d_anim_create(characterModel, animationNames[i]);
         t3d_anim_set_looping(animations[i], animationsLooping[i]);
         t3d_anim_set_playing(animations[i], false);
         t3d_anim_attach(animations[i], skeleton);
-
-        animationsBlend[i] = malloc_uncached(sizeof(T3DAnim));
-        *animationsBlend[i] = t3d_anim_create(characterModel, animationNames[i]);
-        t3d_anim_set_looping(animationsBlend[i], animationsLooping[i]);
-        t3d_anim_set_playing(animationsBlend[i], false);
-        t3d_anim_attach(animationsBlend[i], skeletonBlend);
     }
 
     // Initialize attack durations from clip lengths
@@ -1196,7 +1193,6 @@ void character_init(void)
         .skeleton = skeleton,
         .skeletonBlend = skeletonBlend,
         .animations = animations,
-        .animationsBlend = animationsBlend,
         .currentAnimation = 0,
         .previousAnimation = -1,
         .animationCount = animationCount,
@@ -1711,8 +1707,8 @@ void character_apply_damage(float amount)
 		// printf("[Character] HP: %.0f/%.0f - DEFEATED!\n", character.health, character.maxHealth);
 		scene_set_game_state(GAME_STATE_DEAD);
     } else {
-        // Small knockback when taking significant damage
-        if (amount >= 10.0f && characterState != CHAR_STATE_ROLLING) {
+        // Small knockback when taking significant damage (only strong attacks)
+        if (amount >= 20.0f && characterState != CHAR_STATE_ROLLING) {
             characterState = CHAR_STATE_KNOCKDOWN;
             actionTimer = 0.0f;
             currentActionDuration = KNOCKDOWN_DURATION;
@@ -1767,19 +1763,6 @@ void character_delete(void)
         }
         free(character.animations);
         character.animations = NULL;
-    }
-
-    if (character.animationsBlend)
-    {
-        for (int i = 0; i < character.animationCount; i++)
-        {
-            if (character.animationsBlend[i])
-            {
-                t3d_anim_destroy(character.animationsBlend[i]);
-            }
-        }
-        free(character.animationsBlend);
-        character.animationsBlend = NULL;
     }
 
     if (character.modelMat) 

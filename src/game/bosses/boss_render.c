@@ -159,7 +159,7 @@ void boss_render_debug(Boss* boss, void* viewport) {
     
     const char* stateNames[] = {
         "Intro", "Neutral", "Chase", "Strafe", "Recover", "Stagger", "Dead",
-        "Charge", "Power Jump", "Combo", "Combo Starter", "Roar Stomp", "Tracking Slam", "Flip Attack"
+        "Lunge", "Power Jump", "Combo", "Combo Starter", "Tracking Slam", "Flip Attack", "Lunge Starter", "Smash", "Quick Attack"
     };
     const char* stateName = (boss->state < 14) ? stateNames[boss->state] : "Unknown";
     
