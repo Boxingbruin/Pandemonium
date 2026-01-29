@@ -8,6 +8,7 @@
 #define SCREEN_HEIGHT 240
 #define FIXED_TIMESTEP_MS 33.3f
 #define ANIM_SPEED 1.0f
+#define FRAME_BUFFER_COUNT 3
 
 #define DEV_MODE true
 #define SHOW_FPS true
