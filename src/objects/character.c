@@ -272,6 +272,7 @@ void character_reset_button_state(void)
 {
     // Sync button state to current state to prevent false "just pressed" events
     // Use globals from joypad_utility
+    // B button is for attacks, A button is for roll/dodge
     lastBPressed = btn.b;
     lastAPressed = btn.a;
     leftTriggerHeld = false;
@@ -406,7 +407,7 @@ static inline void clear_lockon_strafe_flags_on_action(void) {
 }
 
 static inline bool can_roll_now(const joypad_buttons_t* buttons, const StickInput* stick) {
-    if (!(buttons->b && characterState == CHAR_STATE_NORMAL)) return false;
+    if (!(buttons->a && characterState == CHAR_STATE_NORMAL)) return false;
     // Allow rolling from neutral stick too
     return true;
 }
@@ -1303,10 +1304,9 @@ void character_update(void)
 
     // Jump removed
     bool jumpJustPressed = false;
-    lastBPressed = false;
 
-    // Handle A button hold time tracking for charge attacks (repurposed from L)
-    bool leftJustPressed = btn.a && !lastAPressed;
+    // Handle B button hold time tracking for charge attacks
+    bool leftJustPressed = btn.b && !lastBPressed;
     
     if (leftJustPressed) {
         // Button just pressed this frame - start tracking hold time
@@ -1319,13 +1319,13 @@ void character_update(void)
         leftTriggerHoldTime += deltaTime;
     }
     
-    if (rel.a) {
+    if (rel.b) {
         // Button released - stop tracking
         leftTriggerHeld = false;
         leftTriggerHoldTime = 0.0f;
     }
     
-    lastAPressed = btn.a;
+    lastBPressed = btn.b;
 
     StickInput stick = normalize_stick((float)joypad.stick_x, (float)joypad.stick_y);
     update_actions(&btn, leftTriggerHeld, leftJustPressed, jumpJustPressed, &stick, deltaTime);
