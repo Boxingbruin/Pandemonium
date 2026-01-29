@@ -37,7 +37,7 @@ static Boss* g_boss = NULL;
 static T3DModel* s_bossShadowModel = NULL;
 
 // Boss shadow tuning
-static const float BOSS_SHADOW_GROUND_Y = 0.0f;
+static const float BOSS_SHADOW_GROUND_Y = -1.0f;  // Match roomY floor level
 static const float BOSS_SHADOW_Y_OFFSET = 0.2f;        // prevent z-fighting with the ground
 static const float BOSS_SHADOW_BASE_ALPHA = 120.0f;    // alpha when on the ground
 static const float BOSS_SHADOW_SHRINK_AMOUNT = 0.35f;  // shrink as boss goes up

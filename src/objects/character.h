@@ -108,6 +108,7 @@ void character_update_position(void);
 void character_update_camera(void);
 
 void character_draw(void);
+void character_draw_shadow(void);
 void character_draw_ui(void);
 void character_update(void);
 void character_reset_button_state(void);

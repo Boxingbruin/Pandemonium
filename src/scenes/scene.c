@@ -28,6 +28,7 @@
 #include "character.h"
 #include "game/bosses/boss.h"
 #include "game/bosses/boss_anim.h"
+#include "game/bosses/boss_render.h"
 #include "dialog_controller.h"
 #include "display_utility.h"
 //#include "collision_mesh.h"
@@ -1958,10 +1959,25 @@ void scene_draw(T3DViewport *viewport)
     rdpq_mode_zbuf(true, true);
 
     t3d_matrix_push_pos(1);   
-
         t3d_matrix_set(roomFloorMatrix, true);
         rspq_block_run(roomFloorDpl);
+    t3d_matrix_pop(1); 
 
+    rdpq_sync_pipe();
+    rdpq_mode_zbuf(false, false);
+
+    t3d_matrix_push_pos(1);   
+      // blob shadows here
+      character_draw_shadow();
+      if (g_boss) {
+          boss_draw_shadow(g_boss);
+      }
+    t3d_matrix_pop(1); 
+
+    rdpq_sync_pipe();
+    rdpq_mode_zbuf(true, true);
+
+    t3d_matrix_push_pos(1);   
         t3d_matrix_set(roomLedgeMatrix, true);
         rspq_block_run(roomLedgeDpl);
 

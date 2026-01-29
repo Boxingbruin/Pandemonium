@@ -41,8 +41,7 @@ static const float SWORD_LENGTH = 640.0f;      // local-space length of sword ca
 static const float SWORD_COLLIDER_RADIUS = 5.0f; // sword collider radius in world units
 
 // Shadow tuning
-static const float SHADOW_GROUND_Y = 0.0f;
-static const float SHADOW_Y_OFFSET = 0.2f;     // prevent z-fighting with the ground
+static const float SHADOW_GROUND_Y = 4.0f;  // Match roomY floor level
 static const float SHADOW_BASE_ALPHA = 120.0f; // alpha when on the ground
 static const float SHADOW_SHRINK_AMOUNT = 0.45f; // 0=no shrink, 0.45 -> 55% size at peak
 
@@ -225,7 +224,7 @@ static inline void character_update_shadow_mat(void)
     // Optional: shrink as you rise
     float shrink = 1.0f - SHADOW_SHRINK_AMOUNT * t;
 
-    float shadowPos[3]   = { character.pos[0], SHADOW_GROUND_Y + SHADOW_Y_OFFSET, character.pos[2] };
+    float shadowPos[3]   = { character.pos[0], SHADOW_GROUND_Y, character.pos[2] };
     float shadowRot[3]   = { 0.0f, 0.0f, 0.0f };
     float shadowScale[3] = { character.scale[0] * 2.0f * shrink, character.scale[1], character.scale[2] * 2.0f * shrink };
 

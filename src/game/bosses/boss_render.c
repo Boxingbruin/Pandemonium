@@ -25,7 +25,7 @@
 #include "general_utility.h"
 
 // Shadow tuning (duplicated from boss.c for rendering alpha)
-static const float BOSS_SHADOW_GROUND_Y = 0.0f;
+static const float BOSS_SHADOW_GROUND_Y = -1.0f;  // Match roomY floor level
 static const float BOSS_JUMP_REF_HEIGHT = 120.0f;
 static const float BOSS_SHADOW_BASE_ALPHA = 120.0f;
 
@@ -79,27 +79,34 @@ static void boss_draw_scrolling(Boss* boss)
     });
 }
 
+// Draw only the shadow - should be called in a batched shadow pass with zbuf(false, false)
+void boss_draw_shadow(Boss* boss) {
+    if (!boss || !boss->visible) return;
+    if (!boss->dpl_shadow || !boss->shadowMat) return;
+
+    // Compute alpha like character: fade with height
+    float h = boss->pos[1] - BOSS_SHADOW_GROUND_Y;
+    if (h < 0.0f) h = 0.0f;
+    float t = (BOSS_JUMP_REF_HEIGHT > 0.0f) ? (h / BOSS_JUMP_REF_HEIGHT) : 0.0f;
+    if (t > 1.0f) t = 1.0f;
+    float fade = 1.0f - t; fade *= fade;
+    uint8_t a = (uint8_t)(BOSS_SHADOW_BASE_ALPHA * fade);
+
+    if (a > 0) {
+        rdpq_set_prim_color(RGBA32(0, 0, 0, a));
+        t3d_matrix_set((T3DMat4FP*)boss->shadowMat, true);
+        rspq_block_run((rspq_block_t*)boss->dpl_shadow);
+    }
+}
+
 void boss_render_draw(Boss* boss) {
     if (!boss || !boss->visible) return;
 
     // Be defensive: render might be called before init is fully complete.
     if (!boss->model || !boss->modelMat) return;
-    // --- Shadow (ground-locked) ---
-    if (boss->dpl_shadow && boss->shadowMat) {
-        // Compute alpha like character: fade with height
-        float h = boss->pos[1] - BOSS_SHADOW_GROUND_Y;
-        if (h < 0.0f) h = 0.0f;
-        float t = (BOSS_JUMP_REF_HEIGHT > 0.0f) ? (h / BOSS_JUMP_REF_HEIGHT) : 0.0f;
-        if (t > 1.0f) t = 1.0f;
-        float fade = 1.0f - t; fade *= fade;
-        uint8_t a = (uint8_t)(BOSS_SHADOW_BASE_ALPHA * fade);
-
-        if (a > 0) {
-            rdpq_set_prim_color(RGBA32(0, 0, 0, a));
-            t3d_matrix_set((T3DMat4FP*)boss->shadowMat, true);
-            rspq_block_run((rspq_block_t*)boss->dpl_shadow);
-        }
-    }
+    
+    // Shadow is now drawn separately via boss_draw_shadow() in a batched pass
+    // This avoids expensive mode changes per boss
 
     boss_draw_scrolling(boss);
     
