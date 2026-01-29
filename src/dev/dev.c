@@ -21,7 +21,7 @@
 
 #include "globals.h"
 
-bool debugDraw = false;
+bool debugDraw = true;
 
 static bool displayMetrics = false;
 static bool requestDisplayMetrics = false;

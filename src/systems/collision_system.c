@@ -176,4 +176,20 @@ void collision_draw(T3DViewport *viewport)
             DEBUG_COLORS[5]
         );
     }
+
+    // Draw boss sphere attack collider
+    if(boss->sphereAttackColliderActive){
+        T3DVec3 center = {{
+            boss->pos[0],
+            boss->pos[1],
+            boss->pos[2]
+        }};
+
+        debug_draw_sphere(
+            viewport,
+            &center,
+            40,
+            DEBUG_COLORS[5]
+        );
+    }
 }

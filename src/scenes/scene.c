@@ -2029,9 +2029,9 @@ void scene_draw(T3DViewport *viewport)
         draw_lockon_indicator(viewport);
 
     // Debug draw room colliders in gameplay
-    if (cutsceneState == CUTSCENE_NONE) {
-        scene_draw_room_colliders(viewport);
-    }
+    // if (cutsceneState == CUTSCENE_NONE) {
+    //     scene_draw_room_colliders(viewport);
+    // }
     
     bool cutsceneActive = scene_is_cutscene_active();
     GameState state = scene_get_game_state();

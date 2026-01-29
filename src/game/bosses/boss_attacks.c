@@ -61,10 +61,9 @@ void boss_attacks_update(Boss* boss, float dt) {
     //     boss_update_hand_attack_collider(boss);
     // }
     
-    if (isAttackState) {
-        boss->handAttackColliderActive = true;
-    } else {
+    if (!isAttackState) {
         boss->handAttackColliderActive = false;
+        boss->sphereAttackColliderActive = false;
     }
     
     // Route to appropriate attack handler based on state
@@ -164,9 +163,9 @@ static void boss_attacks_handle_power_jump(Boss* boss, float dt) {
             float dz = character.pos[2] - boss->pos[2];
             float dist = sqrtf(dx*dx + dz*dz);
             
+            boss->sphereAttackColliderActive = true;
             if (dist < 6.0f) {
                 character_apply_damage(35.0f);
-                // boss_debug_sound("boss_attack_success");
                 boss->currentAttackHasHit = true;
             }
         }
@@ -175,93 +174,114 @@ static void boss_attacks_handle_power_jump(Boss* boss, float dt) {
     // (AI will check stateTimer >= totalDuration and transition to STRAFE)
 }
 
-static void boss_attacks_handle_combo(Boss* boss, float dt) {
-    const float stepDuration = 0.8f; // Each combo step
-    const float vulnerableWindow = 0.4f;
-    
-    // boss->velX = 0.0f;
-    // boss->velZ = 0.0f;
+static void boss_attacks_handle_combo(Boss* boss, float dt)
+{
+    // -------------------------
+    // Hit windows
+    // -------------------------
+    const float hitPart1Start = 0.5f;
+    const float hitPart1End   = 1.5f;
 
-    // Always face the locked target position (lerped player position)
-    float dx = boss->lockedTargetingPos[0] - boss->pos[0];
-    float dz = boss->lockedTargetingPos[2] - boss->pos[2];
-    // Use consistent rotation formula
-    boss->rot[1] = -atan2f(-dz, dx) + T3D_PI;
-    
-    int targetStep = (int)(boss->stateTimer / stepDuration);
-    if (targetStep != boss->comboStep && targetStep < 3) {
-        boss->comboStep = targetStep;
-        boss->comboVulnerableTimer = vulnerableWindow;
-        // Sound would be triggered here based on step
-        // boss_debug_sound(comboSound);
-        // boss_debug_sound("boss_vulnerable");
-    }
-    
-    // Update vulnerable timer
-    if (boss->comboVulnerableTimer > 0.0f) {
-        boss->comboVulnerableTimer -= dt;
-    }
-    
-    // Check for player interrupt during vulnerable window
-    if (boss->comboVulnerableTimer > 0.0f && !boss->comboInterrupted) {
-        // Check if player is attacking boss during vulnerable window
-        float dx2 = character.pos[0] - boss->pos[0];
-        float dz2 = character.pos[2] - boss->pos[2];
-        float dist = sqrtf(dx2*dx2 + dz2*dz2);
-        
-        if (dist < 5.0f) {
-            // Combo is interruptible when player gets close during vulnerable window
-            boss->comboInterrupted = true;
-            boss_apply_damage(boss, 10.0f); // Bonus damage for interrupt
-            boss->state = BOSS_STATE_RECOVER;
-            boss->stateTimer = 0.0f;
-            return;
-        }
-    }
-    
-    boss_multi_attack_sfx(boss, bossComboAttack1Sfx, 3);  //(ComboAttack1)
-    // Execute combo steps
-    if (boss->comboStep == 0) {
-        // Step 1: Attack 1
+    const float hitPart2Start = 2.5f;
+    const float hitPart2End   = 4.0f;
 
-        if (boss->stateTimer > 0.5f && boss->stateTimer < 0.7f && !boss->currentAttackHasHit) {
-            if (bossWeaponCollision) {
-                character_apply_damage(15.0f);
-                boss->currentAttackHasHit = true;
-            }
-        }
-    }
-    else if (boss->comboStep == 1) {
-        // Step 2: Attack2 into sword lift
+    // -------------------------
+    // NEW: late push movement
+    // -------------------------
+    const float MOVE_START_TIME = 2.0f;    // when movement begins
+    const float MOVE_END_TIME   = 4.0f;    // when movement ends
+    const float MOVE_SPEED      = 120.0f;  // units/sec (tune)
+    const float MOVE_MAX_DIST   = 200.0f;  // max distance traveled during this window (tune)
+    const float STOP_SHORT      = 30.0f;   // ALWAYS end this far before the character (XZ)
 
-        if (boss->stateTimer > stepDuration + 0.5f && boss->stateTimer < stepDuration + 0.7f) {
-            // float thrustSpeed = 300.0f;
-            // boss->velX = sinf(boss->rot[1]) * thrustSpeed;
-            // boss->velZ = cosf(boss->rot[1]) * thrustSpeed;
-            
-            if (!boss->currentAttackHasHit) {
-                if (bossWeaponCollision) {
-                    character_apply_damage(20.0f);
-                    boss->currentAttackHasHit = true;
+    // capture move start position once (at the exact frame we cross MOVE_START_TIME)
+    static float moveStartPos[3];
+    static bool  moveStartCaptured = false;
+
+    // If the combo restarts / rewinds, reset the capture
+    if (boss->stateTimer < MOVE_START_TIME) {
+        moveStartCaptured = false;
+    }
+
+    // On the first frame of the move window, capture start pos
+    if (!moveStartCaptured && boss->stateTimer >= MOVE_START_TIME) {
+        moveStartPos[0] = boss->pos[0];
+        moveStartPos[1] = boss->pos[1];
+        moveStartPos[2] = boss->pos[2];
+        moveStartCaptured = true;
+    }
+
+    // Late push toward player with max travel cap AND always stop 30 short
+    if (boss->stateTimer >= MOVE_START_TIME && boss->stateTimer < MOVE_END_TIME && moveStartCaptured) {
+
+        // how far we've already traveled since the move started
+        float dx0 = boss->pos[0] - moveStartPos[0];
+        float dz0 = boss->pos[2] - moveStartPos[2];
+        float traveled = sqrtf(dx0*dx0 + dz0*dz0);
+
+        float remaining = MOVE_MAX_DIST - traveled;
+        if (remaining > 0.0f) {
+
+            // direction to player (swap to lockedTargetingPos if desired)
+            float tx = character.pos[0] - boss->pos[0];
+            float tz = character.pos[2] - boss->pos[2];
+            float len = sqrtf(tx*tx + tz*tz);
+
+            if (len > 0.001f) {
+
+                // If already inside the buffer, do NOT move closer
+                float allowedApproach = len - STOP_SHORT;
+                if (allowedApproach > 0.0f) {
+
+                    float dirX = tx / len;
+                    float dirZ = tz / len;
+
+                    float step = MOVE_SPEED * dt;
+
+                    // cap by: remaining travel budget, and buffer space remaining this frame
+                    if (step > remaining)       step = remaining;
+                    if (step > allowedApproach) step = allowedApproach;
+
+                    boss->pos[0] += dirX * step;
+                    boss->pos[2] += dirZ * step;
                 }
             }
         }
     }
-    else if (boss->comboStep == 2) {
-        // Step 3: Jump sword slam
-        if (boss->stateTimer > stepDuration * 2 + 0.6f && 
-            boss->stateTimer < stepDuration * 2 + 0.8f && 
-            !boss->currentAttackHasHit) 
-        {
-            if (bossWeaponCollision) {
-                character_apply_damage(30.0f);
-                boss->currentAttackHasHit = true;
-            }
+
+    // -------------------------
+    // Collider on/off + damage
+    // -------------------------
+    if (boss->stateTimer >= hitPart1Start && boss->stateTimer < hitPart1End) {
+        boss->handAttackColliderActive = true;
+        if (!boss->currentAttackHasHit && bossWeaponCollision) {
+            character_apply_damage(18.0f);
+            boss->currentAttackHasHit = true;
         }
     }
-    
-    // End combo - transition handled by AI
-    // (AI will check stateTimer > stepDuration * 3 + 0.5f and transition to STRAFE)
+    else if (boss->stateTimer >= hitPart2Start && boss->stateTimer < hitPart2End) {
+        boss->handAttackColliderActive = true;
+        boss->sphereAttackColliderActive = true;
+        if (!boss->currentAttackHasHit && bossWeaponCollision) {
+            character_apply_damage(18.0f);
+            boss->currentAttackHasHit = true;
+        }
+    }
+    else {
+        boss->handAttackColliderActive = false;
+        boss->sphereAttackColliderActive = false;
+    }
+
+    if (boss->stateTimer < MOVE_END_TIME) {
+        // -------------------------
+        // Facing
+        // -------------------------
+        float dx = boss->lockedTargetingPos[0] - boss->pos[0];
+        float dz = boss->lockedTargetingPos[2] - boss->pos[2];
+        boss->rot[1] = -atan2f(-dz, dx) + T3D_PI;
+    }
+
+    boss_multi_attack_sfx(boss, bossComboAttack1Sfx, 3);
 }
 
 static void boss_attacks_handle_throw(Boss* boss, float dt) // TODO: add after the jam
@@ -330,6 +350,22 @@ static void boss_attacks_handle_throw(Boss* boss, float dt) // TODO: add after t
 
 static void boss_attacks_handle_combo_starter(Boss* boss, float dt)
 {
+    const float hitStart = 1.0f;
+    const float hitEnd   = 2.0f;
+
+    if(boss->stateTimer >= hitStart && boss->stateTimer <  hitEnd)
+    {
+        boss->handAttackColliderActive  = true;
+        if (!boss->currentAttackHasHit && bossWeaponCollision) {
+            character_apply_damage(18.0f);
+            boss->currentAttackHasHit = true;
+        }
+    }
+    else
+    {
+        boss->handAttackColliderActive  = false;
+    }
+
     boss_play_attack_sfx(boss, SCENE1_SFX_BOSS_SWING2, 1.0f);
 
     // Track player yaw during the whole windup
@@ -402,6 +438,23 @@ static void boss_attacks_handle_roar_stomp(Boss* boss, float dt) {
 
 static void boss_attacks_handle_tracking_slam(Boss* boss, float dt)
 {
+
+    const float hitStart = 2.5f;
+    const float hitEnd   = 3.5f;
+
+    if(boss->stateTimer >= hitStart && boss->stateTimer <  hitEnd)
+    {
+        boss->handAttackColliderActive  = true;
+        if (!boss->currentAttackHasHit && bossWeaponCollision) {
+            character_apply_damage(25.0f);
+            boss->currentAttackHasHit = true;
+        }
+    }
+    else
+    {
+        boss->handAttackColliderActive  = false;
+    }
+
     // Stationary
     boss->velX = 0.0f;
     boss->velZ = 0.0f;
@@ -440,45 +493,27 @@ static void boss_attacks_handle_tracking_slam(Boss* boss, float dt)
     }
 
     boss_multi_attack_sfx(boss, bossSlowAttackSfx, 2);
-
-    // Hit / land logic (kept as-is)
-    if (!boss->currentAttackHasHit) {
-        if (bossWeaponCollision) {
-            character_apply_damage(25.0f);
-            boss->currentAttackHasHit = true;
-            // From this frame onward, allowTracking becomes false and yaw stays frozen.
-        }
-    }
 }
-
-// static void boss_attacks_handle_charge(Boss* boss, float dt) 
-// {
-//     boss_play_attack_sfx(boss, SCENE1_SFX_BOSS_LUNGE, 0.0f);
-//     // Charge attack - boss moves toward position behind player
-//     // Face the locked targeting position (behind player)
-//     float dx = boss->lockedTargetingPos[0] - boss->pos[0];
-//     float dz = boss->lockedTargetingPos[2] - boss->pos[2];
-//     boss->rot[1] = -atan2f(-dz, dx) + T3D_PI;
-
-//     // Check for hit during charge (check against actual character position for damage)
-//     // Hit window: 0.2s to 0.5s into the charge
-//     if (boss->stateTimer > 0.2f && boss->stateTimer < 0.5f && !boss->currentAttackHasHit) {
-//         if (bossWeaponCollision) {
-//             character_apply_damage(15.0f);
-//             boss->currentAttackHasHit = true;
-//         }
-//     }
-
-//     // Movement is handled by boss_update_movement in boss.c
-//     // Transition handled by AI when charge completes
-// }
 
 static void boss_attacks_handle_charge(Boss* boss, float dt)
 {
-    boss_play_attack_sfx(boss, SCENE1_SFX_BOSS_LUNGE, 0.0f);
-
     const float lungeStart = 0.15f;
     const float lungeEnd   = 0.55f;
+
+    if(boss->stateTimer >= lungeStart && boss->stateTimer < lungeEnd + 1.0f)
+    {
+        boss->handAttackColliderActive  = true;
+        if (!boss->currentAttackHasHit && bossWeaponCollision) {
+            character_apply_damage(18.0f);
+            boss->currentAttackHasHit = true;
+        }
+    }
+    else
+    {
+        boss->handAttackColliderActive  = false;
+    }
+
+    boss_play_attack_sfx(boss, SCENE1_SFX_BOSS_LUNGE, 0.0f);
 
     const float LUNGE_SPEED_CLOSE = 620.0f;
     const float LUNGE_SPEED_FAR   = 620.0f;
@@ -560,23 +595,13 @@ static void boss_attacks_handle_charge(Boss* boss, float dt)
             boss->velZ = dirZ * lungeSpeed * speedScale;
         }
     }
-
-    if (boss->stateTimer > 0.2f && boss->stateTimer < 0.5f && !boss->currentAttackHasHit) {
-        if (bossWeaponCollision) {
-            character_apply_damage(15.0f);
-            boss->currentAttackHasHit = true;
-        }
-    }
 }
 
 static void boss_attacks_handle_stomp(Boss* boss, float dt)
 {
     // Short, nasty close stomp
-    // Phase 1: quick windup (0.0 - 0.35)
-    // Phase 2: impact window (0.35 - 0.50)
-    // Phase 3: recovery (0.50+)
-    const float windupEnd = 0.35f;
-    const float impactEnd = 0.50f;
+    const float windupEnd = 2.0f;
+    const float impactEnd = 3.0f;
 
     // Stationary
     boss->velX = 0.0f;
@@ -589,9 +614,7 @@ static void boss_attacks_handle_stomp(Boss* boss, float dt)
         boss->rot[1] = -atan2f(-dz, dx) + T3D_PI;
     }
 
-    // SFX (reuse if you have something better)
-    // If you don't have a stomp SFX, you can reuse bossSlowAttackSfx or a land sound.
-    // boss_multi_attack_sfx(boss, bossStompSfx, 2);
+    boss_play_attack_sfx(boss, SCENE1_SFX_BOSS_LAND2, 2.0f);
 
     // Impact hit
     if (!boss->currentAttackHasHit &&
@@ -616,8 +639,21 @@ static void boss_attacks_handle_attack1(Boss* boss, float dt)
 {
     // Close-range primary slash
     // Keep it snappy so it can be used more often.
-    const float hitStart = 0.25f;
-    const float hitEnd   = 0.45f;
+    const float hitStart = 0.8f;
+    const float hitEnd   = 1.2f;
+
+    if(boss->stateTimer >= hitStart && boss->stateTimer <  hitEnd)
+    {
+        boss->handAttackColliderActive  = true;
+        if (!boss->currentAttackHasHit && bossWeaponCollision) {
+            character_apply_damage(18.0f);
+            boss->currentAttackHasHit = true;
+        }
+    }
+    else
+    {
+        boss->handAttackColliderActive  = false;
+    }
 
     // Mostly stationary (optional micro-step forward if you want)
     boss->velX = 0.0f;
@@ -634,22 +670,30 @@ static void boss_attacks_handle_attack1(Boss* boss, float dt)
         boss->rot[1] = -atan2f(-dz, dx) + T3D_PI;
     }
 
-    // SFX: reuse something similar (you already use SCENE1_SFX_BOSS_SWING2 in combo starter)
-    // boss_play_attack_sfx(boss, SCENE1_SFX_BOSS_SWING2, 1.0f);
+    boss_play_attack_sfx(boss, SCENE1_SFX_BOSS_SWING4, 1.0f);
 
-    if (!boss->currentAttackHasHit &&
-        boss->stateTimer >= hitStart &&
-        boss->stateTimer <  hitEnd)
-    {
-        if (bossWeaponCollision) {
-            character_apply_damage(18.0f);
-            boss->currentAttackHasHit = true;
-        }
-    }
+
 }
 
 static void boss_attacks_handle_flip_attack(Boss* boss, float dt)
 {
+    const float hitStart = 2.0f;
+    const float hitEnd   = 4.0f;
+
+    if(boss->stateTimer >= hitStart && boss->stateTimer <  hitEnd)
+    {
+        boss->handAttackColliderActive  = true;
+        if (!boss->currentAttackHasHit && bossWeaponCollision) {
+            character_apply_damage(18.0f);
+            boss->currentAttackHasHit = true;
+        }
+
+    }
+    else
+    {
+        boss->handAttackColliderActive  = false;
+    }
+
     const float idleDuration    = 2.0f;
     const float jumpDuration    = 1.5f;
     const float recoverDuration = 0.5f;
@@ -739,27 +783,6 @@ static void boss_attacks_handle_flip_attack(Boss* boss, float dt)
         float mdz = boss->flipAttackTargetPos[2] - boss->flipAttackStartPos[2];
         if (mdx != 0.0f || mdz != 0.0f) {
             boss->rot[1] = -atan2f(-mdz, mdx) + T3D_PI;
-        }
-    }
-
-    // --------------------------------
-    // Phase 3: Recovery
-    // --------------------------------
-    else if (boss->stateTimer < totalDuration) {
-        boss->pos[1] = boss->flipAttackStartPos[1];
-
-        if (!boss->currentAttackHasHit &&
-            boss->stateTimer >= idleDuration + jumpDuration &&
-            boss->stateTimer <  idleDuration + jumpDuration + 0.1f) {
-
-            float dx = character.pos[0] - boss->pos[0];
-            float dz = character.pos[2] - boss->pos[2];
-            float dist = sqrtf(dx*dx + dz*dz);
-
-            if (dist < 6.0f) {
-                character_apply_damage(30.0f);
-                boss->currentAttackHasHit = true;
-            }
         }
     }
 }

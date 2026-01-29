@@ -492,58 +492,116 @@ static void boss_ai_select_attack(Boss* boss, float dist) {
         boss->currentAttackId = BOSS_ATTACK_COMBO;
     }
     else {
-        if (dist < 50.0f) {
-            if (boss->attackCooldown <= 0.0f && boss->comboStarterCompleted) {
-                float dx = character.pos[0] - boss->pos[0];
-                float dz = character.pos[2] - boss->pos[2];
-                boss_ai_combo_lunge_helper(boss, dist, dx, dz);
-            } else if (boss->comboCooldown <= 0.0f && boss->comboStarterCompleted) {
-                boss->state = BOSS_STATE_COMBO_ATTACK;
+        // ------------------------------------------------------------
+        // CLOSE RANGE (<50)
+        // ------------------------------------------------------------
+        if (dist < 50.0f)
+        {
+            if (dist <= 22.0f && boss->stompCooldown <= 0.0f) {
+                boss->state = BOSS_STATE_STOMP;
                 boss->stateTimer = 0.0f;
-                boss->comboCooldown = 15.0f;
-                boss->comboStep = 0;
-                boss->comboInterrupted = false;
-                boss->comboVulnerableTimer = 0.0f;
 
-                boss->lockedTargetingPos[0] = character.pos[0];
-                boss->lockedTargetingPos[1] = character.pos[1];
-                boss->lockedTargetingPos[2] = character.pos[2];
-                boss->targetingLocked = true;
+                boss->stompCooldown  = 6.0f;
+                boss->attackCooldown = 0.8f;
 
-                boss->currentAttackName = "Combo Attack";
-                boss->attackNameDisplayTimer = 2.0f;
-                boss->currentAttackId = BOSS_ATTACK_COMBO;
-            } else if (boss->trackingSlamCooldown <= 0.0f) {
-                boss->state = BOSS_STATE_TRACKING_SLAM;
-                boss->stateTimer = 0.0f;
-                boss->trackingSlamCooldown = 8.0f;
                 boss->isAttacking = true;
                 boss->attackAnimTimer = 0.0f;
                 boss->animationTransitionTimer = 0.0f;
 
-                if (!boss->targetingLocked) {
-                    float predictionTime = 0.3f;
-                    predict_character_position(boss->lockedTargetingPos, predictionTime);
-                    boss->targetingLocked = true;
-                    boss->targetingUpdateTimer = 0.0f;
+                boss->velX = 0.0f;
+                boss->velZ = 0.0f;
+
+                boss->currentAttackName = "Stomp";
+                boss->attackNameDisplayTimer = 2.0f;
+                boss->currentAttackId = BOSS_ATTACK_STOMP;
+                return;
+            }
+
+            bool starterReady = (boss->comboStarterCooldown <= 0.0f);
+            bool comboReady   = (boss->comboCooldown <= 0.0f);          // combo itself
+            bool a1Ready      = (boss->attack1Cooldown <= 0.0f);
+            bool slamReady    = (boss->trackingSlamCooldown <= 0.0f);
+
+            // weights: ensure starter shows up often enough when close
+            float wStarter = starterReady ? 0.40f : 0.0f;
+            float wA1      = a1Ready      ? 0.20f : 0.0f;
+            float wSlam    = slamReady    ? 0.15f : 0.0f;
+
+            float sum = wStarter + wA1 + wSlam;
+
+            if (sum > 0.0f) {
+                float r = ((float)(rand() % 1000) / 1000.0f) * sum;
+
+                if (r < wStarter) {
+                    // COMBO STARTER (close-range allowed)
+                    boss->state = BOSS_STATE_COMBO_STARTER;
+                    boss->stateTimer = 0.0f;
+
+                    boss->comboStarterCooldown = 10.0f;
+                    boss->swordThrown = false;
+                    boss->comboStarterSlamHasHit = false;
+                    boss->comboStarterCompleted = false;
+
+                    boss->velX = 0.0f;
+                    boss->velZ = 0.0f;
+
+                    boss->comboStarterTargetPos[0] = character.pos[0];
+                    boss->comboStarterTargetPos[1] = character.pos[1];
+                    boss->comboStarterTargetPos[2] = character.pos[2];
+
+                    boss->isAttacking = true;
+                    boss->attackAnimTimer = 0.0f;
+                    boss->animationTransitionTimer = 0.0f;
+
+                    boss->currentAttackName = "Combo Starter";
+                    boss->attackNameDisplayTimer = 2.0f;
+                    boss->currentAttackId = BOSS_ATTACK_COMBO_STARTER;
+                    return;
+                }
+                r -= wStarter;
+
+                if (r < wA1) {
+                    boss->state = BOSS_STATE_ATTACK1;
+                    boss->stateTimer = 0.0f;
+
+                    boss->attack1Cooldown = 4.0f;
+                    boss->attackCooldown  = 0.8f;
+
+                    boss->isAttacking = true;
+                    boss->attackAnimTimer = 0.0f;
+                    boss->animationTransitionTimer = 0.0f;
+
+                    boss->velX = 0.0f;
+                    boss->velZ = 0.0f;
+
+                    boss->currentAttackName = "Attack1";
+                    boss->attackNameDisplayTimer = 2.0f;
+                    boss->currentAttackId = BOSS_ATTACK_ATTACK1;
+                    return;
                 }
 
-                float dx = boss->lockedTargetingPos[0] - boss->pos[0];
-                float dz = boss->lockedTargetingPos[2] - boss->pos[2];
-                float angle = atan2f(-dx, dz);
-                boss->trackingSlamTargetAngle = angle;
+                // Slam fallback
+                boss->state = BOSS_STATE_TRACKING_SLAM;
+                boss->stateTimer = 0.0f;
+
+                boss->trackingSlamCooldown = 6.0f;
+                boss->attackCooldown = 0.8f;
+
+                boss->isAttacking = true;
+                boss->attackAnimTimer = 0.0f;
+                boss->animationTransitionTimer = 0.0f;
 
                 boss->currentAttackName = "Slow Attack";
                 boss->attackNameDisplayTimer = 2.0f;
                 boss->currentAttackId = BOSS_ATTACK_TRACKING_SLAM;
-            } else {
-                boss->state = BOSS_STATE_RECOVER;
-                boss->stateTimer = 0.0f;
+                return;
             }
-        } else {
-            boss->state = BOSS_STATE_STRAFE;
+
+            boss->state = BOSS_STATE_RECOVER;
             boss->stateTimer = 0.0f;
+            return;
         }
+
     }
 }
 
