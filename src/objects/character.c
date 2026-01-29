@@ -1707,8 +1707,8 @@ void character_apply_damage(float amount)
 		// printf("[Character] HP: %.0f/%.0f - DEFEATED!\n", character.health, character.maxHealth);
 		scene_set_game_state(GAME_STATE_DEAD);
     } else {
-        // Small knockback when taking significant damage
-        if (amount >= 10.0f && characterState != CHAR_STATE_ROLLING) {
+        // Small knockback when taking significant damage (only strong attacks)
+        if (amount >= 20.0f && characterState != CHAR_STATE_ROLLING) {
             characterState = CHAR_STATE_KNOCKDOWN;
             actionTimer = 0.0f;
             currentActionDuration = KNOCKDOWN_DURATION;
