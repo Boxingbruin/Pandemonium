@@ -1233,7 +1233,7 @@ void scene_update_title(void)
         }
         else
         {
-            if(btn.start || btn.b)
+            if(btn.start || btn.a)
             {
                 titleStartGameTimer = 0.0f;
                 scene_init_cutscene();
