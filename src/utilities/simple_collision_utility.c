@@ -49,6 +49,137 @@ static inline float f_clamp(float x, float lo, float hi)
 }
 
 /* ------------------------------------------------------------------
+ * OBB
+ * ------------------------------------------------------------------ */
+
+// Solve circle vs OBB in XZ, returning push + normal in *WORLD* space.
+// Returns true if overlapping.
+static bool scu_circle_vs_obb_push_xz_f(
+    float cx, float cz, float r,
+    const SCU_OBB *o,
+    float push_out[3],
+    float n_out[3]
+)
+{
+    // Rotate world -> OBB local (around Y): local = R(-yaw) * (p - center)
+    float dx = cx - o->center[0];
+    float dz = cz - o->center[2];
+
+    float c = cosf(o->yaw);
+    float s = sinf(o->yaw);
+
+    float lx =  c * dx + s * dz;
+    float lz = -s * dx + c * dz;
+
+    float hx = o->half[0];
+    float hz = o->half[2];
+
+    // Closest point on local AABB to circle center
+    float qx = f_clamp(lx, -hx, hx);
+    float qz = f_clamp(lz, -hz, hz);
+
+    float vx = lx - qx;
+    float vz = lz - qz;
+
+    float d2 = vx*vx + vz*vz;
+
+    // If center is outside AABB region in local space:
+    if (d2 > 0.0f) {
+        float d = sqrtf(d2);
+        if (d >= r) {
+            push_out[0] = push_out[1] = push_out[2] = 0.0f;
+            n_out[0] = n_out[1] = n_out[2] = 0.0f;
+            return false;
+        }
+
+        // penetration depth
+        float pen = r - d;
+
+        // local normal (from box to circle)
+        float nlx = vx / d;
+        float nlz = vz / d;
+
+        // local push
+        float plx = nlx * pen;
+        float plz = nlz * pen;
+
+        // Rotate local -> world: world = R(yaw) * local
+        float pwx = c * plx - s * plz;
+        float pwz = s * plx + c * plz;
+
+        float nwx = c * nlx - s * nlz;
+        float nwz = s * nlx + c * nlz;
+
+        push_out[0] = pwx; push_out[1] = 0.0f; push_out[2] = pwz;
+        n_out[0]    = nwx; n_out[1]    = 0.0f; n_out[2]    = nwz;
+        return true;
+    }
+
+    // Center is inside the local AABB (vx=vz=0). Push out along the smallest penetration axis.
+    float px = hx - fabsf(lx);
+    float pz = hz - fabsf(lz);
+
+    // We need to move the circle center outside by r as well.
+    // Choose axis with smaller available distance to face.
+    float plx = 0.0f, plz = 0.0f;
+    float nlx = 0.0f, nlz = 0.0f;
+
+    if (px < pz) {
+        // push along X
+        float sign = (lx >= 0.0f) ? 1.0f : -1.0f;
+        nlx = sign; nlz = 0.0f;
+        plx = (px + r) * sign;
+        plz = 0.0f;
+    } else {
+        // push along Z
+        float sign = (lz >= 0.0f) ? 1.0f : -1.0f;
+        nlx = 0.0f; nlz = sign;
+        plx = 0.0f;
+        plz = (pz + r) * sign;
+    }
+
+    float pwx = c * plx - s * plz;
+    float pwz = s * plx + c * plz;
+
+    float nwx = c * nlx - s * nlz;
+    float nwz = s * nlx + c * nlz;
+
+    push_out[0] = pwx; push_out[1] = 0.0f; push_out[2] = pwz;
+    n_out[0]    = nwx; n_out[1]    = 0.0f; n_out[2]    = nwz;
+    return true;
+}
+
+// Capsule vs OBB (XZ): Y overlap check + circle-vs-OBB solve in XZ.
+// Assumption: your capsule is vertical (capA/capB share XZ), which matches your character collider.
+bool scu_capsule_vs_obb_push_xz_f(
+    const float cap_a[3], const float cap_b[3], float cap_radius,
+    const SCU_OBB *obb,
+    float push_out[3],
+    float n_out[3]
+)
+{
+    // ---- Y overlap gate ----
+    float capMinY = fminf(cap_a[1], cap_b[1]) - cap_radius;
+    float capMaxY = fmaxf(cap_a[1], cap_b[1]) + cap_radius;
+
+    float obbMinY = obb->center[1] - obb->half[1];
+    float obbMaxY = obb->center[1] + obb->half[1];
+
+    if (capMaxY < obbMinY || capMinY > obbMaxY) {
+        push_out[0] = push_out[1] = push_out[2] = 0.0f;
+        n_out[0] = n_out[1] = n_out[2] = 0.0f;
+        return false;
+    }
+
+    // ---- Choose an XZ center for the capsule ----
+    // For your character capsule, cap_a.xz == cap_b.xz, so either is fine.
+    float cx = 0.5f * (cap_a[0] + cap_b[0]);
+    float cz = 0.5f * (cap_a[2] + cap_b[2]);
+
+    return scu_circle_vs_obb_push_xz_f(cx, cz, cap_radius, obb, push_out, n_out);
+}
+
+/* ------------------------------------------------------------------
  * Closest point on segment AB to P (float)
  * ------------------------------------------------------------------ */
 
@@ -276,27 +407,6 @@ static bool capsule_vs_capsule(
     float dist2 = segment_segment_dist2(a0, a1, b0, b1);
     float r_sum = radiusA + radiusB;
     return dist2 <= r_sum * r_sum;
-}
-
-/* ------------------------------------------------------------------
- * Fixed-point API implementation
- * ------------------------------------------------------------------ */
-
-bool scu_fixed_capsule_vs_capsule(
-    const SCU_CapsuleFixed *c1,
-    const SCU_CapsuleFixed *c2)
-{
-    // Convert fixed-point to float
-    float a0[3] = {FROM_FIXED(c1->a.v[0]), FROM_FIXED(c1->a.v[1]), FROM_FIXED(c1->a.v[2])};
-    float a1[3] = {FROM_FIXED(c1->b.v[0]), FROM_FIXED(c1->b.v[1]), FROM_FIXED(c1->b.v[2])};
-    float radiusA = FROM_FIXED(c1->radius);
-    
-    float b0[3] = {FROM_FIXED(c2->a.v[0]), FROM_FIXED(c2->a.v[1]), FROM_FIXED(c2->a.v[2])};
-    float b1[3] = {FROM_FIXED(c2->b.v[0]), FROM_FIXED(c2->b.v[1]), FROM_FIXED(c2->b.v[2])};
-    float radiusB = FROM_FIXED(c2->radius);
-    
-    // Use existing float-space capsule collision test
-    return capsule_vs_capsule(a0, a1, radiusA, b0, b1, radiusB);
 }
 
 /* ------------------------------------------------------------------

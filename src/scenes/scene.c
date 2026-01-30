@@ -40,16 +40,6 @@
 #include "debug_draw.h"
 #include "utilities/simple_collision_utility.h"
 
-// --- Simple square room colliders ---
-// Adjustable bounds and wall thickness for a basic square room.
-// You can tweak these values later to fit the scene.
-// Doubled room size: expand bounds in X/Z
-static float g_roomMinX = -500.0f;
-static float g_roomMaxX =  400.0f;
-static float g_roomMinZ = -500.0f;
-static float g_roomMaxZ =  500.0f;
-static float g_wallThickness = 5.0f;   // thin walls for collision
-
 // Four AABB walls: left, right, back, front (Y spans from floor to a fixed height)
 static AABB g_roomWalls[4];
 static const int g_roomWallCount = 4;
@@ -142,6 +132,94 @@ static const float TITLE_CHARACTER_YAW = T3D_PI * 0.5f; // +90° around Y
 static bool screenTransition = false;
 static bool screenBreath = false;
 
+#define WALL_THICKNESS 20.0f
+#define WALL_HEIGHT   200.0f
+
+static SCU_OBB g_roomOBBs[] = {
+
+    // -------------------------------------------------
+    // right wall
+    // (345, 595) -> (-430, 595)
+    // -------------------------------------------------
+    {
+        .center = { (-430.0f + 345.0f) * 0.5f, 0.0f, 595.0f },                 // x=-42.5, z=595
+        .half   = { (345.0f - (-430.0f)) * 0.5f, WALL_HEIGHT * 0.5f, WALL_THICKNESS * 0.5f }, // hx=387.5
+        .yaw    = 3.1415926f
+    },
+
+    // -------------------------------------------------
+    // front wall
+    // (-430, 595) -> (-430, -595)
+    // -------------------------------------------------
+    {
+        .center = { -430.0f, 0.0f, (595.0f + -595.0f) * 0.5f },                // x=-430, z=0
+        .half   = { (595.0f - (-595.0f)) * 0.5f, WALL_HEIGHT * 0.5f, WALL_THICKNESS * 0.5f }, // hx=595
+        .yaw    = -1.5707963f
+    },
+
+    // -------------------------------------------------
+    // left wall
+    // (-458, -595) -> (345, -595)
+    // -------------------------------------------------
+    {
+        .center = { (-458.0f + 345.0f) * 0.5f, 0.0f, -595.0f },                // x=-56.5, z=-595
+        .half   = { (345.0f - (-458.0f)) * 0.5f, WALL_HEIGHT * 0.5f, WALL_THICKNESS * 0.5f }, // hx=401.5
+        .yaw    = 0.0f
+    },
+
+    // -------------------------------------------------
+    // left wall bend in
+    // (345, -595) -> (420, -420)
+    // -------------------------------------------------
+    {
+        .center = { (345.0f + 420.0f) * 0.5f, 0.0f, (-595.0f + -420.0f) * 0.5f }, // x=382.5, z=-507.5
+        .half   = { 95.52f, WALL_HEIGHT * 0.5f, WALL_THICKNESS * 0.5f },          // half length ≈ sqrt(75^2+175^2)/2
+        .yaw    = 1.1659045f
+    },
+
+    // -------------------------------------------------
+    // right wall bend in
+    // (345, 595) -> (420, 420)
+    // -------------------------------------------------
+    {
+        .center = { (345.0f + 420.0f) * 0.5f, 0.0f, (595.0f + 420.0f) * 0.5f },  // x=382.5, z=507.5
+        .half   = { 95.52f, WALL_HEIGHT * 0.5f, WALL_THICKNESS * 0.5f },
+        .yaw    = -1.1659045f
+    },
+
+    // -------------------------------------------------
+    // left wall continued
+    // (420, -415) -> (600, -415)
+    // -------------------------------------------------
+    {
+        .center = { (420.0f + 600.0f) * 0.5f, 0.0f, -415.0f },                 // x=510, z=-415
+        .half   = { (600.0f - 420.0f) * 0.5f, WALL_HEIGHT * 0.5f, WALL_THICKNESS * 0.5f }, // hx=90
+        .yaw    = 0.0f
+    },
+
+    // -------------------------------------------------
+    // right wall continued
+    // (420, 415) -> (600, 415)
+    // -------------------------------------------------
+    {
+        .center = { (420.0f + 600.0f) * 0.5f, 0.0f, 415.0f },                  // x=510, z=415
+        .half   = { (600.0f - 420.0f) * 0.5f, WALL_HEIGHT * 0.5f, WALL_THICKNESS * 0.5f }, // hx=90
+        .yaw    = 0.0f
+    },
+
+    // -------------------------------------------------
+    // back wall
+    // (600, 420) -> (600, -420)
+    // -------------------------------------------------
+    {
+        .center = { 600.0f, 0.0f, (420.0f + -420.0f) * 0.5f },                 // x=600, z=0
+        .half   = { (420.0f - (-420.0f)) * 0.5f, WALL_HEIGHT * 0.5f, WALL_THICKNESS * 0.5f }, // hx=420
+        .yaw    = -1.5707963f
+    },
+};
+
+static const int g_roomOBBCount = sizeof(g_roomOBBs) / sizeof(g_roomOBBs[0]);
+
 #define TITLE_DIALOG_COUNT (sizeof(titleDialogs) / sizeof(titleDialogs[0]))
 
 static const char *titleDialogs[] = {
@@ -231,126 +309,90 @@ static const char *SCENE1_SFX_PATHS[SCENE1_SFX_COUNT] = {
     [SCENE1_SFX_CHAR_FOOTSTEP_WALK4] = "rom:/audio/sfx/character/char_footstep_walk4_22k.wav64",
 };
 
-// --- Room collider helpers (depend on roomY) ---
-static void scene_init_room_colliders(void)
+static void debug_draw_obb_xz(
+    T3DViewport *vp,
+    const SCU_OBB *o,
+    float y,
+    uint16_t color)
 {
-    // Vertical span of walls (slightly below floor to well above)
-    float minY = roomY - 5.0f;
-    float maxY = roomY + 150.0f;
+    float c = cosf(o->yaw);
+    float s = sinf(o->yaw);
 
-    // Left wall at minX
-    g_roomWalls[0].min = (T3DVec3){{ g_roomMinX - g_wallThickness, minY, g_roomMinZ }};
-    g_roomWalls[0].max = (T3DVec3){{ g_roomMinX + g_wallThickness, maxY, g_roomMaxZ }};
+    float hx = o->half[0];
+    float hz = o->half[2];
 
-    // Right wall at maxX
-    g_roomWalls[1].min = (T3DVec3){{ g_roomMaxX - g_wallThickness, minY, g_roomMinZ }};
-    g_roomWalls[1].max = (T3DVec3){{ g_roomMaxX + g_wallThickness, maxY, g_roomMaxZ }};
+    // 4 corners in local space (XZ)
+    float lx[4] = { -hx,  hx,  hx, -hx };
+    float lz[4] = { -hz, -hz,  hz,  hz };
 
-    // Back wall at minZ
-    g_roomWalls[2].min = (T3DVec3){{ g_roomMinX, minY, g_roomMinZ - g_wallThickness }};
-    g_roomWalls[2].max = (T3DVec3){{ g_roomMaxX, maxY, g_roomMinZ + g_wallThickness }};
+    T3DVec3 p[4];
 
-    // Front wall at maxZ
-    g_roomWalls[3].min = (T3DVec3){{ g_roomMinX, minY, g_roomMaxZ - g_wallThickness }};
-    g_roomWalls[3].max = (T3DVec3){{ g_roomMaxX, maxY, g_roomMaxZ + g_wallThickness }};
+    for (int i = 0; i < 4; i++) {
+        // local -> world (rotate + translate)
+        float wx = o->center[0] + (c * lx[i] - s * lz[i]);
+        float wz = o->center[2] + (s * lx[i] + c * lz[i]);
 
-    // Diagonal corner boxes: axis-aligned blocks at each corner cutting off space
-    float d = g_diagOffset;
-
-    // Build small AABB boxes along top-right diagonal from
-    // A=(maxX, maxZ-d) to B=(maxX-d, maxZ)
-    g_diagBoxCount = 0;
-    for (int s = 0; s < g_diagSteps; s++) {
-        float t = (float)(s + 1) / (float)g_diagSteps;
-        float cx = g_roomMaxX - t * d;
-        float cz = g_roomMaxZ - d + t * d;
-        g_diagBoxes[g_diagBoxCount].min = (T3DVec3){{ cx - g_diagBoxHalf, minY, cz - g_diagBoxHalf }};
-        g_diagBoxes[g_diagBoxCount].max = (T3DVec3){{ cx + g_diagBoxHalf, maxY, cz + g_diagBoxHalf }};
-        g_diagBoxCount++;
+        p[i] = (T3DVec3){{ wx, y, wz }};
     }
 
-    // Bottom-left diagonal: A=(minX, minZ + d) to B=(minX + d, minZ)
-    for (int s = 0; s < g_diagSteps; s++) {
-        float t = (float)(s + 1) / (float)g_diagSteps;
-        float cx = g_roomMinX + t * d;
-        float cz = g_roomMinZ + d - t * d;
-        g_diagBoxes[g_diagBoxCount].min = (T3DVec3){{ cx - g_diagBoxHalf, minY, cz - g_diagBoxHalf }};
-        g_diagBoxes[g_diagBoxCount].max = (T3DVec3){{ cx + g_diagBoxHalf, maxY, cz + g_diagBoxHalf }};
-        g_diagBoxCount++;
-    }
+    // Draw rectangle as two wire triangles
+    debug_draw_tri_wire(vp, &p[0], &p[1], &p[2], color);
+    debug_draw_tri_wire(vp, &p[0], &p[2], &p[3], color);
 }
 
-// Keep the player inside the square bounds (simple constraint)
-static void scene_constrain_character_to_room(void)
+static void scene_get_character_world_capsule(float capA[3], float capB[3], float *radius)
 {
-    float margin = character.capsuleCollider.radius * character.scale[0];
-    if (character.pos[0] < g_roomMinX + margin) character.pos[0] = g_roomMinX + margin;
-    if (character.pos[0] > g_roomMaxX - margin) character.pos[0] = g_roomMaxX - margin;
-    if (character.pos[2] < g_roomMinZ + margin) character.pos[2] = g_roomMinZ + margin;
-    if (character.pos[2] > g_roomMaxZ - margin) character.pos[2] = g_roomMaxZ - margin;
+    capA[0] = character.pos[0] + character.capsuleCollider.localCapA.v[0] * character.scale[0];
+    capA[1] = character.pos[1] + character.capsuleCollider.localCapA.v[1] * character.scale[1];
+    capA[2] = character.pos[2] + character.capsuleCollider.localCapA.v[2] * character.scale[2];
 
-    // Diagonal constraints only near top corners to mimic screenshot
-    float x = character.pos[0];
-    float z = character.pos[2];
-    float d = g_diagOffset;
+    capB[0] = character.pos[0] + character.capsuleCollider.localCapB.v[0] * character.scale[0];
+    capB[1] = character.pos[1] + character.capsuleCollider.localCapB.v[1] * character.scale[1];
+    capB[2] = character.pos[2] + character.capsuleCollider.localCapB.v[2] * character.scale[2];
 
-    // Top-right region: enforce x + z <= maxX + maxZ - d only when near the corner
-    if (x > g_roomMaxX - d && z > g_roomMaxZ - d) {
-        float threshold = g_roomMaxX + g_roomMaxZ - d;
-        float s = x + z;
-        if (s > threshold) {
-            float delta = s - threshold;
-            character.pos[0] -= delta * 0.5f;
-            character.pos[2] -= delta * 0.5f;
-        }
-    }
-
-    // Top-left region: enforce z - x <= (maxZ - minX - d) only when near the corner
-    if (x < g_roomMinX + d && z > g_roomMaxZ - d) {
-        float threshold = g_roomMaxZ - g_roomMinX - d;
-        float s = z - x;
-        if (s > threshold) {
-            float delta = s - threshold;
-            character.pos[0] += delta * 0.5f;
-            character.pos[2] -= delta * 0.5f;
-        }
-    }
+    *radius = character.capsuleCollider.radius * character.scale[0];
 }
 
-// Debug-render the walls and visualize capsule vs walls
-static void scene_draw_room_colliders(T3DViewport *viewport)
+void scene_resolve_character_room_obbs(void)
 {
-    if (!debugDraw) return;
+    // more iterations => less corner tunneling / less “elastic”
+    for (int iter = 0; iter < 8; iter++) {
+        float capA[3], capB[3], r;
+        scene_get_character_world_capsule(capA, capB, &r);
 
-    // Character capsule in world space (respecting scale)
-    T3DVec3 capA = {{
-        character.pos[0] + character.capsuleCollider.localCapA.v[0] * character.scale[0],
-        character.pos[1] + character.capsuleCollider.localCapA.v[1] * character.scale[1],
-        character.pos[2] + character.capsuleCollider.localCapA.v[2] * character.scale[2],
-    }};
-    T3DVec3 capB = {{
-        character.pos[0] + character.capsuleCollider.localCapB.v[0] * character.scale[0],
-        character.pos[1] + character.capsuleCollider.localCapB.v[1] * character.scale[1],
-        character.pos[2] + character.capsuleCollider.localCapB.v[2] * character.scale[2],
-    }};
-    float radius = character.capsuleCollider.radius * character.scale[0];
+        float vx, vz;
+        character_get_velocity(&vx, &vz);
 
-    // Draw walls
-    for (int i = 0; i < g_roomWallCount; i++) {
-        debug_draw_aabb(viewport, &g_roomWalls[i].min, &g_roomWalls[i].max, DEBUG_COLORS[2]);
-    }
+        bool any = false;
 
-    // Visualize collisions: red on hit, cyan otherwise
-    debug_draw_capsule_vs_aabb_list(viewport, &capA, &capB, radius, g_roomWalls, g_roomWallCount,
-                                    DEBUG_COLORS[2], DEBUG_COLORS[0]);
+        for (int i = 0; i < g_roomOBBCount; i++) {
+            float push[3];
+            float n[3];
 
-    // Draw diagonal corner boxes and highlight on collision
-    for (int i = 0; i < g_diagBoxCount; i++) {
-        bool hit = scu_capsule_vs_rect_f(
-            capA.v, capB.v, radius,
-            g_diagBoxes[i].min.v, g_diagBoxes[i].max.v);
-        uint16_t color = hit ? DEBUG_COLORS[0] : DEBUG_COLORS[2];
-        debug_draw_aabb(viewport, &g_diagBoxes[i].min, &g_diagBoxes[i].max, color);
+            if (scu_capsule_vs_obb_push_xz_f(capA, capB, r, &g_roomOBBs[i], push, n)) {
+
+                // push out (world)
+                character.pos[0] += push[0];
+                character.pos[2] += push[2];
+
+                // IMPORTANT: keep capsule in sync for subsequent OBB checks THIS iter
+                capA[0] += push[0]; capA[2] += push[2];
+                capB[0] += push[0]; capB[2] += push[2];
+
+                // slide: remove inward velocity component (vn < 0 means into the surface)
+                float vn = vx * n[0] + vz * n[2];
+                if (vn < 0.0f) {
+                    vx -= vn * n[0];
+                    vz -= vn * n[2];
+                }
+
+                any = true;
+            }
+        }
+
+        character_set_velocity_xz(vx, vz);
+
+        if (!any) break;
     }
 }
 
@@ -627,8 +669,6 @@ void scene_init(void)
     // collision_mesh_init();
 
     scene_load_environment();
-    // Initialize simple square room colliders
-    scene_init_room_colliders();
     
     g_boss = boss_spawn();
     if (!g_boss) {
@@ -859,7 +899,7 @@ void scene_init_playing(){
     bossActivated = true;
     // Switch music from intro cinematic to boss fight
     audio_stop_music();
-    audio_play_music("rom:/audio/music/boss_phase1-looping-mono-22k.wav64", true);
+    audio_play_music("rom:/audio/music/boss_phase1-looping-22k.wav64", true);
     // Hide letterbox bars with animation
     letterbox_hide();
     // Return camera control to the player
@@ -1452,8 +1492,8 @@ void scene_update(void)
     {
         
         character_update();
-        // Constrain player inside the simple square room
-        scene_constrain_character_to_room();
+        // Constrain player inside obbs
+        scene_resolve_character_room_obbs();
         // Update character transform after constraint
         character_update_position();
         if (bossActivated && g_boss) {
@@ -2198,9 +2238,17 @@ void scene_draw(T3DViewport *viewport)
         draw_lockon_indicator(viewport);
 
     // Debug draw room colliders in gameplay
-    // if (cutsceneState == CUTSCENE_NONE) {
-    //     scene_draw_room_colliders(viewport);
-    // }
+    if (cutsceneState == CUTSCENE_NONE && debugDraw) {
+        float capA[3], capB[3], r;
+        scene_get_character_world_capsule(capA, capB, &r);
+
+        for (int i = 0; i < g_roomOBBCount; i++) {
+            float push[3], n[3];
+            bool hit = scu_capsule_vs_obb_push_xz_f(capA, capB, r, &g_roomOBBs[i], push, n);
+
+            debug_draw_obb_xz(viewport, &g_roomOBBs[i], 0.0f, hit ? DEBUG_COLORS[0] : DEBUG_COLORS[2]);
+        }
+    }
     
     bool cutsceneActive = scene_is_cutscene_active();
     GameState state = scene_get_game_state();

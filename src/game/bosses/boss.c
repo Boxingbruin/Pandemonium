@@ -471,7 +471,7 @@ void boss_init(Boss* boss) {
     boss->capsuleCollider.localCapB.v[0] = 0.0f;
     boss->capsuleCollider.localCapB.v[1] = 40.0f;
     boss->capsuleCollider.localCapB.v[2] = 0.0f;
-    boss->capsuleCollider.radius = 14.0f;
+    boss->capsuleCollider.radius = 20.0f;
     
     // Find Hand-Right bone index
     boss->handRightBoneIndex = t3d_skeleton_find_bone(skeleton, "Hand-Right");

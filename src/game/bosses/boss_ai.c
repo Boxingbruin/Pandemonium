@@ -268,9 +268,9 @@ static void boss_ai_select_attack(Boss* boss, float dist) {
     // ------------------------------------------------------------
     // NEW: Stomp (super close) and Attack1 (close band)
     // ------------------------------------------------------------
-    const float STOMP_RANGE = 22.0f;     // super close
-    const float CLOSE_MIN   = 50.0f;     // same as your slam band start
-    const float CLOSE_MAX   = 80.0f;     // overlap with close-lunge mode (<= 80)
+    const float STOMP_RANGE = 30.0f;     // super close
+    const float CLOSE_MIN   = 40.0f;     // same as your slam band start
+    const float CLOSE_MAX   = 60.0f;     // overlap with close-lunge mode (<= 80)
 
     // 1) Stomp: highest priority at super close
     if (dist <= STOMP_RANGE && boss->stompCooldown <= 0.0f) {
@@ -292,7 +292,6 @@ static void boss_ai_select_attack(Boss* boss, float dist) {
         boss->currentAttackId = BOSS_ATTACK_STOMP;
         return;
     }
-
     // 2) Attack1: close band, slightly more frequent than tracking slam + close-lunge
     if (dist >= CLOSE_MIN && dist <= CLOSE_MAX) {
 
@@ -347,11 +346,14 @@ static void boss_ai_select_attack(Boss* boss, float dist) {
         }
     }
 
-    // Combo starter gated so it doesn't steal point-blank range (23..49)
-    if (dist >= 60.0f && dist <= 80.0f && boss->comboStarterCooldown <= 0.0f) {
+    // 3) Combo Starter: close band
+    if (dist >= CLOSE_MIN && dist <= CLOSE_MAX && boss->comboStarterCooldown <= 0.0f) {
         boss->state = BOSS_STATE_COMBO_STARTER;
         boss->stateTimer = 0.0f;
-        boss->comboStarterCooldown = 10.0f;
+
+        boss->comboStarterCooldown = 5.0f;
+        boss->attackCooldown       = 1.0f;
+
         boss->swordThrown = false;
         boss->comboStarterSlamHasHit = false;
         boss->comboStarterCompleted = false;
@@ -363,11 +365,18 @@ static void boss_ai_select_attack(Boss* boss, float dist) {
         boss->comboStarterTargetPos[1] = character.pos[1];
         boss->comboStarterTargetPos[2] = character.pos[2];
 
+        boss->isAttacking = true;
+        boss->attackAnimTimer = 0.0f;
+        boss->animationTransitionTimer = 0.0f;
+
         boss->currentAttackName = "Combo Starter";
         boss->attackNameDisplayTimer = 2.0f;
         boss->currentAttackId = BOSS_ATTACK_COMBO_STARTER;
+        return;
     }
-    else if (boss->flipAttackCooldown <= 0.0f && dist >= 100.0f && dist < 200.0f) {
+
+
+    if (boss->flipAttackCooldown <= 0.0f && dist >= 100.0f && dist < 200.0f) {
         boss->state = BOSS_STATE_FLIP_ATTACK;
         boss->stateTimer = 0.0f;
         boss->flipAttackCooldown = 10.0f;
@@ -453,7 +462,7 @@ static void boss_ai_select_attack(Boss* boss, float dist) {
     else if (dist >= 50.0f && dist <= 90.0f && boss->trackingSlamCooldown <= 0.0f) {
         boss->state = BOSS_STATE_TRACKING_SLAM;
         boss->stateTimer = 0.0f;
-        boss->trackingSlamCooldown = 8.0f;
+        boss->trackingSlamCooldown = 15.0f;
         boss->isAttacking = true;
         boss->attackAnimTimer = 0.0f;
         boss->animationTransitionTimer = 0.0f;
@@ -477,7 +486,7 @@ static void boss_ai_select_attack(Boss* boss, float dist) {
     else if (boss->comboCooldown <= 0.0f && boss->comboStarterCompleted) {
         boss->state = BOSS_STATE_COMBO_ATTACK;
         boss->stateTimer = 0.0f;
-        boss->comboCooldown = 15.0f;
+        boss->comboCooldown = 10.0f;
         boss->comboStep = 0;
         boss->comboInterrupted = false;
         boss->comboVulnerableTimer = 0.0f;
@@ -493,9 +502,9 @@ static void boss_ai_select_attack(Boss* boss, float dist) {
     }
     else {
         // ------------------------------------------------------------
-        // CLOSE RANGE (<50)
+        // CLOSE RANGE
         // ------------------------------------------------------------
-        if (dist < 50.0f)
+        if (dist < CLOSE_MIN)
         {
             if (dist <= 22.0f && boss->stompCooldown <= 0.0f) {
                 boss->state = BOSS_STATE_STOMP;
@@ -537,7 +546,7 @@ static void boss_ai_select_attack(Boss* boss, float dist) {
                     boss->state = BOSS_STATE_COMBO_STARTER;
                     boss->stateTimer = 0.0f;
 
-                    boss->comboStarterCooldown = 10.0f;
+                    boss->comboStarterCooldown = 5.0f;
                     boss->swordThrown = false;
                     boss->comboStarterSlamHasHit = false;
                     boss->comboStarterCompleted = false;
@@ -584,7 +593,7 @@ static void boss_ai_select_attack(Boss* boss, float dist) {
                 boss->state = BOSS_STATE_TRACKING_SLAM;
                 boss->stateTimer = 0.0f;
 
-                boss->trackingSlamCooldown = 6.0f;
+                boss->trackingSlamCooldown = 15.0f;
                 boss->attackCooldown = 0.8f;
 
                 boss->isAttacking = true;
@@ -597,9 +606,11 @@ static void boss_ai_select_attack(Boss* boss, float dist) {
                 return;
             }
 
-            boss->state = BOSS_STATE_RECOVER;
+            boss->state = BOSS_STATE_STRAFE;
             boss->stateTimer = 0.0f;
+            boss->isAttacking = false;
             return;
+
         }
 
     }
@@ -799,18 +810,26 @@ void boss_ai_update(Boss* boss, BossIntent* out_intent) {
             
         case BOSS_STATE_COMBO_LUNGE:
         {
-            float targetDx = boss->lockedTargetingPos[0] - boss->pos[0];
-            float targetDz = boss->lockedTargetingPos[2] - boss->pos[2];
-            float distToTarget = sqrtf(targetDx*targetDx + targetDz*targetDz);
+            const float LUNGE_TOTAL = 2.2f;
 
-            bool reachedTarget = distToTarget < 5.0f;
-
-            bool minimumChargeTime = boss->stateTimer >= 2.3f;
-            bool maximumChargeTime = boss->stateTimer > 2.8f;
-
-            if ((reachedTarget && minimumChargeTime) || maximumChargeTime) {
+            // If stateTimer is NaN, force exit immediately
+            if (!(boss->stateTimer >= 0.0f)) {
+                boss->isAttacking = false;
                 boss->comboStarterCompleted = false;
-                boss_ai_select_attack(boss, dist);
+                boss->state = BOSS_STATE_STRAFE;
+                boss->stateTimer = 0.0f;
+                break;
+            }
+
+            if (boss->stateTimer >= LUNGE_TOTAL) {
+                boss->comboStarterCompleted = false;
+                boss->isAttacking = false;
+                boss->animationTransitionTimer = 0.0f;
+
+                // STRAFE here to avoid re-entrant selection weirdness:
+                boss->state = BOSS_STATE_STRAFE;
+                boss->stateTimer = 0.0f;
+                break;
             }
         }
         break;
@@ -963,83 +982,101 @@ void boss_ai_update(Boss* boss, BossIntent* out_intent) {
                 }
             }
             break;
-        case BOSS_STATE_COMBO_STARTER:
-            // Combo starter attack: 4 phases over 2.0 seconds
-            // Phase 1: Throw sword (0.0 - 0.5s)
-            // Phase 2: Sword flight (0.5 - 1.0s)
-            // Phase 3: Sword slam (1.0s+)
-            // Phase 4: Boss stays in place (1.5s - 2.0s)
-            // End: Transition to charge/combo attack immediately (2.0s+)
-            if (boss->stateTimer >= 2.0f) {
-                // Mark combo starter as completed - enables charge and ComboAttack
-                boss->comboStarterCompleted = true;
-                // Reset attack state
-                boss->swordThrown = false;
-                boss->comboStarterSlamHasHit = false;
-                boss->velX = 0.0f;
-                boss->velZ = 0.0f;
-                
-                // Immediately check for charge or combo attack after combo starter completes
-                // Randomly choose between charge and combo attack when both are available
-                bool chargeAvailable = (boss->attackCooldown <= 0.0f && dist > 0.0f && dist <= 300.0f);
-                bool comboAvailable = (boss->comboCooldown <= 0.0f);
-                
-                if (chargeAvailable && comboAvailable) {
-                    // Both available - randomly choose
-                    float r = (float)(rand() % 100) / 100.0f;
-                    if (r < 0.5f) {
+            case BOSS_STATE_COMBO_STARTER:
+                if (boss->stateTimer >= 2.0f) {
+                    boss->comboStarterCompleted = true;
+
+                    boss->swordThrown = false;
+                    boss->comboStarterSlamHasHit = false;
+                    boss->velX = 0.0f;
+                    boss->velZ = 0.0f;
+
+                    bool chargeAvailable = (boss->attackCooldown <= 0.0f && dist > 0.0f && dist <= 300.0f);
+                    bool comboAvailable  = (boss->comboCooldown <= 0.0f);
+
+                    if (chargeAvailable && comboAvailable) {
+                        float r = (float)(rand() % 100) / 100.0f;
+                        if (r < 0.5f) {
+                            boss_ai_combo_lunge_helper(boss, dist, dx, dz);
+                            break;
+                        } else {
+                            // Choose combo attack
+                            boss->state = BOSS_STATE_COMBO_ATTACK;
+                            boss->stateTimer = 0.0f;
+
+                            boss->comboCooldown = 10.0f;
+                            boss->comboStep = 0;
+                            boss->comboInterrupted = false;
+                            boss->comboVulnerableTimer = 0.0f;
+
+                            boss->lockedTargetingPos[0] = character.pos[0];
+                            boss->lockedTargetingPos[1] = character.pos[1];
+                            boss->lockedTargetingPos[2] = character.pos[2];
+                            boss->targetingLocked = true;
+
+                            boss->currentAttackName = "Combo Attack";
+                            boss->attackNameDisplayTimer = 2.0f;
+                            boss->currentAttackId = BOSS_ATTACK_COMBO;
+
+                            // FIX: ensure combo can actually hit
+                            boss->currentAttackHasHit = false;
+                            // FIX: keep attack-state consistent
+                            boss->isAttacking = true;
+                            boss->attackAnimTimer = 0.0f;
+                            boss->animationTransitionTimer = 0.0f;
+
+                            break;
+                        }
+                    }
+                    else if (chargeAvailable) {
                         boss_ai_combo_lunge_helper(boss, dist, dx, dz);
                         break;
-                    } else {
-                        // Choose combo attack
+                    }
+                    else if (comboAvailable) {
+                        // Only combo available
                         boss->state = BOSS_STATE_COMBO_ATTACK;
                         boss->stateTimer = 0.0f;
-                        boss->comboCooldown = 15.0f;
+
+                        boss->comboCooldown = 10.0f;
                         boss->comboStep = 0;
                         boss->comboInterrupted = false;
                         boss->comboVulnerableTimer = 0.0f;
+
                         boss->lockedTargetingPos[0] = character.pos[0];
                         boss->lockedTargetingPos[1] = character.pos[1];
                         boss->lockedTargetingPos[2] = character.pos[2];
                         boss->targetingLocked = true;
+
                         boss->currentAttackName = "Combo Attack";
                         boss->attackNameDisplayTimer = 2.0f;
                         boss->currentAttackId = BOSS_ATTACK_COMBO;
+
+                        // FIX: ensure combo can actually hit
+                        boss->currentAttackHasHit = false;
+                        // FIX: keep attack-state consistent
+                        boss->isAttacking = true;
+                        boss->attackAnimTimer = 0.0f;
+                        boss->animationTransitionTimer = 0.0f;
+
                         break;
                     }
-                } else if (chargeAvailable) {
-                    // Only charge available
-                    boss_ai_combo_lunge_helper(boss, dist, dx, dz);
-                    break;
-                } else if (comboAvailable) {
-                    // Only combo available
-                    boss->state = BOSS_STATE_COMBO_ATTACK;
+
+                    // If no charge/combo available, transition to movement state
+                    if (dist < 50.0f) {
+                        boss_ai_select_attack(boss, dist);
+                    } else if (dist >= 50.0f) {
+                        boss->state = BOSS_STATE_STRAFE;
+                    } else {
+                        boss->state = BOSS_STATE_CHASE;
+                    }
+
+                    // FIX: leaving attack state
+                    boss->isAttacking = false;
+                    boss->currentAttackHasHit = false;
+
                     boss->stateTimer = 0.0f;
-                    boss->comboCooldown = 15.0f;
-                    boss->comboStep = 0;
-                    boss->comboInterrupted = false;
-                    boss->comboVulnerableTimer = 0.0f;
-                    boss->lockedTargetingPos[0] = character.pos[0];
-                    boss->lockedTargetingPos[1] = character.pos[1];
-                    boss->lockedTargetingPos[2] = character.pos[2];
-                    boss->targetingLocked = true;
-                    boss->currentAttackName = "Combo Attack";
-                    boss->attackNameDisplayTimer = 2.0f;
-                    boss->currentAttackId = BOSS_ATTACK_COMBO;
-                    break;
                 }
-                
-                // If no charge/combo available, transition to movement state
-                if (dist < 50.0f) {
-                    boss_ai_select_attack(boss, dist);
-                } else if (dist >= 50.0f) {
-                    boss->state = BOSS_STATE_STRAFE;
-                } else {
-                    boss->state = BOSS_STATE_CHASE;
-                }
-                boss->stateTimer = 0.0f;
-            }
-            break;
+                break;
             
         case BOSS_STATE_TRACKING_SLAM:
             // Tracking slam: Stationary attack
