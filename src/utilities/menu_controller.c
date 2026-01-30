@@ -29,7 +29,6 @@ static const char* mainMenuOptions[MENU_MAIN_COUNT] = {
     "Resume",
     "Restart",
     "Audio Settings",
-    "Exit"
 };
 
 static const char* audioMenuOptions[MENU_AUDIO_COUNT] = {
@@ -38,7 +37,6 @@ static const char* audioMenuOptions[MENU_AUDIO_COUNT] = {
     "SFX Volume: %d",
     "Mute All: %s",
     "Audio Mode: %s",
-    "Back"
 };
 
 void menu_controller_init(void) {
@@ -142,9 +140,6 @@ void menu_controller_update(void) {
                     currentMenu = MENU_AUDIO;
                     selectedOption = 0;
                     break;
-                case MENU_MAIN_EXIT:
-                    menu_controller_close();
-                    break;
             }
         }
     } else if (currentMenu == MENU_AUDIO) {
@@ -182,10 +177,6 @@ void menu_controller_update(void) {
                     break;
                 case MENU_AUDIO_STEREO_MODE:
                     audio_toggle_stereo_mode();
-                    break;
-                case MENU_AUDIO_BACK:
-                    currentMenu = MENU_MAIN;
-                    selectedOption = MENU_MAIN_SETTINGS;
                     break;
             }
         }
