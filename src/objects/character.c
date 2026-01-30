@@ -280,6 +280,13 @@ void character_reset(void)
     character.blendFactor = 0.0f;
     character.blendTimer = 0.0f;
     walkThroughFog = false;
+
+    // Reset lock-on strafe state so restarts/titles don't inherit animation blending flags.
+    animLockOnStrafingFlag = false;
+    animStrafeDirFlag = 0;
+    animStrafeBlendRatio = 0.0f;
+    lastBaseAnimLock = -1;
+    lastStrafeAnimLock = -1;
     
     // Reset attach cache
     lastAttachedMain = -1;
@@ -290,6 +297,10 @@ void character_reset(void)
 
     footstepTimer = 0.0f;
 
+    // Reset combat stats / UI state
+    character.health = character.maxHealth;
+    character.damageFlashTimer = 0.0f;
+    character.currentAttackHasHit = false;
 }
 
 void character_reset_button_state(void)
@@ -1239,20 +1250,40 @@ void character_update(void)
 
     if(scene_get_game_state() == GAME_STATE_TITLE || scene_get_game_state() == GAME_STATE_TITLE_TRANSITION)
     {
+        // Title screen should always use the title idle animation.
+        // (Restarting from gameplay otherwise leaves us in CHAR_STATE_NORMAL.)
+        if (scene_get_game_state() == GAME_STATE_TITLE) {
+            if (characterState != CHAR_STATE_TITLE_IDLE) {
+                characterState = CHAR_STATE_TITLE_IDLE;
+                walkThroughFog = false;
+                if (character.animations && character.animations[ANIM_IDLE_TITLE]) {
+                    t3d_anim_set_time(character.animations[ANIM_IDLE_TITLE], 0.0f);
+                    t3d_anim_set_playing(character.animations[ANIM_IDLE_TITLE], true);
+                }
+            }
+        }
+
         apply_friction(deltaTime, 1.0f);
         update_current_speed(0.0f, deltaTime); // No input magnitude during cutscenes
         float animationSpeedRatio = currentSpeed;
 
         if(scene_get_game_state() == GAME_STATE_TITLE_TRANSITION && walkThroughFog == false)
         {
-            t3d_anim_set_playing(character.animations[ANIM_FOG_OF_WAR], true);
+            // Enter fog-walk immediately on transition start.
+            // Important: still run update_animations() this frame so the clip gets attached;
+            // otherwise on restart you can get a 1-frame "no animation" gap.
             characterState = CHAR_STATE_FOG_WALK;
             walkThroughFog = true;
+
+            // Always restart the fog-walk animation from frame 0 when entering the title transition.
+            if (character.animations && character.animations[ANIM_FOG_OF_WAR]) {
+                t3d_anim_set_time(character.animations[ANIM_FOG_OF_WAR], 0.0f);
+                t3d_anim_set_playing(character.animations[ANIM_FOG_OF_WAR], true);
+            }
         }
-        else
-        {
-            update_animations(animationSpeedRatio, characterState, deltaTime);
-        }
+
+        // Always update/attach the correct animation for title + title transition.
+        update_animations(animationSpeedRatio, characterState, deltaTime);
 
         //t3d_anim_set_playing(character.animations[ANIM_IDLE], true);
 

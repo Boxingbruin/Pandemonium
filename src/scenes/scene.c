@@ -168,7 +168,8 @@ static float bossUiIntro = 1.0f;
 static float playerUiIntro = 1.0f;
 static float uiIntroSpeed = 1.5f;
 
-static CutsceneState cutsceneState = CUTSCENE_PHASE1_INTRO;
+// Title should not be treated as an active cutscene; we explicitly enter cutscenes when needed.
+static CutsceneState cutsceneState = CUTSCENE_NONE;
 static float cutsceneTimer = 0.0f;
 static float cutsceneCameraTimer = 0.0f;  // Separate timer for camera movement (doesn't reset)
 static bool bossActivated = false;
@@ -182,6 +183,7 @@ static bool lastMenuActive = false;
 
 // Input state tracking
 static bool lastAPressed = false;
+static bool lastStartPressed = false;
 static bool lastZPressed = false;
 
 // Cutscene skip - toggle button visibility
@@ -517,11 +519,42 @@ void scene_load_environment(){
 
 
 
-void scene_title_init()
+static void scene_title_init_dynamic_banner_assets(void)
 {
+    if (dynamicBannerModel) return;
+
+    // ===== LOAD Dynamic Banner (Title Screen) =====
+    dynamicBannerModel = t3d_model_load("rom:/title_screen/dynamic_banners.t3dm"); 
+    dynamicBannerSkeleton = malloc_uncached(sizeof(T3DSkeleton)); 
+    *dynamicBannerSkeleton = t3d_skeleton_create(dynamicBannerModel); 
+    const char* dynamicBannerAnimationNames[] = {"Wind"}; 
+    const int dynamicBannerAnimationCount = 1;
+
+    dynamicBannerAnimations = malloc_uncached(dynamicBannerAnimationCount * sizeof(T3DAnim*)); 
+    for (int i = 0; i < dynamicBannerAnimationCount; i++) { 
+        dynamicBannerAnimations[i] = malloc_uncached(sizeof(T3DAnim)); 
+        *dynamicBannerAnimations[i] = t3d_anim_create(dynamicBannerModel, dynamicBannerAnimationNames[i]); 
+        t3d_anim_set_looping(dynamicBannerAnimations[i], true); 
+        t3d_anim_set_playing(dynamicBannerAnimations[i], true); 
+        t3d_anim_attach(dynamicBannerAnimations[i], dynamicBannerSkeleton); 
+    }
+
+    rspq_block_begin(); 
+    t3d_model_draw_skinned(dynamicBannerModel, dynamicBannerSkeleton); 
+    dynamicBannerDpl = rspq_block_end(); 
+    dynamicBannerMatrix = malloc_uncached(sizeof(T3DMat4FP)); 
+    t3d_mat4fp_from_srt_euler(dynamicBannerMatrix, (float[3]){MODEL_SCALE, MODEL_SCALE, MODEL_SCALE}, (float[3]){0.0f, 0.0f, 0.0f}, (float[3]){0.0f, roomY, 0.0f} );
+}
+
+static void scene_title_init(void)
+{
+    // Ensure title-only assets are loaded once.
+    scene_title_init_dynamic_banner_assets();
+
     audio_play_music("rom:/audio/music/demonous-22k.wav64", true);
 
     // Init to title screen position
+    camera_mode(CAMERA_CUSTOM);
     camera_initialize(
         &(T3DVec3){{-580.6f, 75.0f, 0.0f}}, 
         &(T3DVec3){{-1,0,0}}, 
@@ -543,30 +576,15 @@ void scene_title_init()
 
     character_update_position();
 
-
-    // ===== LOAD Dynamic Banner =====
-    dynamicBannerModel = t3d_model_load("rom:/title_screen/dynamic_banners.t3dm"); 
-    dynamicBannerSkeleton = malloc_uncached(sizeof(T3DSkeleton)); 
-    *dynamicBannerSkeleton = t3d_skeleton_create(dynamicBannerModel); 
-    const char* dynamicBannerAnimationNames[] = {"Wind"}; 
-    const int dynamicBannerAnimationCount = 1;
-
-    dynamicBannerAnimations = malloc_uncached(dynamicBannerAnimationCount * sizeof(T3DAnim*)); 
-    for (int i = 0; i < dynamicBannerAnimationCount; i++) { 
-        dynamicBannerAnimations[i] = malloc_uncached(sizeof(T3DAnim)); 
-        *dynamicBannerAnimations[i] = t3d_anim_create(dynamicBannerModel, dynamicBannerAnimationNames[i]); 
-        t3d_anim_set_looping(dynamicBannerAnimations[i], true); 
-        t3d_anim_set_playing(dynamicBannerAnimations[i], true); 
-        t3d_anim_attach(dynamicBannerAnimations[i], dynamicBannerSkeleton); 
+    // Reset/prime banner animation so restarts start from a consistent pose.
+    if (dynamicBannerAnimations && dynamicBannerAnimations[0]) {
+        t3d_anim_set_time(dynamicBannerAnimations[0], 0.0f);
+        t3d_anim_set_playing(dynamicBannerAnimations[0], true);
     }
 
-    rspq_block_begin(); 
-    t3d_model_draw_skinned(dynamicBannerModel, dynamicBannerSkeleton); 
-    dynamicBannerDpl = rspq_block_end(); 
-    dynamicBannerMatrix = malloc_uncached(sizeof(T3DMat4FP)); 
-    t3d_mat4fp_from_srt_euler(dynamicBannerMatrix, (float[3]){MODEL_SCALE, MODEL_SCALE, MODEL_SCALE}, (float[3]){0.0f, 0.0f, 0.0f}, (float[3]){0.0f, roomY, 0.0f} );
-
     // Start Dialog
+    currentTitleDialog = 0;
+    titleTextActivationTimer = 0.0f;
     dialog_controller_speak(titleDialogs[0], 0, 9.0f, false, true);
 
     startScreenFade = true;
@@ -714,7 +732,8 @@ static T3DVec3 get_boss_lock_focus_point(void)
 
 void scene_reset(void)
 {
-    cutsceneState = CUTSCENE_PHASE1_INTRO;
+    // Runtime state reset (no allocations / no frees)
+    cutsceneState = CUTSCENE_NONE;
     cutsceneTimer = 0.0f;
     cutsceneCameraTimer = 0.0f;
     skipButtonVisible = false;
@@ -724,9 +743,36 @@ void scene_reset(void)
     gameState = GAME_STATE_TITLE;
     lastMenuActive = false;
     lastAPressed = false;
+    lastStartPressed = false;
     lastZPressed = false;
+    cameraLockOnActive = false;
+
+    // Title state
+    screenTransition = false;
+    screenBreath = false;
+    titleStartGameTimer = 0.0f;
+    titleTextActivationTimer = 0.0f;
+    currentTitleDialog = 0;
+
+    // UI state
+    bossTitleFade = 0.0f;
+    bossUiIntro = 1.0f;
+    playerUiIntro = 1.0f;
+    display_utility_set_boss_ui_intro(bossUiIntro);
+    display_utility_set_player_ui_intro(playerUiIntro);
+
     // Reset letterbox to show state for intro
     letterbox_show(false);
+}
+
+static void scene_sync_input_edge_state(void)
+{
+    // Sync last-pressed to the current button state so held buttons don't cause "just pressed"
+    // events immediately after restart.
+    lastAPressed = btn.a;
+    lastStartPressed = btn.start;
+    lastZPressed = btn.z;
+    lastCutsceneAPressed = btn.a;
 }
 
 bool scene_is_cutscene_active(void) {
@@ -759,31 +805,29 @@ bool scene_is_menu_active(void) {
 void scene_restart(void)
 {
     debugf("RESTART: Starting restart sequence\n");
-    
-    // Reset ALL static variables first
+
+    // 1) Stop running systems first (prevents update-on-freed state)
+    audio_stop_all_sfx();
+    audio_stop_music();
     dialog_controller_reset();
-    if (g_boss) {
-        boss_reset(g_boss);
-    }
+
+    // 2) Reset input edge-tracking (prevents phantom presses)
+    character_reset_button_state();
+
+    // 3) Reset gameplay entities (logic state)
+    if (g_boss) boss_reset(g_boss);
     character_reset();
-    scene_reset();
-    
-    // Clean up current scene objects
-    character_delete();
-    if (g_boss) {
-        boss_free(g_boss);
-        free(g_boss);
-        g_boss = NULL;
-    }
-    
-    // Reset camera 
+
+    // 4) Reset camera / lock-on and scene runtime flags
     camera_reset();
-    
-    // Reinitialize everything by calling scene_init
-    // This should set up everything correctly including camera and dialog
-    scene_init();
-    
-    debugf("RESTART: After scene_init, cameraState = %d, speaking = %s\n", 
+    camera_mode(CAMERA_CUSTOM);
+    scene_reset();
+
+    // 5) Enter title runtime state (NO re-init / NO allocations)
+    scene_title_init();
+    scene_sync_input_edge_state();
+
+    debugf("RESTART: Soft reset complete. cameraState=%d speaking=%s\n",
            cameraState, dialog_controller_speaking() ? "true" : "false");
 }
 
@@ -1226,6 +1270,10 @@ void scene_update_title(void)
     {
         if(titleStartGameTimer >= titleStartGameTime){
             titleStartGameTimer = 0.0f;
+            // Enter the intro cutscene intentionally from title.
+            cutsceneState = CUTSCENE_PHASE1_INTRO;
+            cutsceneTimer = 0.0f;
+            cutsceneCameraTimer = 0.0f;
             scene_init_cutscene();
             audio_stop_all_sfx(); // TODO: eventually we probably want a stop specific sound effect ID but that would add complexity at this point
         }
@@ -1247,6 +1295,9 @@ void scene_update_title(void)
                     // Second press - skip to cutscene
                     skipButtonVisible = false;
                     titleStartGameTimer = 0.0f;
+                    cutsceneState = CUTSCENE_PHASE1_INTRO;
+                    cutsceneTimer = 0.0f;
+                    cutsceneCameraTimer = 0.0f;
                     scene_init_cutscene();
                     audio_stop_all_sfx();
                     lastCutsceneAPressed = aCurrentlyPressed;
@@ -1261,6 +1312,9 @@ void scene_update_title(void)
             if(btn.start)
             {
                 titleStartGameTimer = 0.0f;
+                cutsceneState = CUTSCENE_PHASE1_INTRO;
+                cutsceneTimer = 0.0f;
+                cutsceneCameraTimer = 0.0f;
                 scene_init_cutscene();
                 audio_stop_all_sfx();
                 return;
@@ -1290,7 +1344,12 @@ void scene_update_title(void)
         return;
     }
 
-    if(btn.start || btn.a)
+    bool startJustPressed = btn.start && !lastStartPressed;
+    bool aJustPressed = btn.a && !lastAPressed;
+    lastStartPressed = btn.start;
+    lastAPressed = btn.a;
+
+    if(startJustPressed || aJustPressed)
     {
         gameState = GAME_STATE_TITLE_TRANSITION;
         skipButtonVisible = false; // Reset skip button state when entering transition
@@ -2218,6 +2277,7 @@ void scene_delete_environment(void)
     // --- DPLs ---
     if (mapDpl)        { rspq_block_free(mapDpl);        mapDpl = NULL; }
     if (pillarsDpl)    { rspq_block_free(pillarsDpl);    pillarsDpl = NULL; }
+    if (pillarsFrontDpl) { rspq_block_free(pillarsFrontDpl); pillarsFrontDpl = NULL; }
     if (roomLedgeDpl)  { rspq_block_free(roomLedgeDpl);  roomLedgeDpl = NULL; }
     if (windowsDpl)    { rspq_block_free(windowsDpl);    windowsDpl = NULL; }
     if (chainsDpl)     { rspq_block_free(chainsDpl);     chainsDpl = NULL; }
@@ -2228,6 +2288,7 @@ void scene_delete_environment(void)
     // --- Models ---
     if (mapModel)       { t3d_model_free(mapModel);       mapModel = NULL; }
     if (pillarsModel)   { t3d_model_free(pillarsModel);   pillarsModel = NULL; }
+    if (pillarsFrontModel) { t3d_model_free(pillarsFrontModel); pillarsFrontModel = NULL; }
     if (roomLedgeModel) { t3d_model_free(roomLedgeModel); roomLedgeModel = NULL; }
     if (windowsModel)   { t3d_model_free(windowsModel);   windowsModel = NULL; }
     if (chainsModel)    { t3d_model_free(chainsModel);    chainsModel = NULL; }
@@ -2238,6 +2299,7 @@ void scene_delete_environment(void)
     // --- Matrices (malloc_uncached) ---
     if (mapMatrix)       { free_uncached(mapMatrix);       mapMatrix = NULL; }
     if (pillarsMatrix)   { free_uncached(pillarsMatrix);   pillarsMatrix = NULL; }
+    if (pillarsFrontMatrix) { free_uncached(pillarsFrontMatrix); pillarsFrontMatrix = NULL; }
     if (roomLedgeMatrix) { free_uncached(roomLedgeMatrix); roomLedgeMatrix = NULL; }
     if (windowsMatrix)   { free_uncached(windowsMatrix);   windowsMatrix = NULL; }
     if (chainsMatrix)    { free_uncached(chainsMatrix);    chainsMatrix = NULL; }
@@ -2261,4 +2323,45 @@ void scene_cleanup(void) // Realistically we never want to call this for the jam
 
     dialog_controller_free();
     audio_scene_unload_sfx();
+
+    // --- Title/Cutscene assets not covered by scene_delete_environment() ---
+    if (dynamicBannerDpl) { rspq_block_free(dynamicBannerDpl); dynamicBannerDpl = NULL; }
+    if (dynamicBannerModel) { t3d_model_free(dynamicBannerModel); dynamicBannerModel = NULL; }
+    if (dynamicBannerMatrix) { free_uncached(dynamicBannerMatrix); dynamicBannerMatrix = NULL; }
+    if (dynamicBannerSkeleton) { t3d_skeleton_destroy(dynamicBannerSkeleton); free_uncached(dynamicBannerSkeleton); dynamicBannerSkeleton = NULL; }
+    if (dynamicBannerAnimations) {
+        // only 1 anim currently
+        if (dynamicBannerAnimations[0]) { t3d_anim_destroy(dynamicBannerAnimations[0]); free_uncached(dynamicBannerAnimations[0]); }
+        free_uncached(dynamicBannerAnimations);
+        dynamicBannerAnimations = NULL;
+    }
+
+    if (cinematicChainsDpl) { rspq_block_free(cinematicChainsDpl); cinematicChainsDpl = NULL; }
+    if (cinematicChainsModel) { t3d_model_free(cinematicChainsModel); cinematicChainsModel = NULL; }
+    if (cinematicChainsMatrix) { free_uncached(cinematicChainsMatrix); cinematicChainsMatrix = NULL; }
+    if (cinematicChainsSkeleton) { t3d_skeleton_destroy(cinematicChainsSkeleton); free_uncached(cinematicChainsSkeleton); cinematicChainsSkeleton = NULL; }
+    if (cinematicChainsAnimations) {
+        for (int i = 0; i < 2; i++) {
+            if (cinematicChainsAnimations[i]) { t3d_anim_destroy(cinematicChainsAnimations[i]); free_uncached(cinematicChainsAnimations[i]); }
+        }
+        free_uncached(cinematicChainsAnimations);
+        cinematicChainsAnimations = NULL;
+    }
+
+    if (cutsceneChainBreakDpl) { rspq_block_free(cutsceneChainBreakDpl); cutsceneChainBreakDpl = NULL; }
+    if (cutsceneChainBreakModel) { t3d_model_free(cutsceneChainBreakModel); cutsceneChainBreakModel = NULL; }
+    if (cutsceneChainBreakMatrix) { free_uncached(cutsceneChainBreakMatrix); cutsceneChainBreakMatrix = NULL; }
+    if (cutsceneChainBreakSkeleton) { t3d_skeleton_destroy(cutsceneChainBreakSkeleton); free_uncached(cutsceneChainBreakSkeleton); cutsceneChainBreakSkeleton = NULL; }
+    if (cutsceneChainBreakAnimations) {
+        // only 1 anim currently
+        if (cutsceneChainBreakAnimations[0]) { t3d_anim_destroy(cutsceneChainBreakAnimations[0]); free_uncached(cutsceneChainBreakAnimations[0]); }
+        free_uncached(cutsceneChainBreakAnimations);
+        cutsceneChainBreakAnimations = NULL;
+    }
+
+    if (aButtonSprite) {
+        sprite_free(aButtonSprite);
+        aButtonSprite = NULL;
+        surface_free(&aButtonSurf);
+    }
 }

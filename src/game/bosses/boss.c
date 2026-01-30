@@ -619,6 +619,17 @@ void boss_init(Boss* boss) {
 
 void boss_reset(Boss* boss) {
     if (!boss) return;
+
+    // Restore spawn transform first so any derived state uses the correct basis.
+    boss->pos[0] = 0.0f;
+    boss->pos[1] = 1.0f;
+    boss->pos[2] = 0.0f;
+    boss->rot[0] = 0.0f;
+    boss->rot[1] = 0.0f;
+    boss->rot[2] = 0.0f;
+    boss->scale[0] = MODEL_SCALE;
+    boss->scale[1] = MODEL_SCALE;
+    boss->scale[2] = MODEL_SCALE;
     
     boss->state = BOSS_STATE_INTRO;
     boss->health = boss->maxHealth;
@@ -704,6 +715,9 @@ void boss_reset(Boss* boss) {
     
     boss_ai_init(boss);
     boss_anim_init(boss);
+
+    // Ensure matrices reflect the reset transform immediately (important before first update).
+    boss_update_transforms(boss);
 }
 
 // Get the global boss instance

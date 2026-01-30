@@ -58,6 +58,12 @@ void menu_controller_update(void) {
         return;
     }
 
+    // Only allow the pause menu during gameplay.
+    // While in GAME_STATE_MENU we still need to process menu input to allow closing/navigating.
+    if (state != GAME_STATE_PLAYING && state != GAME_STATE_MENU) {
+        return;
+    }
+
     // Handle start button to toggle menu
     bool startPressed = btn.start;
     bool startJustPressed = startPressed && !lastStartPressed;
@@ -128,8 +134,9 @@ void menu_controller_update(void) {
                     menu_controller_close();
                     break;
                 case MENU_MAIN_RESTART:
-                    scene_restart();
+                    // Close the menu first so it doesn't override the new gameState set by restart.
                     menu_controller_close();
+                    scene_restart();
                     break;
                 case MENU_MAIN_SETTINGS:
                     currentMenu = MENU_AUDIO;
