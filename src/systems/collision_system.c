@@ -177,18 +177,23 @@ void collision_draw(T3DViewport *viewport)
         );
     }
 
-    // Draw boss sphere attack collider
-    if(boss->sphereAttackColliderActive){
+    if (boss->sphereAttackColliderActive) {
+        const float OFFSET = 40.0f;
+        float yaw = boss->rot[1];
+
+        float fwdX = cosf(yaw);
+        float fwdZ = sinf(yaw);
+
         T3DVec3 center = {{
-            boss->pos[0],
+            boss->pos[0] - fwdX * OFFSET,
             boss->pos[1],
-            boss->pos[2]
+            boss->pos[2] - fwdZ * OFFSET
         }};
 
         debug_draw_sphere(
             viewport,
             &center,
-            40,
+            20,
             DEBUG_COLORS[5]
         );
     }

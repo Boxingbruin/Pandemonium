@@ -173,6 +173,9 @@ typedef struct Boss {
     float comboLungeLockedYaw;     // yaw to hold in distance-closer mode
     float comboLungeFixedDir[2];
 
+    float comboMoveStartPos[3];
+    bool  comboMoveStartCaptured;
+
     // Tracking slam state
     float trackingSlamTargetAngle;
     
