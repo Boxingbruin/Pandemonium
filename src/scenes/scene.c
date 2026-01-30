@@ -181,6 +181,9 @@ static T3DVec3 cutsceneCamPosEnd;    // Final camera position (closer to boss)
 static GameState gameState = GAME_STATE_TITLE;
 static bool lastMenuActive = false;
 
+// Local-only restart counter (persists in RAM for the lifetime of the program)
+static uint32_t restartCounter = 0;
+
 // Input state tracking
 static bool lastAPressed = false;
 static bool lastStartPressed = false;
@@ -805,6 +808,10 @@ bool scene_is_menu_active(void) {
 void scene_restart(void)
 {
     debugf("RESTART: Starting restart sequence\n");
+
+    // Count restarts (win/lose/manual restart all funnel through this soft reset).
+    // Note: we intentionally do not persist this to any save file.
+    restartCounter++;
 
     // 1) Stop running systems first (prevents update-on-freed state)
     audio_stop_all_sfx();
@@ -1595,6 +1602,24 @@ void scene_draw_title(T3DViewport *viewport)
 
         rdpq_set_prim_color(RGBA32(255, 255, 255, 255));
         rdpq_text_printf(NULL, FONT_UNBALANCED, 35, 50, "Play");
+
+        // Restart counter (local-only). Don't show if there's 0 restarts.
+        if (restartCounter > 0) {
+            const int margin = 10;
+            const int panelW = 60;
+            const int panelH = 18;
+            const int panelX0 = margin;
+            const int panelY0 = SCREEN_HEIGHT - margin - panelH;
+
+            rdpq_set_mode_standard();
+            rdpq_mode_blender(RDPQ_BLENDER_MULTIPLY);
+            rdpq_set_prim_color(RGBA32(0, 0, 0, 120));
+            rdpq_mode_combiner(RDPQ_COMBINER_FLAT);
+            rdpq_fill_rectangle(panelX0, panelY0, panelX0 + panelW, panelY0 + panelH);
+
+            rdpq_set_prim_color(RGBA32(255, 255, 255, 255));
+            rdpq_text_printf(NULL, FONT_UNBALANCED, panelX0 + 6, panelY0 + 13, "Runs: %lu", (unsigned long)restartCounter);
+        }
 
         // Draw A button graphic at bottom middle of play button, half off
         if (aButtonSprite) {
