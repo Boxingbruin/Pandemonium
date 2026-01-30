@@ -117,6 +117,7 @@ void character_free(void);
 
 // Get character velocity for prediction (used by boss AI)
 void character_get_velocity(float* outVelX, float* outVelZ);
+void character_set_velocity_xz(float vx, float vz);
 
 // External API to apply damage to the character
 void character_apply_damage(float amount);

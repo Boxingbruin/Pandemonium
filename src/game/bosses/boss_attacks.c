@@ -632,11 +632,11 @@ static void boss_attacks_handle_stomp(Boss* boss, float dt)
         float pz = character.pos[2] - boss->pos[2];
         float dist = sqrtf(px*px + pz*pz);
 
-        const float radius = 40.0f; // tight radius
+        const float radius = 50.0f; // tight radius
         if (dist <= radius) {
-            float damage = 40.0f * (1.0f - (dist / radius)); // falloff
-            if (damage < 6.0f) damage = 6.0f;               // minimum chip
-            character_apply_damage(damage);
+            // float damage = 40.0f * (1.0f - (dist / radius)); // falloff
+            // if (damage < 6.0f) damage = 6.0f;               // minimum chip
+            character_apply_damage(40.0f);
             boss->currentAttackHasHit = true;
         }
     }

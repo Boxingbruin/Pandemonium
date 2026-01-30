@@ -810,14 +810,26 @@ void boss_ai_update(Boss* boss, BossIntent* out_intent) {
             
         case BOSS_STATE_COMBO_LUNGE:
         {
-            // Lunge is an animation/timing-driven attack.
-            // End it deterministically so it never "stretches" over time.
-            const float LUNGE_TOTAL = 2.2f;   // must match your intended lunge anim length
+            const float LUNGE_TOTAL = 2.2f;
+
+            // If stateTimer is NaN, force exit immediately
+            if (!(boss->stateTimer >= 0.0f)) {
+                boss->isAttacking = false;
+                boss->comboStarterCompleted = false;
+                boss->state = BOSS_STATE_STRAFE;
+                boss->stateTimer = 0.0f;
+                break;
+            }
+
             if (boss->stateTimer >= LUNGE_TOTAL) {
                 boss->comboStarterCompleted = false;
-                boss->isAttacking = false;           // IMPORTANT for movement states
+                boss->isAttacking = false;
                 boss->animationTransitionTimer = 0.0f;
-                boss_ai_select_attack(boss, dist);
+
+                // STRAFE here to avoid re-entrant selection weirdness:
+                boss->state = BOSS_STATE_STRAFE;
+                boss->stateTimer = 0.0f;
+                break;
             }
         }
         break;

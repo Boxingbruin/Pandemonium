@@ -320,6 +320,12 @@ void character_get_velocity(float* outVelX, float* outVelZ)
     if (outVelZ) *outVelZ = movementVelocityZ;
 }
 
+void character_set_velocity_xz(float vx, float vz)
+{
+    movementVelocityX = vx;
+    movementVelocityZ = vz;
+}
+
 static inline StickInput normalize_stick(float rawX, float rawY) {
     StickInput s;
     float ix = fmaxf(-1.0f, fminf(1.0f, rawX / STICK_MAX));

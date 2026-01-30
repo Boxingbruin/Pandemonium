@@ -11,7 +11,14 @@ typedef struct {
     T3DVec3 max;
 } AABB;
 
+typedef struct {
+    T3DVec3 center;   // world center
+    T3DVec3 half;     // half extents (x,y,z)
+    float   yaw;      // radians, rotation around Y
+} OBB;
+
 extern uint16_t DEBUG_COLORS[6];
+
 
 void debug_draw_aabb(
     T3DViewport *vp,

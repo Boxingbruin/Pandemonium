@@ -5,30 +5,31 @@
 #include <stdint.h>
 #include "game_math.h"
 
-/* ------------------------------------------------------------------
- * Fixed-point types (Q16.16)
- * ------------------------------------------------------------------ */
 
 typedef struct {
-    FixedVec3 a;        // segment start (Q16.16)
-    FixedVec3 b;        // segment end   (Q16.16)
-    int32_t   radius;   // Q16.16 radius
-} SCU_CapsuleFixed;
-
-/* ------------------------------------------------------------------
- * Fixed-point API
- * ------------------------------------------------------------------ */
-
-// capsule vs capsule (fixed-point)
-bool scu_fixed_capsule_vs_capsule(
-    const SCU_CapsuleFixed *c1,
-    const SCU_CapsuleFixed *c2);
+    float center[3]; // x,y,z
+    float half[3];   // hx,hy,hz
+    float yaw;       // radians
+} SCU_OBB;
 
 /* ------------------------------------------------------------------
  * Public float-space API
  * These take float positions/radii in game space and convert to Q16.16
  * internally before doing collision math.
  * ------------------------------------------------------------------ */
+
+// circle vs obb
+bool scu_circle_vs_obb_resolve_xz_f(
+    float *px, float *pz, float radius,
+    const SCU_OBB *obb);
+
+// capsule vs obb
+bool scu_capsule_vs_obb_push_xz_f(
+    const float capA[3], const float capB[3], float radius,
+    const SCU_OBB *obb,
+    float push_out[3],
+    float n_out[3]     // XZ normal in world space
+);
 
 // sphere vs sphere (float space)
 bool scu_sphere_vs_sphere_f(
