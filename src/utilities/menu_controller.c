@@ -1,4 +1,6 @@
 #include <libdragon.h>
+#include <stdio.h>
+#include <string.h>
 #include "menu_controller.h"
 #include "joypad_utility.h"
 #include "audio_controller.h"
@@ -37,6 +39,7 @@ static const char* audioMenuOptions[MENU_AUDIO_COUNT] = {
     "SFX Volume: %d",
     "Mute All: %s",
     "Audio Mode: %s",
+    "Back",
 };
 
 void menu_controller_init(void) {
@@ -178,6 +181,10 @@ void menu_controller_update(void) {
                 case MENU_AUDIO_STEREO_MODE:
                     audio_toggle_stereo_mode();
                     break;
+                case MENU_AUDIO_BACK:
+                    currentMenu = MENU_MAIN;
+                    selectedOption = MENU_MAIN_SETTINGS;
+                    break;
             }
         }
         
@@ -308,20 +315,21 @@ void menu_controller_draw(void) {
         
         for (int i = 0; i < MENU_AUDIO_COUNT; i++) {
             char optionText[64];
+            const char *fmt = audioMenuOptions[i] ? audioMenuOptions[i] : "";
             
             // Format option text with current values
             if (i == MENU_AUDIO_MASTER_VOLUME) {
-                sprintf(optionText, audioMenuOptions[i], audio_get_master_volume());
+                snprintf(optionText, sizeof(optionText), fmt, audio_get_master_volume());
             } else if (i == MENU_AUDIO_MUSIC_VOLUME) {
-                sprintf(optionText, audioMenuOptions[i], audio_get_music_volume());
+                snprintf(optionText, sizeof(optionText), fmt, audio_get_music_volume());
             } else if (i == MENU_AUDIO_SFX_VOLUME) {
-                sprintf(optionText, audioMenuOptions[i], audio_get_sfx_volume());
+                snprintf(optionText, sizeof(optionText), fmt, audio_get_sfx_volume());
             } else if (i == MENU_AUDIO_MUTE_TOGGLE) {
-                sprintf(optionText, audioMenuOptions[i], audio_is_muted() ? "ON" : "OFF");
+                snprintf(optionText, sizeof(optionText), fmt, audio_is_muted() ? "ON" : "OFF");
             } else if (i == MENU_AUDIO_STEREO_MODE) {
-                sprintf(optionText, audioMenuOptions[i], audio_get_stereo_mode() ? "Stereo" : "Mono");
+                snprintf(optionText, sizeof(optionText), fmt, audio_get_stereo_mode() ? "Stereo" : "Mono");
             } else {
-                strcpy(optionText, audioMenuOptions[i]);
+                snprintf(optionText, sizeof(optionText), "%s", fmt);
             }
             
             // Highlight selected option
