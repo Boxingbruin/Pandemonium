@@ -34,6 +34,7 @@ assets_gltf = $(filter %.glb,$(asset_files))
 assets_wav = $(filter %.wav,$(asset_files))
 assets_ttf = $(filter %.ttf,$(asset_files))
 assets_bin = $(filter %.bin,$(asset_files))
+assets_h264 = $(filter %.h264,$(asset_files))
 
 # Convert asset paths to filesystem output paths, preserving subdirs
 ASSETSCONV = $(patsubst $(ASSDIR)/%.png,$(FILESYSTEMDIR)/%.sprite,$(assets_png)) \
@@ -41,7 +42,8 @@ ASSETSCONV = $(patsubst $(ASSDIR)/%.png,$(FILESYSTEMDIR)/%.sprite,$(assets_png))
 	$(patsubst $(ASSDIR)/%.ttf,$(FILESYSTEMDIR)/%.font64,$(assets_ttf)) \
 	$(patsubst $(ASSDIR)/%.glb,$(FILESYSTEMDIR)/%.t3dm,$(assets_gltf)) \
 	$(patsubst $(ASSDIR)/%.wav,$(FILESYSTEMDIR)/%.wav64,$(assets_wav)) \
-	$(patsubst $(ASSDIR)/%.bin,$(FILESYSTEMDIR)/%.bin,$(assets_bin))
+	$(patsubst $(ASSDIR)/%.bin,$(FILESYSTEMDIR)/%.bin,$(assets_bin)) \
+	$(patsubst $(ASSDIR)/%.h264,$(FILESYSTEMDIR)/%.h264,$(assets_h264))
 
 # Collision export (single-file workflow):
 # - Put an Object named "COLLISION" inside assets/bossroom.glb
@@ -103,6 +105,11 @@ $(COLLISION_STAMP): $(COLLISION_DEPS)
 	@$(COLLISION_PY) -m pip install --upgrade pip >/dev/null
 	@$(COLLISION_PY) -m pip install -r $(COLLISION_DEPS)
 	@touch $(COLLISION_STAMP)
+
+$(FILESYSTEMDIR)/%.h264: $(ASSDIR)/%.h264
+	@mkdir -p $(dir $@)
+	@echo "    [H264] $@"
+	cp $< $@
 
 # $(FILESYSTEMDIR)/bossroom/bossroom.collision: $(ASSDIR)/bossroom/bossroom.glb tools/export_collision.py
 # 	@mkdir -p $(dir $@)

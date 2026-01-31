@@ -11,6 +11,7 @@ typedef enum {
     GAME_STATE_VICTORY,
     GAME_STATE_TITLE,
     GAME_STATE_TITLE_TRANSITION,
+    GAME_STATE_VIDEO
 } GameState;
 
 // Cutscene state management
@@ -26,6 +27,12 @@ typedef enum {
     CUTSCENE_PHASE1_FACE_ZOOM_OUT,
     CUTSCENE_PHASE1_INTRO_END
 } CutsceneState;
+
+typedef enum {
+    VIDEO_PREROLL_NONE = 0,
+    VIDEO_PREROLL_FADING_TO_BLACK,
+    VIDEO_PREROLL_BLACK_HOLD,
+} VideoPrerollState;
 
 void scene_init(void);
 void scene_reset(void);

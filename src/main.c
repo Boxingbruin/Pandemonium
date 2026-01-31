@@ -19,11 +19,18 @@
 #include "scene.h"
 #include "dev.h"
 
-int main(void) 
+#include "video_player_utility.h"
+
+int main(void)
 {
-    if(DEV_MODE)
+    if (DEV_MODE) 
     {
         dev_tools_init();
+    }
+
+    if(DEBUG_DRAW)
+    {
+        debugDraw = true;
     }
     else
     {
@@ -32,35 +39,27 @@ int main(void)
 
     // INIT
     asset_init_compression(2);
-    // read from cartridge space
     dfs_init(DFS_DEFAULT_LOCATION);
-    display_close(); // Close the display to reset it
 
-    if(DITHER_ENABLED) // ONLY ENABLE THIS IF WE ARE EXPERIENCING BAD FRAMERATES ON HARDWARE
-    {
+    // Safe: in case something left it open (some emus / hot reload flows)
+    display_close();
+
+    if (DITHER_ENABLED) {
         display_init(RESOLUTION_320x240, DEPTH_16_BPP, FRAME_BUFFER_COUNT, GAMMA_NONE, FILTERS_RESAMPLE_ANTIALIAS);
-    }
-    else
-    {
-        if(ARES_AA_ENABLED)
-        {
+    } else {
+        if (ARES_AA_ENABLED) {
             display_init(RESOLUTION_320x240, DEPTH_32_BPP, FRAME_BUFFER_COUNT, GAMMA_NONE, FILTERS_RESAMPLE_ANTIALIAS);
-        }
-        else
-        {
+        } else {
             display_init(RESOLUTION_320x240, DEPTH_32_BPP, FRAME_BUFFER_COUNT, GAMMA_NONE, FILTERS_DISABLED);
         }
     }
 
     rdpq_init();
 
-    // if(DEV_MODE)
-    //     rspq_profile_start();
-    
     audio_initialize();
 
     rdpq_text_register_font(FONT_BUILTIN_DEBUG_MONO, rdpq_font_load_builtin(FONT_BUILTIN_DEBUG_MONO));
-    
+
     // Load custom unbalanced font
     rdpq_font_t *font1 = rdpq_font_load("rom:/fonts/unbalanced.font64");
     rdpq_text_register_font(FONT_UNBALANCED, font1);
@@ -68,71 +67,64 @@ int main(void)
     game_time_init();
     joypad_utility_init();
 
-    // Initialize save system and load settings (after joypad init)
     save_controller_init();
-    if (!save_controller_load_settings()) {
-        // Silently use defaults - no error message needed for graceful fallback
-    }
+    (void)save_controller_load_settings();
 
     t3d_init((T3DInitParams){});
     T3DViewport viewport = t3d_viewport_create();
 
-    if(DEV_MODE)
-    {
+    if (DEV_MODE) {
         t3d_debug_print_init();
         dev_models_init();
     }
 
     scene_init();
-
-    // // Initialize menu controller
     menu_controller_init();
 
-    rspq_syncpoint_t syncPoint = 0; // TODO: I have no idea what this does but it's needed for flipbook textures.
+    rspq_syncpoint_t syncPoint = 0; // flipbook textures
 
-    if(DEV_MODE && debugDraw)
-    {
+    if (DEV_MODE && debugDraw) {
         offscreenBuffer = surface_alloc(FMT_RGBA16, SCREEN_WIDTH, SCREEN_HEIGHT);
     }
 
-    for(uint64_t frame = 0;; ++frame)
+    for (uint64_t frame = 0;; ++frame)
     {
-        // Update the time and calculate delta
+        // Update time + input first
         game_time_update();
-
         joypad_update();
-        if(DEV_MODE && debugDraw)
-        {
-            rdpq_attach(&offscreenBuffer, display_get_zbuf());
+
+        // ------------------------------------------------------------
+        // VIDEO PUMP (MUST be BEFORE any rdpq_attach() in the frame)
+        // ------------------------------------------------------------
+        if (video_player_pump_and_play(&viewport)) {
+            // Video played. The utility restores display/rdpq/t3d and can scene_restart().
+            // Start next frame cleanly.
+            continue;
         }
-        else
-        {
+
+        // Attach render target for the frame
+        if (DEV_MODE && debugDraw) {
+            rdpq_attach(&offscreenBuffer, display_get_zbuf());
+        } else {
             rdpq_attach(display_get(), display_get_zbuf());
         }
 
+        if (syncPoint) rspq_syncpoint_wait(syncPoint);
 
-        if(syncPoint)rspq_syncpoint_wait(syncPoint); // wait for the RSP to process the previous frame
-        
         // ===== UPDATE LOOP =====
         mixer_try_play();
-        
-        // Update dev controller to check menu state
-        if(DEV_MODE)
-        {
+
+        if (DEV_MODE) {
             dev_controller_update();
         }
-        
-        // Pause game updates when dev menu is open
+
         bool devMenuOpen = DEV_MODE && dev_menu_is_open();
-        
-        // Check if camera is in free camera mode (needs updates even when paused)
         bool cameraNeedsUpdate = (cameraState == CAMERA_FREECAM);
-        
-        if(!devMenuOpen)
+
+        if (!devMenuOpen)
         {
             camera_update(&viewport);
 
-            // Update menu controller first to handle input
             menu_controller_update();
 
             scene_update();
@@ -140,46 +132,38 @@ int main(void)
         }
         else
         {
-            // Still update camera if in free camera mode (for dev tools)
-            if(cameraNeedsUpdate)
-            {
+            if (cameraNeedsUpdate) {
                 camera_update(&viewport);
             }
-            
-            // Still update menu controller even when dev menu is open (for pause menu)
+
             menu_controller_update();
         }
 
         // ===== DRAW LOOP =====
-        // Draw scene when dev menu is not open, or when free camera is active (so we can see the world)
-        if(!devMenuOpen || cameraNeedsUpdate)
-        {
-            scene_draw(&viewport); // Draw scene
+        if (!devMenuOpen || cameraNeedsUpdate) {
+            scene_draw(&viewport);
         }
-        
-        // Draw menu on top of everything
+
         menu_controller_draw();
 
         syncPoint = rspq_syncpoint_new();
-        
-        if(DEV_MODE)
+
+        if (DEV_MODE)
         {
-            // TODO: There is a reason the update comes after the draw but it shouldnt, this needs to be fixed and flipped.
-            dev_draw_update(&viewport); // Draw dev tools if in dev mode
+            dev_draw_update(&viewport);
             dev_update();
 
-            if(debugDraw)
+            if (debugDraw)
                 collision_draw(&viewport);
         }
-        
-        // FPS for Dev
-        if(SHOW_FPS)
+
+        if (SHOW_FPS)
         {
             rdpq_sync_pipe();
             rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 250, 225, " %.2f", display_get_fps());
         }
 
-        if(DEV_MODE && debugDraw)
+        if (DEV_MODE && debugDraw)
         {
             rdpq_detach();
             rdpq_attach(display_get(), display_get_zbuf());
@@ -192,23 +176,22 @@ int main(void)
             rdpq_detach_show();
         }
 
-        // TODO: this dev area is messy.  Clean it up.
-        if(DEV_MODE)
+        if (DEV_MODE)
         {
             dev_frame_update();
         }
 
-        if(frame >= 30)
+        if (frame >= 30)
         {
-            if(DEV_MODE)
+            if (DEV_MODE)
                 dev_frames_end_update();
 
             frame = 0;
         }
-
     }
 
-    scene_cleanup();  // Call cleanup before exiting
+    // unreachable
+    scene_cleanup();
     menu_controller_free();
     save_controller_free();
 

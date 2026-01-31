@@ -377,6 +377,7 @@ static void boss_ai_select_attack(Boss* boss, float dist) {
 
 
     if (boss->flipAttackCooldown <= 0.0f && dist >= 100.0f && dist < 200.0f) {
+        boss->isAttacking = true;
         boss->state = BOSS_STATE_FLIP_ATTACK;
         boss->stateTimer = 0.0f;
         boss->flipAttackCooldown = 10.0f;
