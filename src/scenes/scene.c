@@ -41,6 +41,8 @@
 #include "debug_draw.h"
 #include "utilities/simple_collision_utility.h"
 
+#include "video_player_utility.h"
+
 // Four AABB walls: left, right, back, front (Y spans from floor to a fixed height)
 static AABB g_roomWalls[4];
 static const int g_roomWallCount = 4;
@@ -95,6 +97,15 @@ T3DModel* roomFloorModel;
 rspq_block_t* roomFloorDpl;
 T3DMat4FP* roomFloorMatrix;
 
+T3DModel* floorGlowModel;
+rspq_block_t* floorGlowDpl;
+T3DMat4FP* floorGlowMatrix;
+ScrollParams floorGlowScrollParams = {
+    .xSpeed = 0.0f,
+    .ySpeed = 10.0f,
+    .scale  = 64
+};
+
 // Dynamic Banner (Title Screen)
 static T3DModel* dynamicBannerModel; 
 static rspq_block_t* dynamicBannerDpl; 
@@ -134,15 +145,22 @@ static bool screenTransition = false;
 static bool screenBreath = false;
 
 // ------------------------------------------------------------
-// Video trigger + playback state
+// Video trigger AABB at world origin
 // ------------------------------------------------------------
-static float videoTrigMin[3] = { -100000.0f, -100000.0f, -100000.0f };
-static float videoTrigMax[3] = {  100000.0f,  100000.0f,  100000.0f };
+static float videoTrigMin[3] = { 502.7f, 0.0f,  -25.0f };
+static float videoTrigMax[3] = { 552.7f, 120.0f, 25.0f };
 
-static bool videoTrigFired   = false;
+static bool videoTrigFired = false;
+static bool videoTrigHitThisFrame = false;
 static bool videoPendingPlay = false;
 
-static bool videoSystemReady = false;
+static VideoPrerollState videoPreroll = VIDEO_PREROLL_NONE;
+static float videoPrerollTimer = 0.0f;
+
+// tweakable
+static const float VIDEO_BLACK_HOLD_S = 0.5f;
+static const float VIDEO_FADE_SPEED   = 200.0f; // same scale you already use
+static bool bossDeathMusicFadeStarted = false;
 
 // ------------------------------------------------------------
 // Walls OBB (world space)
@@ -388,50 +406,17 @@ void scene_resolve_character_room_obbs(void)
     }
 }
 
-static void scene_video_system_init_once(void)
+static void scene_begin_video_preroll(void)
 {
-    if (videoSystemReady) return;
-    videoSystemReady = true;
+    if (videoTrigFired) return;
 
-    // Needed for FMV rendering / decoding.
-    // Do NOT call rdpq_init() here (you likely already did it globally).
-    yuv_init();
-
-    video_register_codec(&mpeg1_codec);
-    video_register_codec(&h264_codec);
-}
-
-static void scene_play_video_blocking(const char *path)
-{
-    scene_video_system_init_once();
-
-    // Kill all game audio so video audio is clean.
-    audio_stop_all_sfx();
-    audio_stop_music();
-
-    // assert file exists
-    FILE *f = fopen(path, "rb");
-    assertf(f, "Video not found: %s\n", path);
-    fclose(f);
-
-    // No osd_callback => no controls, no input, no overlay
-    fmv_play(path, &(fmv_parms_t){
-        .osd_callback = NULL
-    });
-
-    // Movie finished.
-    scene_restart();
-}
-
-static void scene_on_video_trigger(void)
-{
-    // fire once
     videoTrigFired = true;
+    videoTrigHitThisFrame = true;
 
-    // queue playback to happen safely at a controlled point in scene_update
-    videoPendingPlay = true;
-
-    gameState = GAME_STATE_VIDEO;
+    // start fade-to-black using your existing priming mechanism
+    startScreenFade = true;              // primes fadeBlackAlpha inside display_utility
+    videoPreroll = VIDEO_PREROLL_FADING_TO_BLACK;
+    videoPrerollTimer = 0.0f;
 }
 
 static void scene_update_video_trigger(void)
@@ -440,23 +425,38 @@ static void scene_update_video_trigger(void)
     if (videoTrigFired) return;
 
     float capA[3], capB[3], r;
-    collision_get_character_capsule_world(capA, capB, &r);
+    scene_get_character_world_capsule(capA, capB, &r);
 
-    float minf[3] = {
-        videoTrigMin.v[0],
-        videoTrigMin.v[1],
-        videoTrigMin.v[2]
-    };
-    float maxf[3] = {
-        videoTrigMax.v[0],
-        videoTrigMax.v[1],
-        videoTrigMax.v[2]
-    };
+    if (scu_capsule_vs_rect_f(capA, capB, r, videoTrigMin, videoTrigMax)) {
+        scene_begin_video_preroll();
+    }
+}
 
-    if (scu_capsule_vs_rect_f(capA, capB, r, minf, maxf)) {
-        videoTrigHitThisFrame = true;
-        videoTrigFired = true;
-        debugf("VIDEO TRIGGER HIT AT ORIGIN\n");
+static void scene_update_video_preroll(void)
+{
+    if (videoPreroll == VIDEO_PREROLL_NONE) return;
+
+    videoPrerollTimer += deltaTime;
+
+    if (videoPreroll == VIDEO_PREROLL_FADING_TO_BLACK) {
+        if (videoPrerollTimer >= 3.0f) {
+            videoPreroll = VIDEO_PREROLL_BLACK_HOLD;
+            videoPrerollTimer = 0.0f;
+        }
+        return;
+    }
+
+    // VIDEO_PREROLL_BLACK_HOLD
+    if (videoPrerollTimer >= VIDEO_BLACK_HOLD_S) {
+
+        // IMPORTANT: ensure audio controller stops touching CHANNEL_MUSIC
+        // (and doesn't later mixer_ch_stop it mid-video)
+        gameState = GAME_STATE_VIDEO;
+        video_player_request("rom:/video.h264");
+
+        audio_set_music_volume(10);
+
+        videoPreroll = VIDEO_PREROLL_NONE;
     }
 }
 
@@ -592,6 +592,19 @@ void scene_load_environment(){
 
     fogDoorMatrix = malloc_uncached(sizeof(T3DMat4FP));
     t3d_mat4fp_from_srt_euler(fogDoorMatrix, 
+        (float[3]){MODEL_SCALE, MODEL_SCALE, MODEL_SCALE},
+        (float[3]){0.0f, 0.0f, 0.0f},
+        (float[3]){0.0f, roomY, 0.0f}
+    );
+
+    // ===== LOAD FLOOR GLOW =====
+    floorGlowModel = t3d_model_load("rom:/boss_room/floor_glow.t3dm");
+    rspq_block_begin();
+    t3d_model_draw(floorGlowModel);
+    floorGlowDpl = rspq_block_end();
+
+    floorGlowMatrix = malloc_uncached(sizeof(T3DMat4FP));
+    t3d_mat4fp_from_srt_euler(floorGlowMatrix, 
         (float[3]){MODEL_SCALE, MODEL_SCALE, MODEL_SCALE},
         (float[3]){0.0f, 0.0f, 0.0f},
         (float[3]){0.0f, roomY, 0.0f}
@@ -884,6 +897,12 @@ void scene_reset(void)
     lastStartPressed = false;
     lastZPressed = false;
     cameraLockOnActive = false;
+    videoTrigFired = false;
+    videoPendingPlay = false;
+
+    videoPreroll = VIDEO_PREROLL_NONE;
+    videoPrerollTimer = 0.0f;
+    bossDeathMusicFadeStarted = false;
     videoTrigFired = false;
     videoPendingPlay = false;
 
@@ -1558,18 +1577,22 @@ void scene_update_title(void)
 
 void scene_update(void) 
 {
-    if(gameState == GAME_STATE_VIDEO){
-        if (videoPendingPlay) {
-            videoPendingPlay = false;
-
-            // Optional: freeze gameplay state bits you don't want lingering
-            cameraLockOnActive = false;
-
-            scene_play_video_blocking("rom:/video.h264");
-        }
+    if (gameState == GAME_STATE_VIDEO) {
         return;
     }
 
+    audio_update_fade(deltaTime);
+
+    if (g_boss && g_boss->health <= 0.0f && gameState != GAME_STATE_VIDEO) {
+        if(!bossDeathMusicFadeStarted){
+            bossDeathMusicFadeStarted = true;
+            audio_stop_music_fade(2);
+        }
+        scene_update_video_trigger();
+    }
+
+    scene_update_video_preroll();  // always safe; it early-outs
+    
     // Update all scrolling textures
     scroll_update();
 
@@ -1601,6 +1624,7 @@ void scene_update(void)
         if (bossActivated && g_boss) {
             boss_update(g_boss);
         }
+
         // Continue letterbox animation updates
         letterbox_update();
 
@@ -1635,11 +1659,6 @@ void scene_update(void)
         scene_resolve_character_room_obbs();
         // Update character transform after constraint
         character_update_position();
-
-        if(gameState == GAME_STATE_VICTORY)
-        {
-            scene_update_video_trigger();
-        }
         
         if (bossActivated && g_boss) {
             boss_update(g_boss);
@@ -2242,6 +2261,20 @@ void scene_draw_cutscene(){
     }
 }
 
+static void scene_draw_video_trigger(T3DViewport *vp)
+{
+    if (!debugDraw || !vp) return;
+
+    T3DVec3 mn = {{ videoTrigMin[0], videoTrigMin[1], videoTrigMin[2] }};
+    T3DVec3 mx = {{ videoTrigMax[0], videoTrigMax[1], videoTrigMax[2] }};
+
+    uint16_t color = DEBUG_COLORS[2];               // normal (green-ish)
+    if (videoTrigHitThisFrame) color = DEBUG_COLORS[0]; // hit (red)
+    if (videoTrigFired)        color = DEBUG_COLORS[5]; // fired (cyan)
+
+    debug_draw_aabb(vp, &mn, &mx, color);
+}
+
 void scene_draw(T3DViewport *viewport) 
 {
 
@@ -2310,7 +2343,7 @@ void scene_draw(T3DViewport *viewport)
     t3d_matrix_pop(1);
     
 
-    if(g_boss->isAttacking || GAME_STATE_VICTORY)
+    if(g_boss->isAttacking || g_boss->health <= 0)
     {
         //Draw depth environment
         rdpq_sync_pipe();
@@ -2337,11 +2370,23 @@ void scene_draw(T3DViewport *viewport)
     rdpq_mode_zbuf(false, false);
 
     t3d_matrix_push_pos(1);   
-      // blob shadows here
-      character_draw_shadow();
-      if (g_boss) {
-          boss_draw_shadow(g_boss);
-      }
+        // blob shadows
+        character_draw_shadow();
+        if (g_boss) {
+            boss_draw_shadow(g_boss);
+        }
+
+        // floor glow
+        if(g_boss->health <= 0)
+        {
+            t3d_matrix_set(floorGlowMatrix, true);
+            // Create a struct to pass the scrolling parameters to the tile callback
+            t3d_model_draw_custom(floorGlowModel, (T3DModelDrawConf){
+                .userData = &floorGlowScrollParams,
+                .tileCb = tile_scroll,
+            });
+        }
+
     t3d_matrix_pop(1); 
 
     rdpq_sync_pipe();
@@ -2413,6 +2458,8 @@ void scene_draw(T3DViewport *viewport)
             debug_draw_obb_xz(viewport, &g_roomOBBs[i], 0.0f, hit ? DEBUG_COLORS[0] : DEBUG_COLORS[2]);
         }
     }
+
+    scene_draw_video_trigger(viewport);
     
     bool cutsceneActive = scene_is_cutscene_active();
     GameState state = scene_get_game_state();
@@ -2553,6 +2600,12 @@ void scene_draw(T3DViewport *viewport)
         else if(cutsceneState == CUTSCENE_PHASE1_FEAR){
             display_utility_solid_black_transition(false, 200.0f);
         }
+    }
+
+    // video draw game over fade to black over everything (yes i know it's hacky, time crunch and sludge file)
+
+    if (videoPreroll != VIDEO_PREROLL_NONE) {
+        display_utility_solid_black_transition(false, VIDEO_FADE_SPEED);
     }
 
 }

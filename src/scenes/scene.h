@@ -28,6 +28,12 @@ typedef enum {
     CUTSCENE_PHASE1_INTRO_END
 } CutsceneState;
 
+typedef enum {
+    VIDEO_PREROLL_NONE = 0,
+    VIDEO_PREROLL_FADING_TO_BLACK,
+    VIDEO_PREROLL_BLACK_HOLD,
+} VideoPrerollState;
+
 void scene_init(void);
 void scene_reset(void);
 void scene_restart(void);
