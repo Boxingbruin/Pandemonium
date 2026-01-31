@@ -1235,8 +1235,11 @@ void boss_ai_update(Boss* boss, BossIntent* out_intent) {
                 out_intent->priority = BOSS_ANIM_PRIORITY_HIGH;
                 break;
             case BOSS_STATE_DEAD:
-                out_intent->anim = BOSS_ANIM_IDLE;
+                // Play collapse once (non-looping) when dead.
+                out_intent->anim = BOSS_ANIM_COLLAPSE;
                 out_intent->priority = BOSS_ANIM_PRIORITY_CRITICAL;
+                // Force the first request after death even if state was set externally.
+                out_intent->force_restart = (boss->currentAnimState != BOSS_ANIM_COLLAPSE);
                 break;
             case BOSS_STATE_STOMP:
                 out_intent->anim = BOSS_ANIM_STOMP1;

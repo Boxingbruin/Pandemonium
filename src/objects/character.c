@@ -656,8 +656,11 @@ static inline void update_actions(const joypad_buttons_t* buttons, bool leftHeld
 }
 
 static inline bool character_is_invulnerable(void) {
-    // Rolling grants i-frames so boss attacks can be dodged cleanly
-    return characterState == CHAR_STATE_ROLLING;
+    // Rolling grants i-frames so boss attacks can be dodged cleanly.
+    // Knockdown also grants invulnerability so the player can't get "ground juggled"
+    // by overlapping hitboxes while they're unable to act.
+    return (characterState == CHAR_STATE_ROLLING) ||
+           (characterState == CHAR_STATE_KNOCKDOWN);
 }
 
 static inline void accelerate_towards(float desiredX, float desiredZ, float maxSpeed, float dt) {
@@ -707,6 +710,9 @@ static inline void update_current_speed(float inputMagnitude, float dt) {
 
 // Helper function to determine target animation index based on state and speed
 static inline int get_target_animation(CharacterState state, float speedRatio) {
+    if (state == CHAR_STATE_DEAD) {
+        return ANIM_DEATH;
+    }
     if (state == CHAR_STATE_TITLE_IDLE) {
         return ANIM_IDLE_TITLE;
     }
@@ -767,7 +773,8 @@ static inline bool is_action_state(CharacterState state) {
     return (state == CHAR_STATE_ROLLING) ||
            (state == CHAR_STATE_ATTACKING) ||
            (state == CHAR_STATE_ATTACKING_STRONG) ||
-           (state == CHAR_STATE_KNOCKDOWN);
+           (state == CHAR_STATE_KNOCKDOWN) ||
+           (state == CHAR_STATE_DEAD);
 }
 
 // Deterministic per-frame animation application helpers
@@ -1172,7 +1179,8 @@ void character_init(void)
         "FogOfWar",
         "AttackCharged",
         "WalkBackwards",
-        "RunBackwards"
+        "RunBackwards",
+        "Death"
     };
     const bool animationsLooping[] = {
         true,   // Idle
@@ -1196,7 +1204,8 @@ void character_init(void)
         false,  // FogOfWar
         false,  // AttackCharged
         true,   // WalkBackwards
-        true    // RunBackwards
+        true,   // RunBackwards
+        false   // Death
     };
 
     T3DAnim** animations = malloc_uncached(animationCount * sizeof(T3DAnim*));
@@ -1275,11 +1284,24 @@ void character_update(void)
 {
     GameState state = scene_get_game_state();
     // Halt all player control while in an end state
-    if (state == GAME_STATE_DEAD || state == GAME_STATE_VICTORY) {
+    if (state == GAME_STATE_DEAD) {
         // Let the trail fade out (no emission)
         sword_trail_update(deltaTime, false, NULL, NULL);
         movementVelocityX = 0.0f;
         movementVelocityZ = 0.0f;
+
+        // On death, keep animations updating so the Death clip can play.
+        if (characterState != CHAR_STATE_DEAD) {
+            characterState = CHAR_STATE_DEAD;
+            // Restart the Death clip from frame 0 on entry
+            if (character.animations && ANIM_DEATH < character.animationCount && character.animations[ANIM_DEATH]) {
+                t3d_anim_set_time(character.animations[ANIM_DEATH], 0.0f);
+                t3d_anim_set_playing(character.animations[ANIM_DEATH], true);
+            }
+        }
+
+        update_animations(0.0f, characterState, deltaTime);
+
         character_update_camera();
         character_anim_apply_pose();
         character_finalize_frame(false);
@@ -1796,6 +1818,7 @@ void character_apply_damage(float amount)
 	// printf("[Character] took %.1f damage (%.1f/%.1f)\n", amount, character.health, character.maxHealth);
 	if (character.health <= 0.0f) {
 		// printf("[Character] HP: %.0f/%.0f - DEFEATED!\n", character.health, character.maxHealth);
+        characterState = CHAR_STATE_DEAD;
 		scene_set_game_state(GAME_STATE_DEAD);
     } else {
         // Small knockback when taking significant damage (only strong attacks)

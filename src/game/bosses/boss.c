@@ -125,6 +125,12 @@ static void boss_update_movement(Boss* boss, float dt) {
             maxSpeed = 0.0f;
             break;
             
+        case BOSS_STATE_DEAD:
+            // Fully stop after death (collapse animation should play in place).
+            boss->velX = 0.0f;
+            boss->velZ = 0.0f;
+            return;
+            
         case BOSS_STATE_CHASE:
             // Move toward player (for when far away)
             if (dist > 0.0f) {
@@ -393,6 +399,13 @@ void boss_apply_damage(Boss* boss, float amount) {
     // Check for death
     if (boss->health <= 0.0f) {
         boss->state = BOSS_STATE_DEAD;
+        boss->stateTimer = 0.0f;
+        boss->isAttacking = false;
+        boss->attackAnimTimer = 0.0f;
+        boss->handAttackColliderActive = false;
+        boss->sphereAttackColliderActive = false;
+        boss->velX = 0.0f;
+        boss->velZ = 0.0f;
     }
 }
 
@@ -432,7 +445,8 @@ void boss_init(Boss* boss) {
         "Phase1KneelCutscene1",
         "LungeStarter1",
         "Attack1",
-        "Stomp"
+        "Stomp",
+        "WinCollapse"
     };
     const bool animationsLooping[] = {
         true,  // Idle - loop
@@ -450,6 +464,7 @@ void boss_init(Boss* boss) {
         false, // Lunge Starter
         false, // Attack1
         false, // Stomp
+        false, // Collapse - one-shot
     };
     
     T3DAnim** animations = malloc_uncached(animationCount * sizeof(T3DAnim*));

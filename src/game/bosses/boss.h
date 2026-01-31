@@ -43,6 +43,7 @@ typedef enum {
     BOSS_ANIM_LUNGE_STARTER,
     BOSS_ANIM_ATTACK1,
     BOSS_ANIM_STOMP1,
+    BOSS_ANIM_COLLAPSE,
     BOSS_ANIM_COUNT
 } BossAnimState;
 

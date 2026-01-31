@@ -1493,6 +1493,9 @@ void scene_update(void)
 
     // If player is dead or victorious, disable player control but keep boss/UI moving
     if (gameState == GAME_STATE_DEAD || gameState == GAME_STATE_VICTORY) {
+        // Still update the character so end-state animations (like Death) can play.
+        character_update();
+
         // Keep boss AI updating so it continues moving during end screen
         if (bossActivated && g_boss) {
             boss_update(g_boss);
@@ -1510,8 +1513,9 @@ void scene_update(void)
             }
         }
 
-        // Allow restart prompt via A button
-        if (btn.a) {
+        // Allow restart via A button only on death.
+        // Victory should not force a restart prompt / flow.
+        if (gameState == GAME_STATE_DEAD && btn.a) {
             scene_restart();
         }
         return;
@@ -1524,11 +1528,6 @@ void scene_update(void)
 
     if(cutsceneState == CUTSCENE_NONE) // Normal gameplay
     {
-        // Debug: press L to force victory (useful for testing the victory title card)
-        if (btn.l) {
-            scene_set_game_state(GAME_STATE_VICTORY);
-            return;
-        }
         
         character_update();
         // Constrain player inside obbs
@@ -1537,11 +1536,8 @@ void scene_update(void)
         character_update_position();
         if (bossActivated && g_boss) {
             boss_update(g_boss);
-            // Trigger victory when the boss dies
-            if (g_boss->health <= 0.0f) {
-                scene_set_game_state(GAME_STATE_VICTORY);
-                return;
-            }
+            // Boss death no longer forces GAME_STATE_VICTORY.
+            // The boss will play its collapse and remain still; the player can keep moving.
         }
 
         collision_update();
@@ -2426,13 +2422,6 @@ void scene_draw(T3DViewport *viewport)
                         .width = SCREEN_WIDTH,
                     }, FONT_UNBALANCED, 0, SCREEN_HEIGHT / 2 - 8, "%s", "Enemy restored");
                 }
-            } else {
-                // After the title fades out, show a subtle prompt
-                rdpq_set_prim_color(RGBA32(255, 255, 255, 255));
-                rdpq_text_printf(&(rdpq_textparms_t){
-                    .align = ALIGN_CENTER,
-                    .width = SCREEN_WIDTH,
-                }, FONT_UNBALANCED, 0, SCREEN_HEIGHT / 2 + 6, "%s", "Press A to restart");
             }
         }
         return;

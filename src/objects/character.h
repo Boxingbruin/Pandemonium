@@ -32,6 +32,7 @@ typedef enum {
     ANIM_ATTACK_CHARGED,
     ANIM_WALK_BACK,
     ANIM_RUN_BACK,
+    ANIM_DEATH,
     ANIM_COUNT,
 } CharacterAnimState;
 
@@ -44,7 +45,8 @@ typedef enum {
     CHAR_STATE_JUMPING,
     CHAR_STATE_TITLE_IDLE,
     CHAR_STATE_FOG_WALK,
-    CHAR_STATE_KNOCKDOWN
+    CHAR_STATE_KNOCKDOWN,
+    CHAR_STATE_DEAD,
 } CharacterState;
 
 typedef struct {
