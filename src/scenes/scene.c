@@ -133,6 +133,21 @@ static const float TITLE_CHARACTER_YAW = T3D_PI * 0.5f; // +90° around Y
 static bool screenTransition = false;
 static bool screenBreath = false;
 
+// ------------------------------------------------------------
+// Video trigger + playback state
+// ------------------------------------------------------------
+static float videoTrigMin[3] = { -100000.0f, -100000.0f, -100000.0f };
+static float videoTrigMax[3] = {  100000.0f,  100000.0f,  100000.0f };
+
+static bool videoTrigFired   = false;
+static bool videoPendingPlay = false;
+
+static bool videoSystemReady = false;
+
+// ------------------------------------------------------------
+// Walls OBB (world space)
+// ------------------------------------------------------------
+
 #define WALL_THICKNESS 20.0f
 #define WALL_HEIGHT   200.0f
 
@@ -317,37 +332,6 @@ static const char *SCENE1_SFX_PATHS[SCENE1_SFX_COUNT] = {
     [SCENE1_SFX_CHAR_FOOTSTEP_WALK4] = "rom:/audio/sfx/character/char_footstep_walk4_22k.wav64",
 };
 
-static void debug_draw_obb_xz(
-    T3DViewport *vp,
-    const SCU_OBB *o,
-    float y,
-    uint16_t color)
-{
-    float c = cosf(o->yaw);
-    float s = sinf(o->yaw);
-
-    float hx = o->half[0];
-    float hz = o->half[2];
-
-    // 4 corners in local space (XZ)
-    float lx[4] = { -hx,  hx,  hx, -hx };
-    float lz[4] = { -hz, -hz,  hz,  hz };
-
-    T3DVec3 p[4];
-
-    for (int i = 0; i < 4; i++) {
-        // local -> world (rotate + translate)
-        float wx = o->center[0] + (c * lx[i] - s * lz[i]);
-        float wz = o->center[2] + (s * lx[i] + c * lz[i]);
-
-        p[i] = (T3DVec3){{ wx, y, wz }};
-    }
-
-    // Draw rectangle as two wire triangles
-    debug_draw_tri_wire(vp, &p[0], &p[1], &p[2], color);
-    debug_draw_tri_wire(vp, &p[0], &p[2], &p[3], color);
-}
-
 static void scene_get_character_world_capsule(float capA[3], float capB[3], float *radius)
 {
     capA[0] = character.pos[0] + character.capsuleCollider.localCapA.v[0] * character.scale[0];
@@ -402,6 +386,109 @@ void scene_resolve_character_room_obbs(void)
 
         if (!any) break;
     }
+}
+
+static void scene_video_system_init_once(void)
+{
+    if (videoSystemReady) return;
+    videoSystemReady = true;
+
+    // Needed for FMV rendering / decoding.
+    // Do NOT call rdpq_init() here (you likely already did it globally).
+    yuv_init();
+
+    video_register_codec(&mpeg1_codec);
+    video_register_codec(&h264_codec);
+}
+
+static void scene_play_video_blocking(const char *path)
+{
+    scene_video_system_init_once();
+
+    // Kill all game audio so video audio is clean.
+    audio_stop_all_sfx();
+    audio_stop_music();
+
+    // assert file exists
+    FILE *f = fopen(path, "rb");
+    assertf(f, "Video not found: %s\n", path);
+    fclose(f);
+
+    // No osd_callback => no controls, no input, no overlay
+    fmv_play(path, &(fmv_parms_t){
+        .osd_callback = NULL
+    });
+
+    // Movie finished.
+    scene_restart();
+}
+
+static void scene_on_video_trigger(void)
+{
+    // fire once
+    videoTrigFired = true;
+
+    // queue playback to happen safely at a controlled point in scene_update
+    videoPendingPlay = true;
+
+    gameState = GAME_STATE_VIDEO;
+}
+
+static void scene_update_video_trigger(void)
+{
+    videoTrigHitThisFrame = false;
+    if (videoTrigFired) return;
+
+    float capA[3], capB[3], r;
+    collision_get_character_capsule_world(capA, capB, &r);
+
+    float minf[3] = {
+        videoTrigMin.v[0],
+        videoTrigMin.v[1],
+        videoTrigMin.v[2]
+    };
+    float maxf[3] = {
+        videoTrigMax.v[0],
+        videoTrigMax.v[1],
+        videoTrigMax.v[2]
+    };
+
+    if (scu_capsule_vs_rect_f(capA, capB, r, minf, maxf)) {
+        videoTrigHitThisFrame = true;
+        videoTrigFired = true;
+        debugf("VIDEO TRIGGER HIT AT ORIGIN\n");
+    }
+}
+
+static void debug_draw_obb_xz(
+    T3DViewport *vp,
+    const SCU_OBB *o,
+    float y,
+    uint16_t color)
+{
+    float c = cosf(o->yaw);
+    float s = sinf(o->yaw);
+
+    float hx = o->half[0];
+    float hz = o->half[2];
+
+    // 4 corners in local space (XZ)
+    float lx[4] = { -hx,  hx,  hx, -hx };
+    float lz[4] = { -hz, -hz,  hz,  hz };
+
+    T3DVec3 p[4];
+
+    for (int i = 0; i < 4; i++) {
+        // local -> world (rotate + translate)
+        float wx = o->center[0] + (c * lx[i] - s * lz[i]);
+        float wz = o->center[2] + (s * lx[i] + c * lz[i]);
+
+        p[i] = (T3DVec3){{ wx, y, wz }};
+    }
+
+    // Draw rectangle as two wire triangles
+    debug_draw_tri_wire(vp, &p[0], &p[1], &p[2], color);
+    debug_draw_tri_wire(vp, &p[0], &p[2], &p[3], color);
 }
 
 void scene_load_environment(){
@@ -706,7 +793,7 @@ void scene_init(void)
     dialog_controller_init();
 
     // Load A button sprite for cutscene skip indicator
-    aButtonSprite = sprite_load("rom:/buttons/WhiteOutlineButtons/A.sprite");
+    aButtonSprite = sprite_load("rom:/buttons/WhiteOutlineButtons/a.rgb16.sprite");
     if (aButtonSprite) {
         aButtonSurf = sprite_get_pixels(aButtonSprite);
     }
@@ -797,6 +884,8 @@ void scene_reset(void)
     lastStartPressed = false;
     lastZPressed = false;
     cameraLockOnActive = false;
+    videoTrigFired = false;
+    videoPendingPlay = false;
 
     // Title state
     screenTransition = false;
@@ -1469,6 +1558,18 @@ void scene_update_title(void)
 
 void scene_update(void) 
 {
+    if(gameState == GAME_STATE_VIDEO){
+        if (videoPendingPlay) {
+            videoPendingPlay = false;
+
+            // Optional: freeze gameplay state bits you don't want lingering
+            cameraLockOnActive = false;
+
+            scene_play_video_blocking("rom:/video.h264");
+        }
+        return;
+    }
+
     // Update all scrolling textures
     scroll_update();
 
@@ -1534,6 +1635,12 @@ void scene_update(void)
         scene_resolve_character_room_obbs();
         // Update character transform after constraint
         character_update_position();
+
+        if(gameState == GAME_STATE_VICTORY)
+        {
+            scene_update_video_trigger();
+        }
+        
         if (bossActivated && g_boss) {
             boss_update(g_boss);
             // Boss death no longer forces GAME_STATE_VICTORY.
@@ -1691,8 +1798,6 @@ void scene_draw_title(T3DViewport *viewport)
             const int panelX0 = margin;
             const int panelY0 = SCREEN_HEIGHT - margin - panelH;
 
-            rdpq_set_mode_standard();
-            rdpq_mode_blender(RDPQ_BLENDER_MULTIPLY);
             rdpq_set_prim_color(RGBA32(0, 0, 0, 120));
             rdpq_mode_combiner(RDPQ_COMBINER_FLAT);
             rdpq_fill_rectangle(panelX0, panelY0, panelX0 + panelW, panelY0 + panelH);
@@ -1713,8 +1818,6 @@ void scene_draw_title(T3DViewport *viewport)
             int aButtonY = 62 - (buttonHeight / 2);
             
             // Draw the A button sprite on top
-            rdpq_sync_pipe();
-            rdpq_set_mode_standard();
             rdpq_mode_alphacompare(1);
             rdpq_mode_blender(RDPQ_BLENDER_MULTIPLY);
             
@@ -2142,6 +2245,9 @@ void scene_draw_cutscene(){
 void scene_draw(T3DViewport *viewport) 
 {
 
+    if(gameState == GAME_STATE_VIDEO)
+        return;
+
     t3d_frame_start();
 
     if(!DITHER_ENABLED && !debugDraw)
@@ -2204,7 +2310,7 @@ void scene_draw(T3DViewport *viewport)
     t3d_matrix_pop(1);
     
 
-    if(g_boss->isAttacking)
+    if(g_boss->isAttacking || GAME_STATE_VICTORY)
     {
         //Draw depth environment
         rdpq_sync_pipe();

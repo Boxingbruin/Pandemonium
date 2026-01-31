@@ -11,6 +11,7 @@ typedef enum {
     GAME_STATE_VICTORY,
     GAME_STATE_TITLE,
     GAME_STATE_TITLE_TRANSITION,
+    GAME_STATE_VIDEO
 } GameState;
 
 // Cutscene state management

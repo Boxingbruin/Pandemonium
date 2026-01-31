@@ -120,6 +120,24 @@ void collision_init(void)
     }
 }
 
+// TODO: use this...
+// void collision_get_character_capsule_world(float outA[3], float outB[3], float *outR)
+// {
+//     if (outA) {
+//         outA[0] = charCapA.v[0];
+//         outA[1] = charCapA.v[1];
+//         outA[2] = charCapA.v[2];
+//     }
+//     if (outB) {
+//         outB[0] = charCapB.v[0];
+//         outB[1] = charCapB.v[1];
+//         outB[2] = charCapB.v[2];
+//     }
+//     if (outR) {
+//         *outR = charRadius;
+//     }
+// }
+
 void collision_update(void) // Disable viewport after development
 {
     update_character_capsule_world();

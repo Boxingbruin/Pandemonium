@@ -11,4 +11,6 @@ void collision_init(void);
 void collision_update(void);
 void collision_draw(T3DViewport *viewport);
 
+//void collision_get_character_capsule_world(float outA[3], float outB[3], float *outR);
+
 #endif
