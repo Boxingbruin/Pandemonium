@@ -97,8 +97,10 @@ void dialog_controller_speak(const char* text, int style, float activeTime, bool
     visibleCharacters = 0;
     checkedCharacters = 0;
     dialogTimer = 0.0f;
+    dialogActiveTimer = 0.0f; // important: reset per-line lifetime so new speaks don't instantly auto-end
     showDialog = true;
     endDialog = end;
+    visibleText[0] = '\0';
 }
 
 bool dialog_controller_speaking(void) 
@@ -110,6 +112,12 @@ void dialog_controller_stop_speaking(void)
 {
     showDialog = false;
     dialogActiveTimer = 0.0f; // Reset the timer
+}
+
+void dialog_controller_skip(void)
+{
+    // End immediately; sequencing logic lives in the caller (eg `scene.c`).
+    dialog_controller_stop_speaking();
 }
 
 // Never call this again.

@@ -13,6 +13,8 @@ void dialog_controller_free(void);
 void dialog_controller_speak(const char* text, int style, float activeTime, bool interactable, bool end);
 bool dialog_controller_speaking(void);
 void dialog_controller_stop_speaking(void);
+// Immediately end the current dialog line (so callers can advance to the next line).
+void dialog_controller_skip(void);
 
 // Update and draw functions
 void dialog_controller_update(void);

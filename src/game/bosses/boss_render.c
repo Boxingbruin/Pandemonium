@@ -14,6 +14,8 @@
 #include <t3d/t3ddebug.h>
 #include <t3d/t3dmodel.h>
 #include <math.h>
+#include <ctype.h>
+#include <string.h>
 
 #include "dev.h"
 #include "dev/debug_draw.h"
@@ -36,6 +38,43 @@ ScrollDyn bossScrollDyn = {
     .spr = NULL,
 };
 
+typedef struct {
+    ScrollDyn* scroll;
+    Boss* boss;
+} BossDrawUserData;
+
+// Hide any sword-related objects once the boss is dead.
+// This is name-based and depends on object names embedded in the .t3dm.
+static bool boss_filter_hide_swords_when_dead(void* userData, const T3DObject* obj) {
+    BossDrawUserData* ud = (BossDrawUserData*)userData;
+    Boss* boss = ud ? ud->boss : NULL;
+    if (!boss) return true;
+    if (boss->state != BOSS_STATE_DEAD) return true;
+    if (!obj || !obj->name) return true;
+
+    // Filter either by object name OR by material name.
+    // In Tiny3D, each draw "object" has exactly one material, so this cleanly hides sub-materials
+    // even if the source asset was a single mesh with multiple material slots.
+    const char* objName = obj->name;
+    const char* matName = (obj->material && obj->material->name) ? obj->material->name : NULL;
+
+    // Specific Fast64 material names you showed (keep this list tight to avoid accidental hiding).
+    if (matName) {
+        // NOTE: intentionally do NOT hide "z_sword1" (main sword).
+        if (strcmp(matName, "z_temp_swords") == 0 ||
+            strcmp(matName, "z_temp_swords_decal") == 0) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static void boss_scroll_dyn_cb_wrapper(void* userData, const T3DMaterial* material, rdpq_texparms_t* tp, rdpq_tile_t tile) {
+    BossDrawUserData* ud = (BossDrawUserData*)userData;
+    ScrollDyn* scroll = ud ? ud->scroll : NULL;
+    scroll_dyn_cb(scroll, material, tp, tile);
+}
+
 void boss_draw_init(void)
 {
     // This texture is only needed for the scrolling/fog material. If it isn't
@@ -48,15 +87,20 @@ void boss_draw_init(void)
 
 static void boss_draw_scrolling(Boss* boss)
 {
+    BossDrawUserData ud = {
+        .scroll = &bossScrollDyn,
+        .boss = boss,
+    };
+
     // If the scrolling texture wasn't loaded, avoid the custom draw path.
     // This prevents startup crashes if the sprite isn't present in the current ROM.
     if (!bossScrollDyn.spr) {
         T3DSkeleton* skel = (T3DSkeleton*)boss->skeleton;
         t3d_matrix_set(boss->modelMat, true);
         t3d_model_draw_custom(boss->model, (T3DModelDrawConf){
-            .userData     = NULL,
+            .userData     = &ud,
             .tileCb       = NULL,
-            .filterCb     = NULL,
+            .filterCb     = boss_filter_hide_swords_when_dead,
             .dynTextureCb = NULL,
             .matrices = (skel && skel->bufferCount == 1)
               ? skel->boneMatricesFP
@@ -69,10 +113,10 @@ static void boss_draw_scrolling(Boss* boss)
 
     t3d_matrix_set(boss->modelMat, true);
     t3d_model_draw_custom(boss->model, (T3DModelDrawConf){
-        .userData     = &bossScrollDyn,
+        .userData     = &ud,
         .tileCb       = NULL,
-        .filterCb     = NULL,
-        .dynTextureCb = scroll_dyn_cb,
+        .filterCb     = boss_filter_hide_swords_when_dead,
+        .dynTextureCb = boss_scroll_dyn_cb_wrapper,
         .matrices = (skel && skel->bufferCount == 1)
           ? skel->boneMatricesFP
           : (const T3DMat4FP*)t3d_segment_placeholder(T3D_SEGMENT_SKELETON)

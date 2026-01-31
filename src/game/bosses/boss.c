@@ -524,11 +524,10 @@ void boss_init(Boss* boss) {
     boss->capsuleCollider.localCapB.v[2] = 0.0f;
     boss->capsuleCollider.radius = 20.0f;
     
-    // Find Hand-Right bone index
+    // Find bone indices
     boss->handRightBoneIndex = t3d_skeleton_find_bone(skeleton, "Hand-Right");
-    
-    // Find Spine1 bone index (for z-targeting)
     boss->spine1BoneIndex = t3d_skeleton_find_bone(skeleton, "Spine1");
+    boss->headBoneIndex = t3d_skeleton_find_bone(skeleton, "Head");
     
     // Initialize hand attack collider (local space, will be updated during attacks)
     boss->handAttackCollider.localCapA.v[0] = 0.0f;

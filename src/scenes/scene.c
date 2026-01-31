@@ -290,6 +290,14 @@ static const char *phase1Dialogs[] = {
 };
 bool cutsceneDialogActive = false;
 
+// Post-boss interaction ("restored") state
+static bool bossPostDefeatTalkDone = false;
+static int bossPostDefeatDialogStep = 0; // 0 -> first line pending/shown, 1 -> second line pending/shown
+static bool bossWasDead = false; // Tracks death transition for one-time post-death cleanup
+
+// Post-boss interaction distances (XZ)
+static const float POST_BOSS_PROMPT_DIST  = 140.0f;   // show A prompt and allow talk when inside this range
+
 // Boss title fade control (shown during intro, fades out when fight starts)
 static float bossTitleFade = 0.0f;
 static float bossTitleFadeSpeed = 1.8f;
@@ -298,7 +306,7 @@ static float bossTitleFadeSpeed = 1.8f;
 static float victoryTitleTimer = 0.0f;
 static bool victoryTitleDone = false;
 static const float VICTORY_TITLE_FADEIN_S  = 0.75f;
-static const float VICTORY_TITLE_HOLD_S    = 1.10f;
+static const float VICTORY_TITLE_HOLD_S    = 2.00f;
 static const float VICTORY_TITLE_FADEOUT_S = 0.90f;
 
 // progress for boss/player UIs
@@ -326,12 +334,18 @@ static uint32_t restartCounter = 0;
 static bool lastAPressed = false;
 static bool lastStartPressed = false;
 static bool lastZPressed = false;
+static bool lastLPressed = false;
+static bool lastInteractAHeld = false;
 
 // Cutscene skip - toggle button visibility
 static sprite_t* aButtonSprite = NULL;
 static surface_t aButtonSurf;
 static bool skipButtonVisible = false; // Whether the skip button is currently visible
 static bool lastCutsceneAPressed = false; // Track A button state for edge detection
+
+// Victory title card background ("Enemy restored")
+static sprite_t* victoryTitleBgSprite = NULL;
+static surface_t victoryTitleBgSurf = {0};
 
 static const char *SCENE1_SFX_PATHS[SCENE1_SFX_COUNT] = {
     [SCENE1_SFX_TITLE_WALK]  = "rom:/audio/sfx/title_screen_walk_effect-22k.wav64",
@@ -830,6 +844,12 @@ void scene_init(void)
         aButtonSurf = sprite_get_pixels(aButtonSprite);
     }
 
+    // Load victory title background (used for "Enemy restored")
+    victoryTitleBgSprite = sprite_load("rom:/dialog-gradient.ia8.sprite");
+    if (victoryTitleBgSprite) {
+        victoryTitleBgSurf = sprite_get_pixels(victoryTitleBgSprite);
+    }
+
     //scene_init_cinematic_camera();
     // Start boss music
     // TODO: Its turned off for now as it gets annoying to listen to and it crackles
@@ -943,6 +963,10 @@ void scene_reset(void)
     victoryTitleTimer = 0.0f;
     victoryTitleDone = false;
 
+    // Post-boss interaction state
+    bossPostDefeatTalkDone = false;
+    bossPostDefeatDialogStep = 0;
+
     // Reset letterbox to show state for intro
     letterbox_show(false);
 }
@@ -953,8 +977,126 @@ static void scene_sync_input_edge_state(void)
     // events immediately after restart.
     lastAPressed = btn.a;
     lastStartPressed = btn.start;
-    lastZPressed = btn.z;
+    // Use held state for Z so our lock-on toggle edge detection is reliable.
+    lastZPressed = joypad.btn.z;
+    // Use held-state for L since btn.* is "pressed this frame" in libdragon.
+    lastLPressed = joypad.btn.l;
+    // Use held state for interact-A edge detection (prevents missing presses).
+    lastInteractAHeld = joypad.btn.a;
     lastCutsceneAPressed = btn.a;
+}
+
+static inline float scene_dist_xz(float ax, float az, float bx, float bz) {
+    float dx = ax - bx;
+    float dz = az - bz;
+    return sqrtf(dx*dx + dz*dz);
+}
+
+static bool scene_get_boss_bone_world_pos(int boneIndex, T3DVec3 *outWorld)
+{
+    if (!outWorld) return false;
+    if (!g_boss || !g_boss->skeleton || !g_boss->modelMat) return false;
+    if (boneIndex < 0) return false;
+
+    T3DSkeleton* skel = (T3DSkeleton*)g_boss->skeleton;
+    const T3DMat4FP* boneMat = &skel->boneMatricesFP[boneIndex];
+    const T3DMat4FP* modelMat = (const T3DMat4FP*)g_boss->modelMat;
+
+    const float boneLocal[3] = { 0.0f, 0.0f, 0.0f };
+    float boneModel[3];
+    mat4fp_mul_point_f32_row3_colbasis(boneMat, boneLocal, boneModel);
+
+    float boneWorld[3];
+    mat4fp_mul_point_f32_row3_colbasis(modelMat, boneModel, boneWorld);
+
+    *outWorld = (T3DVec3){{ boneWorld[0], boneWorld[1], boneWorld[2] }};
+    return true;
+}
+
+static void scene_debug_force_boss_defeated(void)
+{
+    if (!g_boss) return;
+
+    // Force boss into a fully stopped "dead" configuration.
+    g_boss->health = 0.0f;
+    g_boss->state = BOSS_STATE_DEAD;
+    g_boss->stateTimer = 0.0f;
+    g_boss->isAttacking = false;
+    g_boss->attackAnimTimer = 0.0f;
+    g_boss->handAttackColliderActive = false;
+    g_boss->sphereAttackColliderActive = false;
+    g_boss->velX = 0.0f;
+    g_boss->velZ = 0.0f;
+    g_boss->currentSpeed = 0.0f;
+
+    // If the boss had any pending external AI requests, clear them too.
+    g_boss->pendingRequests = 0;
+
+    // Enter victory state so the "Enemy restored" end-card renders/advances.
+    // This is primarily for debugging (L-trigger skip).
+    if (scene_get_game_state() != GAME_STATE_VICTORY) {
+        scene_set_game_state(GAME_STATE_VICTORY);
+    } else {
+        // If already in victory, restart the title animation.
+        victoryTitleTimer = 0.0f;
+        victoryTitleDone = false;
+    }
+
+    // Ensure we return to gameplay (no cutscene controlling camera/logic).
+    cutsceneState = CUTSCENE_NONE;
+    cutsceneTimer = 0.0f;
+    cutsceneCameraTimer = 0.0f;
+    cutsceneDialogActive = false;
+    skipButtonVisible = false;
+
+    // Keep post-defeat interaction available after skipping.
+    bossPostDefeatTalkDone = false;
+    bossPostDefeatDialogStep = 0;
+}
+
+static void draw_post_boss_a_prompt(T3DViewport *viewport)
+{
+    // Show "A" above the boss only after defeat, when close enough to interact.
+    if (!viewport || !aButtonSprite) return;
+    if (scene_is_cutscene_active() || !scene_is_boss_active() || !g_boss) return;
+    if (g_boss->state != BOSS_STATE_DEAD) return;
+
+    // Only show when the player is close enough to interact (pre-cutscene)
+    float d = scene_dist_xz(character.pos[0], character.pos[2], g_boss->pos[0], g_boss->pos[2]);
+    if (d > POST_BOSS_PROMPT_DIST) return;
+
+    // Anchor to the boss head bone (true attachment). Fall back to lock-focus if head bone isn't available.
+    T3DVec3 worldPos;
+    if (!scene_get_boss_bone_world_pos(g_boss->headBoneIndex, &worldPos)) {
+        worldPos = get_boss_lock_focus_point();
+    }
+    // Small lift so the prompt doesn't intersect the head.
+    worldPos.v[1] += 12.0f;
+
+    T3DVec3 screenPos;
+    t3d_viewport_calc_viewspace_pos(viewport, &screenPos, &worldPos);
+
+    // Skip if behind camera
+    if (screenPos.v[2] >= 1.0f) return;
+
+    int px = (int)screenPos.v[0];
+    int py = (int)screenPos.v[1];
+
+    const int margin = 16;
+    if (px < -margin || px > SCREEN_WIDTH + margin || py < -margin || py > SCREEN_HEIGHT + margin) {
+        return;
+    }
+
+    int w = aButtonSurf.width;
+    int h = aButtonSurf.height;
+    int x = px - (w / 2);
+    int y = py - (h / 2);
+
+    rdpq_sync_pipe();
+    rdpq_set_mode_standard();
+    rdpq_mode_alphacompare(1);
+    rdpq_mode_blender(RDPQ_BLENDER_MULTIPLY);
+    rdpq_tex_blit(&aButtonSurf, x, y, NULL);
 }
 
 bool scene_is_cutscene_active(void) {
@@ -1148,6 +1290,28 @@ void scene_init_cutscene()
             cutsceneDialogActive = false;
             scene_set_cinematic_camera((T3DVec3){{-22.0f, 29.0f, -10.0f}}, (T3DVec3){{-150.0f, 29.0f, -10.0f}}, (T3DVec3){{100.0f, 29.0f, 0.0f}});
             break;
+        case CUTSCENE_POST_BOSS_RESTORED: {
+            // Post-boss dialog: keep the current gameplay camera position (so we don't yank the view),
+            // but retarget it to face the boss.
+            cutsceneDialogActive = true;
+            bossPostDefeatDialogStep = 0;
+            skipButtonVisible = false;
+            lastCutsceneAPressed = false;
+
+            // Freeze character motion for the duration of this dialog so we don't "coast" afterward.
+            character_set_velocity_xz(0.0f, 0.0f);
+
+            // Keep current camera position and smoothly rotate to face the boss.
+            customCamPos = camPos;
+            customCamTarget = get_boss_lock_focus_point();
+            camera_mode_smooth(CAMERA_CUSTOM, 0.25f);
+
+            // Start first line (auto-ends after a short hold)
+            dialog_controller_speak(
+                "^i am no longer under his control, restored to my glory",
+                0, 4.0f, false, true
+            );
+        } break;
         default:
             break;
     }
@@ -1432,34 +1596,89 @@ void scene_cutscene_update()
 
 
         } break;
+        case CUTSCENE_POST_BOSS_RESTORED: {
+            // Post-boss dialog runs while gameplay continues to animate (no "paused time" feel).
+            // Player input stays disabled by `character_update()` while a cutscene is active.
+            character_update();
+            // Keep constraints/collision up to date so the world stays consistent during dialog.
+            scene_resolve_character_room_obbs();
+            character_update_position();
+
+            if (bossActivated && g_boss) {
+                boss_update(g_boss);
+            }
+
+            collision_update();
+
+            // Run dialog sequence (2 lines) then return to gameplay
+            // Allow A/Start to advance immediately to the next line (or end).
+            if (dialog_controller_speaking() && (btn.a || btn.start)) {
+                dialog_controller_skip();
+            }
+            dialog_controller_update();
+
+            if (!dialog_controller_speaking()) {
+                if (bossPostDefeatDialogStep == 0) {
+                    bossPostDefeatDialogStep = 1;
+                    dialog_controller_speak(
+                        "^Go on and free the sun",
+                        0, 4.0f, false, true
+                    );
+                } else {
+                    // Finish: return to gameplay.
+                    cutsceneDialogActive = false;
+                    cutsceneState = CUTSCENE_NONE;
+                    cutsceneTimer = 0.0f;
+                    cutsceneCameraTimer = 0.0f;
+                    skipButtonVisible = false;
+
+                    camera_mode_smooth(CAMERA_CHARACTER, 0.8f);
+
+                    // Ensure we don't carry any stored motion into gameplay.
+                    character_set_velocity_xz(0.0f, 0.0f);
+
+                    // Consume any lingering button edges so we don't immediately roll/act on the first gameplay frame.
+                    character_reset_button_state();
+                    scene_sync_input_edge_state();
+                    return;
+                }
+            }
+        } break;
         default:
             break;
     }
 
-    // Handle cutscene skip - toggle button on first A press, skip on second
-    bool aCurrentlyPressed = btn.a;
-    bool aJustPressed = aCurrentlyPressed && !lastCutsceneAPressed;
-    
-    if (aJustPressed)
-    {
-        if (!skipButtonVisible)
+    // Handle cutscene skip (intro cinematics only). Post-boss dialog is not skippable via this mechanic.
+    if (cutsceneState != CUTSCENE_POST_BOSS_RESTORED) {
+        // toggle button on first A press, skip on second
+        bool aCurrentlyPressed = btn.a;
+        bool aJustPressed = aCurrentlyPressed && !lastCutsceneAPressed;
+        
+        if (aJustPressed)
         {
-            // First press - show the skip button
-            skipButtonVisible = true;
+            if (!skipButtonVisible)
+            {
+                // First press - show the skip button
+                skipButtonVisible = true;
+            }
+            else
+            {
+                // Second press - skip the cutscene
+                skipButtonVisible = false;
+                cutsceneTimer = 0.0f;
+                cutsceneCameraTimer = 0.0f;
+                scene_init_playing();
+                return;
+            }
         }
-        else
-        {
-            // Second press - skip the cutscene
-            skipButtonVisible = false;
-            cutsceneTimer = 0.0f;
-            cutsceneCameraTimer = 0.0f;
-            scene_init_playing();
-            return;
-        }
+        
+        // Update last state for next frame
+        lastCutsceneAPressed = aCurrentlyPressed;
+    } else {
+        // Keep skip state hidden during post-boss dialog
+        skipButtonVisible = false;
+        lastCutsceneAPressed = btn.a;
     }
-    
-    // Update last state for next frame
-    lastCutsceneAPressed = aCurrentlyPressed;
 }
 
 void scene_update_title(void)
@@ -1634,8 +1853,10 @@ void scene_update(void)
     }
     lastMenuActive = menuActive;
 
-    // If player is dead or victorious, disable player control but keep boss/UI moving
-    if (gameState == GAME_STATE_DEAD || gameState == GAME_STATE_VICTORY) {
+    // If player is dead, disable player control but keep boss/UI moving
+    // NOTE: Victory should NOT early-return here; we still want full gameplay updates
+    // (collision/constraints) so the player's colliders don't "stick" in place.
+    if (gameState == GAME_STATE_DEAD) {
         // Still update the character so end-state animations (like Death) can play.
         character_update();
 
@@ -1646,16 +1867,6 @@ void scene_update(void)
 
         // Continue letterbox animation updates
         letterbox_update();
-
-        // Advance victory title animation timer
-        if (gameState == GAME_STATE_VICTORY && !victoryTitleDone) {
-            const float total = VICTORY_TITLE_FADEIN_S + VICTORY_TITLE_HOLD_S + VICTORY_TITLE_FADEOUT_S;
-            victoryTitleTimer += deltaTime;
-            if (victoryTitleTimer >= total) {
-                victoryTitleTimer = total;
-                victoryTitleDone = true;
-            }
-        }
 
         // Allow restart via A button only on death.
         // Victory should not force a restart prompt / flow.
@@ -1670,9 +1881,41 @@ void scene_update(void)
         return;
     }
 
+    // Debug hotkey: L-trigger skips to boss defeated (dead + fully stopped)
+    // NOTE: This is intentionally not gated by DEV_MODE because DEV_MODE is currently
+    // compiled as false in `globals.h`, which would otherwise compile this out.
+    bool lHeld = joypad.btn.l;
+    bool lJustPressed = lHeld && !lastLPressed;
+    lastLPressed = lHeld;
+    if (lJustPressed && bossActivated && g_boss) {
+        scene_debug_force_boss_defeated();
+    }
+
     if(cutsceneState == CUTSCENE_NONE) // Normal gameplay
     {
-        
+        // Post-boss interaction trigger: after defeat, when Z-targeted and close enough,
+        // start the dialog/camera only when player presses A (held-edge).
+        // IMPORTANT: check this BEFORE character_update so A doesn't also trigger a roll.
+        if (bossActivated && g_boss && g_boss->state == BOSS_STATE_DEAD) {
+            float d = scene_dist_xz(character.pos[0], character.pos[2], g_boss->pos[0], g_boss->pos[2]);
+            bool aHeld = joypad.btn.a;
+            bool aJustPressed = aHeld && !lastInteractAHeld;
+            lastInteractAHeld = aHeld;
+
+            // Match the on-screen prompt behavior: if the "A" prompt is visible, A should talk.
+            // Do NOT require Z-targeting; post-fight we untarget by default, but still allow re-targeting.
+            if (d <= POST_BOSS_PROMPT_DIST && aJustPressed) {
+                cutsceneState = CUTSCENE_POST_BOSS_RESTORED;
+                cutsceneTimer = 0.0f;
+                cutsceneCameraTimer = 0.0f;
+                scene_init_cutscene();
+                return;
+            }
+        } else {
+            // Keep interact edge-tracker in sync when not eligible
+            lastInteractAHeld = joypad.btn.a;
+        }
+
         character_update();
         // Constrain player inside obbs
         scene_resolve_character_room_obbs();
@@ -1717,27 +1960,57 @@ void scene_update(void)
     // Update letterbox animation
     letterbox_update();
 
-    // Z-target toggle: press Z to toggle lock-on, target updates with boss movement when active
-    bool zPressed = btn.z;
-    
-    if (zPressed && !lastZPressed)  // Z button just pressed (rising edge)
-    {
-        if (!cameraLockOnActive)
-        {
-            cameraLockOnActive = true;
+    // Advance victory title animation timer (but still allow full gameplay update above)
+    if (gameState == GAME_STATE_VICTORY && !victoryTitleDone) {
+        const float total = VICTORY_TITLE_FADEIN_S + VICTORY_TITLE_HOLD_S + VICTORY_TITLE_FADEOUT_S;
+        victoryTitleTimer += deltaTime;
+        if (victoryTitleTimer >= total) {
+            victoryTitleTimer = total;
+            victoryTitleDone = true;
         }
-        else
-        {
+    }
+
+    // Post-boss cleanup: once the boss becomes dead, clear Z-targeting so the player is untargeted
+    // after the fight. The player can still re-target by pressing Z as normal.
+    if (bossActivated && g_boss) {
+        bool bossDeadNow = (g_boss->state == BOSS_STATE_DEAD);
+        if (bossDeadNow && !bossWasDead) {
             cameraLockOnActive = false;
+            cameraLockBlend = 0.0f;
+            // Sync edge detectors so we don't immediately re-toggle due to a held button
+            lastZPressed = joypad.btn.z;
+            lastInteractAHeld = joypad.btn.a;
+        }
+        bossWasDead = bossDeadNow;
+    } else {
+        bossWasDead = false;
+    }
+
+    // Z-target toggle: press Z to toggle lock-on, target updates with boss movement when active.
+    // Use held-state edge detection so toggling works reliably.
+    bool lockonAllowed = scene_is_boss_active() && g_boss;
+    bool zHeld = joypad.btn.z;
+    bool zJustPressed = zHeld && !lastZPressed;
+
+    // If lock-on is not allowed, force it off.
+    if (!lockonAllowed) {
+        cameraLockOnActive = false;
+    }
+
+    if (lockonAllowed) {
+        if (zJustPressed)  // rising edge (held)
+        {
+            cameraLockOnActive = !cameraLockOnActive;
+        }
+
+        // Update target position when lock-on is active
+        if (cameraLockOnActive)
+        {
+            cameraLockOnTarget = get_boss_lock_focus_point();
         }
     }
-    lastZPressed = zPressed;
-    
-    // Update target position when lock-on is active
-    if (cameraLockOnActive)
-    {
-        cameraLockOnTarget = get_boss_lock_focus_point();
-    }
+
+    lastZPressed = zHeld;
 }
 
 void scene_fixed_update(void) 
@@ -1747,8 +2020,9 @@ void scene_fixed_update(void)
 // Draws a small lock-on marker over the boss when Z-targeting is active.
 static void draw_lockon_indicator(T3DViewport *viewport)
 {
-    // Only show during gameplay when the boss is alive and actually targeted
-    if (!cameraLockOnActive || scene_is_cutscene_active() || !scene_is_boss_active() || !g_boss || g_boss->health <= 0.0f) {
+    // Show during gameplay when Z-targeting is active.
+    // Allow the defeated boss to still be targetable (useful for post-fight dialog).
+    if (!cameraLockOnActive || scene_is_cutscene_active() || !scene_is_boss_active() || !g_boss) {
         return;
     }
 
@@ -1951,6 +2225,81 @@ void scene_draw_cutscene_fog(){
 void scene_draw_cutscene(){
 
     switch(cutsceneState){
+        case CUTSCENE_POST_BOSS_RESTORED: {
+            // Render the normal scene while the post-boss dialog is active.
+            // This avoids a black screen (this cutscene is camera/dialog only).
+            rdpq_sync_pipe();
+            rdpq_mode_zbuf(false, false);
+
+            // Draw no depth environment first
+            t3d_matrix_push_pos(1);
+                t3d_matrix_set(windowsMatrix, true);
+                rspq_block_run(windowsDpl);
+
+                t3d_matrix_set(mapMatrix, true);
+                rspq_block_run(mapDpl);
+            t3d_matrix_pop(1);
+
+            // Floor
+            rdpq_sync_pipe();
+            rdpq_mode_zbuf(true, true);
+            t3d_matrix_push_pos(1);
+                t3d_matrix_set(roomFloorMatrix, true);
+                rspq_block_run(roomFloorDpl);
+            t3d_matrix_pop(1);
+
+            // Shadows
+            rdpq_sync_pipe();
+            rdpq_mode_zbuf(false, false);
+            t3d_matrix_push_pos(1);
+                character_draw_shadow();
+                if (g_boss) {
+                    boss_draw_shadow(g_boss);
+                }
+            t3d_matrix_pop(1);
+
+            // Room pieces
+            rdpq_sync_pipe();
+            rdpq_mode_zbuf(true, true);
+            t3d_matrix_push_pos(1);
+                t3d_matrix_set(roomLedgeMatrix, true);
+                rspq_block_run(roomLedgeDpl);
+
+                t3d_matrix_set(pillarsMatrix, true);
+                rspq_block_run(pillarsDpl);
+
+                t3d_matrix_set(pillarsFrontMatrix, true);
+                rspq_block_run(pillarsFrontDpl);
+            t3d_matrix_pop(1);
+
+            // Characters
+            t3d_matrix_push_pos(1);
+                character_draw();
+                if (g_boss) {
+                    boss_draw(g_boss);
+                }
+            t3d_matrix_pop(1);
+
+            // Optional chains (keep consistency with gameplay)
+            t3d_matrix_push_pos(1);
+                if (cinematicChainsVisible) {
+                    t3d_matrix_set(cinematicChainsMatrix, true);
+                    rspq_block_run(cinematicChainsDpl);
+                }
+                t3d_matrix_set(chainsMatrix, true);
+                rspq_block_run(chainsDpl);
+            t3d_matrix_pop(1);
+
+            // 2D dialog overlay (same style/placement as other cutscenes)
+            int height = 70;
+            int width = 220;
+            int x = (SCREEN_WIDTH - width) / 2;
+            if (cutsceneDialogActive) {
+                int y = 240 - height - 10;
+                dialog_controller_draw(false, x, y, width, height);
+            }
+
+        } break;
         case CUTSCENE_PHASE1_INTRO:
             rdpq_sync_pipe();
             rdpq_mode_zbuf(false, false);
@@ -2469,6 +2818,9 @@ void scene_draw(T3DViewport *viewport)
     // Screen-space ribbon trails, drawn right after 3D so they feel "in world"
     sword_trail_draw_all(viewport);
 
+    // Post-boss interaction prompt ("A") above the defeated boss when close enough to interact
+    draw_post_boss_a_prompt(viewport);
+
     // Overlay lock-on marker above the boss
     if(DEV_MODE)
         draw_lockon_indicator(viewport);
@@ -2593,14 +2945,35 @@ void scene_draw(T3DViewport *viewport)
                     int barLeft = (SCREEN_WIDTH - barWidth) / 2;
                     int barTop = (SCREEN_HEIGHT / 2) - (barHeight / 2) - 2;
 
-                    rdpq_set_prim_color(RGBA32(0, 0, 0, barA));
-                    rdpq_fill_rectangle(barLeft, barTop, barLeft + barWidth, barTop + barHeight);
+                    // Background: use dialog gradient sprite (fallback to solid bar if missing)
+                    if (victoryTitleBgSprite) {
+                        const int src_w = victoryTitleBgSurf.width;
+                        const int src_h = victoryTitleBgSurf.height;
+                        const float sx = (src_w > 0) ? ((float)barWidth  / (float)src_w) : 1.0f;
+                        const float sy = (src_h > 0) ? ((float)barHeight / (float)src_h) : 1.0f;
 
+                        rdpq_sync_pipe();
+                        rdpq_set_mode_standard();
+                        rdpq_mode_alphacompare(1);
+                        rdpq_mode_blender(RDPQ_BLENDER_MULTIPLY);
+                        rdpq_mode_combiner(RDPQ_COMBINER_TEX_FLAT);
+                        rdpq_set_prim_color(RGBA32(255, 255, 255, barA));
+                        rdpq_tex_blit(&victoryTitleBgSurf, barLeft, barTop, &(rdpq_blitparms_t){
+                            .scale_x = sx,
+                            .scale_y = sy,
+                        });
+                    } else {
+                        rdpq_set_prim_color(RGBA32(0, 0, 0, barA));
+                        rdpq_fill_rectangle(barLeft, barTop, barLeft + barWidth, barTop + barHeight);
+                    }
+
+                    // Ensure a simple combiner for text after the sprite blit path.
+                    rdpq_mode_combiner(RDPQ_COMBINER_FLAT);
                     rdpq_set_prim_color(RGBA32(255, 255, 255, textA));
                     rdpq_text_printf(&(rdpq_textparms_t){
                         .align = ALIGN_CENTER,
                         .width = SCREEN_WIDTH,
-                    }, FONT_UNBALANCED, 0, SCREEN_HEIGHT / 2 - 8, "%s", "Enemy restored");
+                    }, FONT_UNBALANCED, 0, SCREEN_HEIGHT / 2, "%s", "Enemy restored");
                 }
             }
         }
@@ -2728,5 +3101,11 @@ void scene_cleanup(void) // Realistically we never want to call this for the jam
         sprite_free(aButtonSprite);
         aButtonSprite = NULL;
         surface_free(&aButtonSurf);
+    }
+
+    if (victoryTitleBgSprite) {
+        sprite_free(victoryTitleBgSprite);
+        victoryTitleBgSprite = NULL;
+        surface_free(&victoryTitleBgSurf);
     }
 }

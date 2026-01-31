@@ -113,7 +113,17 @@ void draw_player_health_bar(const char *name, float ratio, float flash)
 	}
 	float combinedFlash = fmaxf(flash, warningFlash);
 
-	// Set up UI rendering mode (no fog manipulation needed)
+	// Reset pipeline so UI doesn't inherit a leftover render mode from the 3D pass
+	// or conditional draws (eg: sword trails / lock-on marker).
+	rdpq_sync_pipe();
+	rdpq_set_mode_standard();
+	#ifdef RDPQ_FOG_DISABLED
+	rdpq_mode_fog(RDPQ_FOG_DISABLED);
+	#else
+	rdpq_mode_fog(0); // older libdragon: 0 disables fog
+	#endif
+
+	// Set up UI rendering mode
 	rdpq_mode_combiner(RDPQ_COMBINER_FLAT);
 	rdpq_mode_blender(RDPQ_BLENDER_MULTIPLY);
 	
