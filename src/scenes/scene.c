@@ -2163,14 +2163,29 @@ void scene_draw(T3DViewport *viewport)
         rspq_block_run(mapDpl);
     t3d_matrix_pop(1);
     
-    // Draw depth environment
-    rdpq_sync_pipe();
-    rdpq_mode_zbuf(true, true);
 
-    t3d_matrix_push_pos(1);   
-        t3d_matrix_set(roomFloorMatrix, true);
-        rspq_block_run(roomFloorDpl);
-    t3d_matrix_pop(1); 
+    if(g_boss->isAttacking)
+    {
+        //Draw depth environment
+        rdpq_sync_pipe();
+        rdpq_mode_zbuf(true, true);
+
+        t3d_matrix_push_pos(1);   
+            t3d_matrix_set(roomFloorMatrix, true);
+            rspq_block_run(roomFloorDpl);
+        t3d_matrix_pop(1); 
+    }
+    else
+    {
+        //Draw depth environment
+        rdpq_sync_pipe();
+        rdpq_mode_zbuf(false, false);
+
+        t3d_matrix_push_pos(1);   
+            t3d_matrix_set(roomFloorMatrix, true);
+            rspq_block_run(roomFloorDpl);
+        t3d_matrix_pop(1); 
+    }
 
     rdpq_sync_pipe();
     rdpq_mode_zbuf(false, false);
