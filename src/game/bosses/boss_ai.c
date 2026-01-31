@@ -488,6 +488,7 @@ static void boss_ai_select_attack(Boss* boss, float dist) {
         boss->state = BOSS_STATE_COMBO_ATTACK;
         boss->stateTimer = 0.0f;
         boss->comboCooldown = 10.0f;
+        boss->isAttacking = true;
         boss->comboStep = 0;
         boss->comboInterrupted = false;
         boss->comboVulnerableTimer = 0.0f;

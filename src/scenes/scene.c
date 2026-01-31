@@ -250,6 +250,25 @@ static SCU_OBB g_roomOBBs[] = {
         .half   = { (420.0f - (-420.0f)) * 0.5f, WALL_HEIGHT * 0.5f, WALL_THICKNESS * 0.5f }, // hx=420
         .yaw    = -1.5707963f
     },
+    // -------------------------------------------------
+    // pillar 1 (depth X=100, width Z=80), keep front face, extend only +X
+    // center (x=553, z=-238)
+    // -------------------------------------------------
+    {
+        .center = { 553.0f, 0.0f, -238.0f },
+        .half   = { 50.0f, WALL_HEIGHT * 0.5f, 40.0f },
+        .yaw    = 0.0f
+    },
+
+    // -------------------------------------------------
+    // pillar 2 (depth X=100, width Z=80), keep front face, extend only +X
+    // center (x=553, z=238)
+    // -------------------------------------------------
+    {
+        .center = { 553.0f, 0.0f, 238.0f },
+        .half   = { 50.0f, WALL_HEIGHT * 0.5f, 40.0f },
+        .yaw    = 0.0f
+    },
 };
 
 static const int g_roomOBBCount = sizeof(g_roomOBBs) / sizeof(g_roomOBBs[0]);
@@ -2343,7 +2362,7 @@ void scene_draw(T3DViewport *viewport)
     t3d_matrix_pop(1);
     
 
-    if(g_boss->isAttacking || g_boss->health <= 0)
+    if(g_boss->isAttacking || g_boss->health <= 0 || g_boss->state == BOSS_STATE_COMBO_ATTACK) // TODO: Hacky fix but something weird is going on with comnbo1 and we dont have time
     {
         //Draw depth environment
         rdpq_sync_pipe();
@@ -2376,17 +2395,6 @@ void scene_draw(T3DViewport *viewport)
             boss_draw_shadow(g_boss);
         }
 
-        // floor glow
-        if(g_boss->health <= 0)
-        {
-            t3d_matrix_set(floorGlowMatrix, true);
-            // Create a struct to pass the scrolling parameters to the tile callback
-            t3d_model_draw_custom(floorGlowModel, (T3DModelDrawConf){
-                .userData = &floorGlowScrollParams,
-                .tileCb = tile_scroll,
-            });
-        }
-
     t3d_matrix_pop(1); 
 
     rdpq_sync_pipe();
@@ -2403,6 +2411,25 @@ void scene_draw(T3DViewport *viewport)
         rspq_block_run(pillarsFrontDpl);
 
     t3d_matrix_pop(1); 
+
+    rdpq_sync_pipe();
+    rdpq_mode_zbuf(false, false);
+
+    t3d_matrix_push_pos(1);   
+    // floor glow
+    if(g_boss->health <= 0)
+    {
+        t3d_matrix_set(floorGlowMatrix, true);
+        // Create a struct to pass the scrolling parameters to the tile callback
+        t3d_model_draw_custom(floorGlowModel, (T3DModelDrawConf){
+            .userData = &floorGlowScrollParams,
+            .tileCb = tile_scroll,
+        });
+    }
+    t3d_matrix_pop(1); 
+
+    rdpq_sync_pipe();
+    rdpq_mode_zbuf(true, true);
 
     // Draw characters
 
