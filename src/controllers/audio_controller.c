@@ -32,10 +32,20 @@ static float musicFadeT        = 0.0f;
 static float musicFadeDuration = 0.0f;
 static float musicFadeStartVol = 0.0f;
 
+// Headroom cap: prevents per-channel SFX from hitting full-scale (helps avoid bus clipping)
+static float sfxNearGain      = 0.72f;  // was 0.60
+static float sfxMaxChannelVol = 0.75f;  // was 0.65
+
 static inline float clamp01(float x) {
     if (x < 0.0f) return 0.0f;
     if (x > 1.0f) return 1.0f;
     return x;
+}
+
+static inline float cap_sfx(float v) {
+    v = clamp01(v);
+    if (v > sfxMaxChannelVol) v = sfxMaxChannelVol;
+    return v;
 }
 
 // Convert 0-10 scale to 0.0-1.0 float
@@ -54,11 +64,8 @@ static float apply_volume_settings(int specificVolume) {
 // Apply stereo/mono mode to volume values
 static void apply_stereo_volume(int ch, float volume) {
     if (stereoMode) {
-        // Stereo mode: use normal left/right separation
         mixer_ch_set_vol(ch, volume, volume);
     } else {
-        // Mono mode: sum both channels and output to both speakers
-        // TODO: Not implemented yet, just use same volume for both
         mixer_ch_set_vol(ch, volume, volume);
     }
 }
@@ -66,9 +73,6 @@ static void apply_stereo_volume(int ch, float volume) {
 /* ============================================================================
  * Scene SFX Cache
  * ============================================================================
- *
- * The scene owns the IDs (enum values) and the path table.
- * audio_scene_load_paths(paths, count) loads wav64s into indices [0..count-1].
  */
 
 static wav64_t sceneWavs[AUDIO_SCENE_MAX_SFX];
@@ -94,7 +98,7 @@ static SfxSlot sfxSlots[MIXER_NUM_CHANNELS];
 // Distance attenuation parameters (tune to world scale)
 static float sfxMinDist = 10.0f;   // full volume at/inside this
 static float sfxMaxDist = 200.0f;  // silent at/after this
-static float sfxMinGain = 0.0f;   // floor gain
+static float sfxMinGain = 0.0f;    // floor gain
 
 static inline bool ch_is_sfx_eligible(int ch)
 {
@@ -104,13 +108,14 @@ static inline bool ch_is_sfx_eligible(int ch)
 // Linear falloff (cheap)
 static float sfx_distance_gain(float d)
 {
-    if (d <= sfxMinDist) return 1.0f;
+    if (d <= sfxMinDist) return sfxNearGain;
     if (d >= sfxMaxDist) return sfxMinGain;
 
-    float t = (d - sfxMinDist) / (sfxMaxDist - sfxMinDist); // 0..1
+    float t = (d - sfxMinDist) / (sfxMaxDist - sfxMinDist);
     t = clamp01(t);
 
-    float g = 1.0f - t;
+    // linear falloff from nearGain down to minGain
+    float g = sfxNearGain + (sfxMinGain - sfxNearGain) * t;
     if (g < sfxMinGain) g = sfxMinGain;
     return g;
 }
@@ -177,7 +182,8 @@ static void sfx_update_volumes(void)
 
         float gain = sfx_distance_gain(slot->distance);
         float v = sfxBase * slot->baseVolMul * gain;
-        v = clamp01(v);
+
+        v = cap_sfx(v);
         apply_stereo_volume(ch, v);
     }
 }
@@ -210,10 +216,8 @@ static void audio_refresh_all_channel_volumes(void)
 
 void audio_scene_unload_sfx(void)
 {
-    // stop any active SFX channels first
     audio_stop_all_sfx();
 
-    // close all loaded wavs
     for (int i = 0; i < sceneCount; i++) {
         if (sceneLoaded[i]) {
             wav64_close(&sceneWavs[i]);
@@ -264,7 +268,6 @@ void audio_initialize(void)
 
     mixer_ch_set_limits(CHANNEL_MUSIC, 0, 22050, 0);
 
-    // clear scene cache
     sceneCount = 0;
     for (int i = 0; i < AUDIO_SCENE_MAX_SFX; i++) {
         sceneLoaded[i] = false;
@@ -403,7 +406,7 @@ void audio_play_scene_sfx_dist(int sceneSfxIndex, float baseVolume, float distan
     if (distance < 0.0f) distance = 0.0f;
 
     SfxSlot *slot = sfx_find_free_slot();
-    if (!slot) return; // all channels busy => drop
+    if (!slot) return;
 
     slot->inUse = true;
     slot->sceneIndex = sceneSfxIndex;
@@ -412,7 +415,8 @@ void audio_play_scene_sfx_dist(int sceneSfxIndex, float baseVolume, float distan
 
     float gain = sfx_distance_gain(distance);
     float finalVol = apply_volume_settings(sfxVolume) * baseVolume * gain;
-    finalVol = clamp01(finalVol);
+
+    finalVol = cap_sfx(finalVol);
     apply_stereo_volume(slot->ch, finalVol);
 
     wav64_play(&sceneWavs[sceneSfxIndex], slot->ch);
@@ -544,7 +548,6 @@ void audio_set_stereo_mode(bool stereo)
 {
     stereoMode = stereo;
 
-    // Refresh all channel volumes to apply new stereo/mono setting
     if (!pauseMuted) {
         audio_refresh_all_channel_volumes();
     }
