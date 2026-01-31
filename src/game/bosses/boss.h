@@ -27,23 +27,23 @@ typedef enum {
     BOSS_STATE_ATTACK1,
 } BossState;
 
-typedef enum { // TODO: only the first = 0 is needed here
-    BOSS_ANIM_IDLE = 0,
-    BOSS_ANIM_WALK = 1,
-    BOSS_ANIM_ATTACK = 2,
-    BOSS_ANIM_STRAFE_LEFT = 3,
-    BOSS_ANIM_STRAFE_RIGHT = 4,
-    BOSS_ANIM_COMBO_ATTACK = 5,
-    BOSS_ANIM_JUMP_FORWARD = 6,
-    BOSS_ANIM_COMBO_LUNGE = 7,
-    BOSS_ANIM_COMBO_STARTER = 8,
-    BOSS_ANIM_FLIP_ATTACK = 9,
-    BOSS_ANIM_KNEEL = 10,
-    BOSS_ANIM_KNEEL_CUTSCENE = 11,
-    BOSS_ANIM_LUNGE_STARTER = 12,
-    BOSS_ANIM_ATTACK1 = 13,
-    BOSS_ANIM_STOMP1 = 14,
-    BOSS_ANIM_COUNT = 15
+typedef enum {
+    BOSS_ANIM_IDLE,
+    BOSS_ANIM_WALK,
+    BOSS_ANIM_ATTACK,
+    BOSS_ANIM_STRAFE_LEFT,
+    BOSS_ANIM_STRAFE_RIGHT,
+    BOSS_ANIM_COMBO_ATTACK,
+    BOSS_ANIM_JUMP_FORWARD,
+    BOSS_ANIM_COMBO_LUNGE,
+    BOSS_ANIM_COMBO_STARTER,
+    BOSS_ANIM_FLIP_ATTACK,
+    BOSS_ANIM_KNEEL,
+    BOSS_ANIM_KNEEL_CUTSCENE,
+    BOSS_ANIM_LUNGE_STARTER,
+    BOSS_ANIM_ATTACK1,
+    BOSS_ANIM_STOMP1,
+    BOSS_ANIM_COUNT
 } BossAnimState;
 
 typedef enum {
@@ -60,10 +60,10 @@ typedef enum {
 } BossAttackId;
 
 typedef enum {
-    BOSS_ANIM_PRIORITY_LOW = 0,
-    BOSS_ANIM_PRIORITY_NORMAL = 1,
-    BOSS_ANIM_PRIORITY_HIGH = 2,
-    BOSS_ANIM_PRIORITY_CRITICAL = 3  // Death, stagger - always interrupts
+    BOSS_ANIM_PRIORITY_LOW,
+    BOSS_ANIM_PRIORITY_NORMAL,
+    BOSS_ANIM_PRIORITY_HIGH,
+    BOSS_ANIM_PRIORITY_CRITICAL  // Death, stagger - always interrupts
 } BossAnimPriority;
 
 // Boss structure - modules access fields directly but respect ownership:

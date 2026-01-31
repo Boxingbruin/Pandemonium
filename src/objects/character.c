@@ -11,7 +11,7 @@
 #include "joypad_utility.h"
 #include "game_time.h"
 #include "game_math.h"
-#include "globals.h"    
+#include "globals.h"
 
 #include "debug_draw.h"
 #include "game/bosses/boss.h"
@@ -23,6 +23,7 @@
 #include "controllers/audio_controller.h"
 #include "scenes/scene_sfx.h"
 #include "utilities/general_utility.h"
+#include "utilities/sword_trail.h"
 
 /*
  Character Controller
@@ -94,6 +95,8 @@ static const float ATTACK_CROSSFADE_DURATION = 0.08f; // Short crossfade between
 static const float ATTACK_FORWARD_IMPULSE = 35.0f;
 static const float KNOCKDOWN_DURATION = 0.8f;
 static const float KNOCKDOWN_BACK_IMPULSE = 25.0f;
+// Safety: never lock the player in knockdown indefinitely (prevents stun-lock loops)
+static const float KNOCKDOWN_MAX_STUN_SECONDS = 2.0f;
 
 // Input state tracking for edge detection
 static bool lastBPressed = false;
@@ -138,6 +141,29 @@ static const float FOOTSTEP_RUN_INTERVAL  = 0.28f;
 
 static inline void character_play_swing(void) {
     audio_play_scene_sfx_dist(SCENE1_SFX_CHAR_SWING1, 1.0f, 0.0f);
+}
+
+static inline bool character_sword_world_segment(float outBase[3], float outTip[3]) {
+    // Derived from attack_hit_test() sword collider transform
+    if (characterSwordBoneIndex < 0 || !character.skeleton || !character.modelMat) return false;
+
+    T3DSkeleton *sk = (T3DSkeleton*)character.skeleton;
+    const T3DMat4FP *B = &sk->boneMatricesFP[characterSwordBoneIndex]; // bone in MODEL space
+    const T3DMat4FP *M = (const T3DMat4FP*)character.modelMat;         // model in WORLD space
+
+    // Bone-local segment: hilt (0,0,0) to tip along -X
+    const float p0_local[3] = { 0.0f, 0.0f, 0.0f };
+    const float p1_local[3] = { -SWORD_LENGTH, 0.0f, 0.0f };
+
+    // bone-local -> MODEL space
+    float p0_model[3], p1_model[3];
+    mat4fp_mul_point_f32_row3_colbasis(B, p0_local, p0_model);
+    mat4fp_mul_point_f32_row3_colbasis(B, p1_local, p1_model);
+
+    // MODEL -> WORLD space
+    mat4fp_mul_point_f32_row3_colbasis(M, p0_model, outBase);
+    mat4fp_mul_point_f32_row3_colbasis(M, p1_model, outTip);
+    return true;
 }
 
 static inline int character_random_hit_sfx(void) {
@@ -301,6 +327,9 @@ void character_reset(void)
     character.health = character.maxHealth;
     character.damageFlashTimer = 0.0f;
     character.currentAttackHasHit = false;
+
+    // Clear transient VFX state
+    sword_trail_reset();
 }
 
 void character_reset_button_state(void)
@@ -547,7 +576,6 @@ static inline void progress_action_timers(float dt) {
     if (characterState == CHAR_STATE_NORMAL) return;
     if (currentActionDuration <= 0.0001f) currentActionDuration = 1.0f;
     actionTimer += dt / currentActionDuration;
-    if (actionTimer > 1.0f) actionTimer = 1.0f;
 
     if (characterState == CHAR_STATE_ROLLING) {
         T3DAnim* rollAnim = NULL;
@@ -610,7 +638,7 @@ static inline void progress_action_timers(float dt) {
         if (kd && !kd->isPlaying) {
             characterState = CHAR_STATE_NORMAL;
             actionTimer = 0.0f;
-        } else if (actionTimer >= 1.5f) {
+        } else if (actionTimer >= (KNOCKDOWN_MAX_STUN_SECONDS / currentActionDuration)) {
             characterState = CHAR_STATE_NORMAL;
             actionTimer = 0.0f;
         }
@@ -1107,6 +1135,8 @@ static inline void update_animations(float speedRatio, CharacterState state, flo
 /* Initialize character model, skeletons, animations, and camera. */
 void character_init(void)
 {
+    sword_trail_init();
+
     characterModel = t3d_model_load("rom:/knight/knight.t3dm");
     characterShadowModel = t3d_model_load("rom:/blob_shadow/shadow.t3dm");
 
@@ -1246,6 +1276,8 @@ void character_update(void)
     GameState state = scene_get_game_state();
     // Halt all player control while in an end state
     if (state == GAME_STATE_DEAD || state == GAME_STATE_VICTORY) {
+        // Let the trail fade out (no emission)
+        sword_trail_update(deltaTime, false, NULL, NULL);
         movementVelocityX = 0.0f;
         movementVelocityZ = 0.0f;
         character_update_camera();
@@ -1256,6 +1288,9 @@ void character_update(void)
 
     if(scene_get_game_state() == GAME_STATE_TITLE || scene_get_game_state() == GAME_STATE_TITLE_TRANSITION)
     {
+        // Let the trail fade out (no emission)
+        sword_trail_update(deltaTime, false, NULL, NULL);
+
         // Title screen should always use the title idle animation.
         // (Restarting from gameplay otherwise leaves us in CHAR_STATE_NORMAL.)
         if (scene_get_game_state() == GAME_STATE_TITLE) {
@@ -1306,6 +1341,9 @@ void character_update(void)
     }
     // Disable player input during cutscenes & title screen
     if (scene_is_cutscene_active()) {
+        // Let the trail fade out (no emission)
+        sword_trail_update(deltaTime, false, NULL, NULL);
+
         // Still update animations and apply friction, but no player input
         apply_friction(deltaTime, 1.0f);
         update_current_speed(0.0f, deltaTime); // No input magnitude during cutscenes
@@ -1534,6 +1572,22 @@ void character_update(void)
 
     character_anim_apply_pose();
     character_finalize_frame(true);
+
+    // Update sword trail after pose + world matrix are finalized.
+    // Only emit while attacking (normal/strong).
+    bool emitting = false;
+    if (characterState == CHAR_STATE_ATTACKING && !attackEnding) {
+        // Avoid lingering emission during windup/recovery.
+        emitting = (actionTimer >= 0.15f && actionTimer <= 0.75f);
+    } else if (characterState == CHAR_STATE_ATTACKING_STRONG) {
+        emitting = (actionTimer >= 0.20f && actionTimer <= 0.90f);
+    }
+    float baseW[3], tipW[3];
+    if (emitting && character_sword_world_segment(baseW, tipW)) {
+        sword_trail_update(deltaTime, true, baseW, tipW);
+    } else {
+        sword_trail_update(deltaTime, false, NULL, NULL);
+    }
 }
 
 void character_update_position(void) 

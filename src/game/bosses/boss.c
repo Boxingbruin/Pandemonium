@@ -21,6 +21,7 @@
 #include "general_utility.h"
 #include "globals.h"
 #include "utilities/collision_mesh.h"
+#include "utilities/sword_trail.h"
 
 // Forward declarations for internal functions
 static void boss_apply_intent(Boss* boss, const BossIntent* intent);
@@ -43,6 +44,29 @@ static const float BOSS_SHADOW_BASE_ALPHA = 120.0f;    // alpha when on the grou
 static const float BOSS_SHADOW_SHRINK_AMOUNT = 0.35f;  // shrink as boss goes up
 static const float BOSS_JUMP_REF_HEIGHT = 120.0f;      // reference height for full shrink
 static const float BOSS_SHADOW_SIZE_MULT = 3.6f;       // 2x larger than previous
+
+// Sword trail sampling for boss: use the same bone-local segment as the weapon collider.
+static inline bool boss_weapon_world_segment(const Boss* boss, float outBase[3], float outTip[3]) {
+    if (!boss) return false;
+    if (!boss->skeleton || !boss->modelMat) return false;
+    if (boss->handRightBoneIndex < 0) return false;
+
+    T3DSkeleton *sk = (T3DSkeleton*)boss->skeleton;
+    const T3DMat4FP *B = &sk->boneMatricesFP[boss->handRightBoneIndex]; // bone in MODEL space
+    const T3DMat4FP *M = (const T3DMat4FP*)boss->modelMat;             // model in WORLD space
+
+    const float p0_local[3] = { 0.0f, 0.0f, 0.0f };
+    const float len = 640.0f;
+    const float p1_local[3] = { -len, 0.0f, 0.0f };
+
+    float p0_model[3], p1_model[3];
+    mat4fp_mul_point_f32_row3_colbasis(B, p0_local, p0_model);
+    mat4fp_mul_point_f32_row3_colbasis(B, p1_local, p1_model);
+
+    mat4fp_mul_point_f32_row3_colbasis(M, p0_model, outBase);
+    mat4fp_mul_point_f32_row3_colbasis(M, p1_model, outTip);
+    return true;
+}
 
 // Apply intent from AI to animation system
 static void boss_apply_intent(Boss* boss, const BossIntent* intent) {
@@ -314,6 +338,15 @@ void boss_update(Boss* boss) {
     
     // 6. Update transforms (matrices, hitboxes, etc.)
     boss_update_transforms(boss);
+
+    // Boss sword trail: emit only while the attack collider is active.
+    SwordTrail *trail = sword_trail_get_boss();
+    float baseW[3], tipW[3];
+    if (boss->handAttackColliderActive && boss_weapon_world_segment(boss, baseW, tipW)) {
+        sword_trail_instance_update(trail, dt, true, baseW, tipW);
+    } else {
+        sword_trail_instance_update(trail, dt, false, NULL, NULL);
+    }
     
     //boss_update_weapon_collider_from_hand(boss);
 }
@@ -365,6 +398,9 @@ void boss_apply_damage(Boss* boss, float amount) {
 
 void boss_init(Boss* boss) {
     if (!boss) return;
+
+    // Ensure the boss trail starts clean when the boss is created.
+    sword_trail_instance_init(sword_trail_get_boss());
     
     // Load model
     T3DModel* bossModel = t3d_model_load("rom:/boss/boss_anim.t3dm"); 
@@ -619,6 +655,9 @@ void boss_init(Boss* boss) {
 
 void boss_reset(Boss* boss) {
     if (!boss) return;
+
+    // Clear any lingering trail samples when restarting the fight.
+    sword_trail_instance_reset(sword_trail_get_boss());
 
     // Restore spawn transform first so any derived state uses the correct basis.
     boss->pos[0] = 0.0f;

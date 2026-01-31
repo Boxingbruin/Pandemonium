@@ -26,9 +26,18 @@
 #include "utilities/collision_mesh.h"
 #include "utilities/simple_collision_utility.h"
 #include "utilities/game_math.h"
+#include "utilities/animation_utility.h"
 
 // Access global character instance
 extern Character character;
+
+static inline void boss_attacks_on_player_hit(float damage)
+{
+    if (damage <= 25.0f) return;
+
+    // Fixed, noticeable impulse (units are world-space and applied in camera right/up).
+    animation_utility_set_screen_shake_mag(45.0f);
+}
 
 // Forward declarations
 static void boss_attacks_handle_power_jump(Boss* boss, float dt);
@@ -161,6 +170,7 @@ static void boss_attacks_handle_power_jump(Boss* boss, float dt) {
             boss->sphereAttackColliderActive = true;
             if (dist < 6.0f) {
                 character_apply_damage(35.0f);
+                boss_attacks_on_player_hit(35.0f);
                 boss->currentAttackHasHit = true;
             }
         }
@@ -263,6 +273,7 @@ static void boss_attacks_handle_combo(Boss* boss, float dt)
         boss->handAttackColliderActive = true;
         if (!boss->currentAttackHasHit && bossWeaponCollision) {
             character_apply_damage(18.0f);
+            boss_attacks_on_player_hit(18.0f);
             boss->currentAttackHasHit = true;
         }
     }
@@ -270,6 +281,7 @@ static void boss_attacks_handle_combo(Boss* boss, float dt)
         boss->handAttackColliderActive = true;
         if (!boss->currentAttackHasHit && bossWeaponCollision) {
             character_apply_damage(25.0f);
+            boss_attacks_on_player_hit(25.0f);
             boss->currentAttackHasHit = true;
         }
     }
@@ -325,6 +337,7 @@ static void boss_attacks_handle_throw(Boss* boss, float dt) // TODO: add after t
         float hitDist = sqrtf(hitDx*hitDx + hitDy*hitDy + hitDz*hitDz);
         if (hitDist < 3.0f && !boss->currentAttackHasHit) {
             character_apply_damage(20.0f);
+            boss_attacks_on_player_hit(20.0f);
             //boss_play_attack_sfx(boss, SCENE1_SFX_BOSS_SMASH2, 0.0f);
             boss->currentAttackHasHit = true;
             boss->comboStarterSlamHasHit = true;
@@ -347,14 +360,14 @@ static void boss_attacks_handle_throw(Boss* boss, float dt) // TODO: add after t
         
         if (impactDist < 5.0f && !boss->currentAttackHasHit) {
             character_apply_damage(15.0f);
+            boss_attacks_on_player_hit(15.0f);
             // boss_debug_sound("boss_attack_success");
             boss->currentAttackHasHit = true;
         }
     }
 }
 
-static void boss_attacks_handle_combo_starter(Boss* boss, float dt)
-{
+static void boss_attacks_handle_combo_starter(Boss* boss, float dt) {
     const float hitStart = 1.0f;
     const float hitEnd   = 2.0f;
 
@@ -363,6 +376,7 @@ static void boss_attacks_handle_combo_starter(Boss* boss, float dt)
         boss->handAttackColliderActive  = true;
         if (!boss->currentAttackHasHit && bossWeaponCollision) {
             character_apply_damage(18.0f);
+            boss_attacks_on_player_hit(18.0f);
             boss->currentAttackHasHit = true;
         }
     }
@@ -393,8 +407,7 @@ static void boss_attacks_handle_combo_starter(Boss* boss, float dt)
 
 
 // For distance based lunges, anticipation is added.
-static void boss_attacks_handle_lunge_starter(Boss* boss, float dt)
-{
+static void boss_attacks_handle_lunge_starter(Boss* boss, float dt) {
     boss->velX = 0.0f;
     boss->velZ = 0.0f;
 
@@ -432,6 +445,7 @@ static void boss_attacks_handle_roar_stomp(Boss* boss, float dt) {
             // Damage decreases with distance
             float damage = 30.0f * (1.0f - (dist / shockwaveRadius));
             character_apply_damage(damage);
+            boss_attacks_on_player_hit(damage);
             // boss_debug_sound("boss_attack_success");
             boss->currentAttackHasHit = true;
         }
@@ -441,8 +455,7 @@ static void boss_attacks_handle_roar_stomp(Boss* boss, float dt) {
     // (AI will check stateTimer > 2.0f and transition to STRAFE)
 }
 
-static void boss_attacks_handle_tracking_slam(Boss* boss, float dt)
-{
+static void boss_attacks_handle_tracking_slam(Boss* boss, float dt) {
 
     const float hitStart = 2.5f;
     const float hitEnd   = 3.5f;
@@ -452,6 +465,7 @@ static void boss_attacks_handle_tracking_slam(Boss* boss, float dt)
         boss->handAttackColliderActive  = true;
         if (!boss->currentAttackHasHit && bossWeaponCollision) {
             character_apply_damage(30.0f);
+            boss_attacks_on_player_hit(30.0f);
             boss->currentAttackHasHit = true;
         }
     }
@@ -500,8 +514,7 @@ static void boss_attacks_handle_tracking_slam(Boss* boss, float dt)
     boss_multi_attack_sfx(boss, bossSlowAttackSfx, 2);
 }
 
-static void boss_attacks_handle_charge(Boss* boss, float dt)
-{
+static void boss_attacks_handle_charge(Boss* boss, float dt) {
     const float lungeStart = 0.15f;
     const float lungeEnd   = 0.55f;
 
@@ -511,6 +524,7 @@ static void boss_attacks_handle_charge(Boss* boss, float dt)
         //boss->sphereAttackColliderActive = true;
         if (!boss->currentAttackHasHit && bossWeaponCollision) {
             character_apply_damage(18.0f);
+            boss_attacks_on_player_hit(18.0f);
             boss->currentAttackHasHit = true;
         }
     }
@@ -637,6 +651,7 @@ static void boss_attacks_handle_stomp(Boss* boss, float dt)
             // float damage = 40.0f * (1.0f - (dist / radius)); // falloff
             // if (damage < 6.0f) damage = 6.0f;               // minimum chip
             character_apply_damage(40.0f);
+            boss_attacks_on_player_hit(40.0f);
             boss->currentAttackHasHit = true;
         }
     }
@@ -654,6 +669,7 @@ static void boss_attacks_handle_attack1(Boss* boss, float dt)
         boss->handAttackColliderActive  = true;
         if (!boss->currentAttackHasHit && bossWeaponCollision) {
             character_apply_damage(18.0f);
+            boss_attacks_on_player_hit(18.0f);
             boss->currentAttackHasHit = true;
         }
     }
@@ -747,6 +763,7 @@ static void boss_attacks_handle_flip_attack(Boss* boss, float dt)
 
         if (dist <= SPHERE_RADIUS) {
             character_apply_damage(sphereDamage);
+            boss_attacks_on_player_hit(sphereDamage);
             boss->currentAttackHasHit = true;
         }
     }
@@ -759,6 +776,7 @@ static void boss_attacks_handle_flip_attack(Boss* boss, float dt)
         boss->handAttackColliderActive  = true;
         if (!boss->currentAttackHasHit && bossWeaponCollision) {
             character_apply_damage(18.0f);
+            boss_attacks_on_player_hit(18.0f);
             boss->currentAttackHasHit = true;
         }
     }

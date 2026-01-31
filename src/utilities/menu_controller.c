@@ -47,7 +47,8 @@ void menu_controller_init(void) {
     selectedOption = 0;
     menuActive = false;
     
-    pauseMenuBg = sprite_load("rom:/pauseMenuBg.sprite");
+    // Use the vertical dialog sprite as the pause menu background
+    pauseMenuBg = sprite_load("rom:/dialog_vertical.ia8.sprite");
     if (pauseMenuBg) {
         pauseMenuBgSurf = sprite_get_pixels(pauseMenuBg);
     }
@@ -207,20 +208,32 @@ static void draw_pause_menu_background(int x, int y, int dialogWidth, int dialog
     int imgW = pauseMenuBgSurf.width;
     int imgH = pauseMenuBgSurf.height;
 
-    // Scale uniformly so the single image covers the area, then center it
-    float scaleX = (float)dialogWidth / (float)imgW;
-    float scaleY = (float)dialogHeight / (float)imgH;
-    float scale = (scaleX > scaleY) ? scaleX : scaleY;
-    int drawW = (int)(imgW * scale);
-    int drawH = (int)(imgH * scale);
-    int drawX = x + (dialogWidth - drawW) / 2;
-    int drawY = y + (dialogHeight - drawH) / 2;
+    // "Fit + center" (keep aspect ratio) so the vertical dialog sprite doesn't get blown up too much.
+    // Optionally stretch a bit on X to better match the menu frame.
+    const float maxScaleX = (float)dialogWidth / (float)imgW;
+    const float maxScaleY = (float)dialogHeight / (float)imgH;
+    const float fitScale = (maxScaleX < maxScaleY) ? maxScaleX : maxScaleY;
 
+    // Let the background fill more of the menu frame.
+    const float heightShrink = 0.98f;
+    const float baseScale = fitScale * heightShrink;
+
+    const float extraXStretch = 1.15f;
+    float scaleX = baseScale * extraXStretch;
+    if (scaleX > maxScaleX) scaleX = maxScaleX;
+    const float scaleY = baseScale;
+
+    const int drawW = (int)(imgW * scaleX);
+    const int drawH = (int)(imgH * scaleY);
+    const int drawX = x + (dialogWidth - drawW) / 2;
+    const int drawY = y + (dialogHeight - drawH) / 2;
+
+    // Respect sprite alpha so transparent areas don't draw as black.
     rdpq_mode_alphacompare(1);
     rdpq_tex_blit(&pauseMenuBgSurf, drawX, drawY, &(rdpq_blitparms_t){
-        .scale_x = scale,
-        .scale_y = scale,
-    });
+            .scale_x = scaleX,
+            .scale_y = scaleY,
+        });
 }
 
 void menu_controller_draw(void) {
@@ -229,10 +242,12 @@ void menu_controller_draw(void) {
     }
     
     // Use different dialog sizes based on current menu
-    int dialogWidth, dialogHeight;
-    if (currentMenu == MENU_MAIN) {
-        dialogWidth = 280;
-        dialogHeight = 280;
+    // Make the pause menu panel as large as possible within the 320x240 screen.
+    const int dialogMarginX = 0; // pixels of margin on each side
+    int dialogWidth = SCREEN_WIDTH - (dialogMarginX * 2);
+    int dialogHeight = 200;
+    if (currentMenu == MENU_AUDIO) {
+        dialogHeight = 230;
     }
     
     // Draw custom menu background
@@ -265,21 +280,30 @@ void menu_controller_draw(void) {
     rdpq_fill_rectangle(x + 3, y + 3, x + dialogWidth - 3, y + 4);       // Top highlight
     rdpq_fill_rectangle(x + 3, y + 3, x + 4, y + dialogHeight - 3);      // Left highlight
     
-    // Calculate centered text positioning
-    x += 20;
-    y += 20;
+    // Text padding inside the frame (keep modest; dialog size controls overall space)
+    const int paddingX = 30;
+    const int paddingY = 20;
+    const int contentX = x + paddingX;
+    const int contentY = y + paddingY;
+    const int contentW = dialogWidth - (paddingX * 2);
+    const int contentH = dialogHeight - (paddingY * 2);
+
+    // Cursor for rendering text lines
+    x = contentX;
+    y = contentY;
     int lineHeight = 16;
+    const int titleYOffset = 8;
     
     if (currentMenu == MENU_MAIN) {
         // Draw main menu with centered text
         rdpq_text_printf(&(rdpq_textparms_t){
             .align = ALIGN_CENTER,
-            .width = dialogWidth - 40,
-            .height = dialogHeight - 40,
+            .width = contentW,
+            .height = contentH,
             .wrap = WRAP_WORD,
-        }, FONT_UNBALANCED, x, y, "PAUSE MENU");
+        }, FONT_UNBALANCED, x, y + titleYOffset, "PAUSE MENU");
         
-        y += lineHeight * 3;
+        y += (lineHeight * 3) + titleYOffset;
         
         for (int i = 0; i < MENU_MAIN_COUNT; i++) {
             // Highlight selected option
@@ -287,16 +311,16 @@ void menu_controller_draw(void) {
                 rdpq_set_prim_color(RGBA32(255, 255, 0, 255));
                 rdpq_text_printf(&(rdpq_textparms_t){
                     .align = ALIGN_CENTER,
-                    .width = dialogWidth - 40,
-                    .height = dialogHeight - 40,
+                    .width = contentW,
+                    .height = contentH,
                     .wrap = WRAP_WORD,
                 }, FONT_UNBALANCED, x, y, "> %s", mainMenuOptions[i]);
                 rdpq_set_prim_color(RGBA32(255, 255, 255, 255));
             } else {
                 rdpq_text_printf(&(rdpq_textparms_t){
                     .align = ALIGN_CENTER,
-                    .width = dialogWidth - 40,
-                    .height = dialogHeight - 40,
+                    .width = contentW,
+                    .height = contentH,
                     .wrap = WRAP_WORD,
                 }, FONT_UNBALANCED, x, y, "%s", mainMenuOptions[i]);
             }
@@ -306,12 +330,12 @@ void menu_controller_draw(void) {
         // Draw audio menu with centered text
         rdpq_text_printf(&(rdpq_textparms_t){
             .align = ALIGN_CENTER,
-            .width = dialogWidth - 40,
-            .height = dialogHeight - 40,
+            .width = contentW,
+            .height = contentH,
             .wrap = WRAP_WORD,
-        }, FONT_UNBALANCED, x, y, "AUDIO SETTINGS");
+        }, FONT_UNBALANCED, x, y + titleYOffset, "AUDIO SETTINGS");
         
-        y += lineHeight * 3;
+        y += (lineHeight * 3) + titleYOffset;
         
         for (int i = 0; i < MENU_AUDIO_COUNT; i++) {
             char optionText[64];
@@ -337,16 +361,16 @@ void menu_controller_draw(void) {
                 rdpq_set_prim_color(RGBA32(255, 255, 0, 255));
                 rdpq_text_printf(&(rdpq_textparms_t){
                     .align = ALIGN_CENTER,
-                    .width = dialogWidth - 40,
-                    .height = dialogHeight - 40,
+                    .width = contentW,
+                    .height = contentH,
                     .wrap = WRAP_WORD,
                 }, FONT_UNBALANCED, x, y, "> %s", optionText);
                 rdpq_set_prim_color(RGBA32(255, 255, 255, 255));
             } else {
                 rdpq_text_printf(&(rdpq_textparms_t){
                     .align = ALIGN_CENTER,
-                    .width = dialogWidth - 40,
-                    .height = dialogHeight - 40,
+                    .width = contentW,
+                    .height = contentH,
                     .wrap = WRAP_WORD,
                 }, FONT_UNBALANCED, x, y, "%s", optionText);
             }
@@ -357,8 +381,8 @@ void menu_controller_draw(void) {
         y += lineHeight;
         rdpq_text_printf(&(rdpq_textparms_t){
             .align = ALIGN_CENTER,
-            .width = dialogWidth - 40,
-            .height = dialogHeight - 40,
+            .width = contentW,
+            .height = contentH,
             .wrap = WRAP_WORD,
         }, FONT_UNBALANCED, x, y, "< > to adjust, B to go back");
     }

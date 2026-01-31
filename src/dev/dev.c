@@ -21,7 +21,7 @@
 
 #include "globals.h"
 
-bool debugDraw = true;
+bool debugDraw = false;
 
 static bool displayMetrics = false;
 static bool requestDisplayMetrics = false;
@@ -31,13 +31,13 @@ static float lightAzimuth = 0.0f;   // Rotation around Y axis (left/right)
 static float lightElevation = 0.0f; // Rotation around X axis (up/down)
 
 enum {
-    DEV_NONE = 0,
-    DEV_FREECAM = 1,
-    DEV_LIGHTDIR = 2,
-    DEV_CAMPOS = 3,
-    DEV_COLLISION = 4,
-    DEV_RSPQ_PROFILER = 5,
-    DEV_MEMORY_DEBUG = 6,
+    DEV_NONE,
+    DEV_FREECAM,
+    DEV_LIGHTDIR,
+    DEV_CAMPOS,
+    DEV_COLLISION,
+    DEV_RSPQ_PROFILER,
+    DEV_MEMORY_DEBUG,
 };
 static int rowCount = 6;
 static int controlling = DEV_NONE;

@@ -17,8 +17,7 @@
 
 #define DITHER_ENABLED false
 #define ARES_AA_ENABLED false
-enum
-{
+enum {
     FONT_UNBALANCED = 2,
 };
 

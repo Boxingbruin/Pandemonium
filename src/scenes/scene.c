@@ -34,6 +34,7 @@
 //#include "collision_mesh.h"
 #include "collision_system.h"
 #include "letterbox_utility.h"
+#include "utilities/sword_trail.h"
 
 // TODO: This should not be declared in the header file, as it is only used externally (temp)
 #include "dev.h"
@@ -240,6 +241,13 @@ bool cutsceneDialogActive = false;
 // Boss title fade control (shown during intro, fades out when fight starts)
 static float bossTitleFade = 0.0f;
 static float bossTitleFadeSpeed = 1.8f;
+
+// Victory title card ("Enemy restored") timing/state
+static float victoryTitleTimer = 0.0f;
+static bool victoryTitleDone = false;
+static const float VICTORY_TITLE_FADEIN_S  = 0.75f;
+static const float VICTORY_TITLE_HOLD_S    = 1.10f;
+static const float VICTORY_TITLE_FADEOUT_S = 0.90f;
 
 // progress for boss/player UIs
 static float bossUiIntro = 1.0f;
@@ -804,6 +812,10 @@ void scene_reset(void)
     display_utility_set_boss_ui_intro(bossUiIntro);
     display_utility_set_player_ui_intro(playerUiIntro);
 
+    // Victory end-card state
+    victoryTitleTimer = 0.0f;
+    victoryTitleDone = false;
+
     // Reset letterbox to show state for intro
     letterbox_show(false);
 }
@@ -831,7 +843,19 @@ GameState scene_get_game_state(void) {
 }
 
 void scene_set_game_state(GameState state) {
+    if (state == gameState) return;
+
+    GameState prev = gameState;
     gameState = state;
+
+    // Reset the victory title card whenever we enter or leave victory
+    if (state == GAME_STATE_VICTORY && prev != GAME_STATE_VICTORY) {
+        victoryTitleTimer = 0.0f;
+        victoryTitleDone = false;
+    } else if (prev == GAME_STATE_VICTORY && state != GAME_STATE_VICTORY) {
+        victoryTitleTimer = 0.0f;
+        victoryTitleDone = false;
+    }
 }
 
 bool scene_is_menu_active(void) {
@@ -1476,6 +1500,16 @@ void scene_update(void)
         // Continue letterbox animation updates
         letterbox_update();
 
+        // Advance victory title animation timer
+        if (gameState == GAME_STATE_VICTORY && !victoryTitleDone) {
+            const float total = VICTORY_TITLE_FADEIN_S + VICTORY_TITLE_HOLD_S + VICTORY_TITLE_FADEOUT_S;
+            victoryTitleTimer += deltaTime;
+            if (victoryTitleTimer >= total) {
+                victoryTitleTimer = total;
+                victoryTitleDone = true;
+            }
+        }
+
         // Allow restart prompt via A button
         if (btn.a) {
             scene_restart();
@@ -1490,6 +1524,11 @@ void scene_update(void)
 
     if(cutsceneState == CUTSCENE_NONE) // Normal gameplay
     {
+        // Debug: press L to force victory (useful for testing the victory title card)
+        if (btn.l) {
+            scene_set_game_state(GAME_STATE_VICTORY);
+            return;
+        }
         
         character_update();
         // Constrain player inside obbs
@@ -1498,6 +1537,11 @@ void scene_update(void)
         character_update_position();
         if (bossActivated && g_boss) {
             boss_update(g_boss);
+            // Trigger victory when the boss dies
+            if (g_boss->health <= 0.0f) {
+                scene_set_game_state(GAME_STATE_VICTORY);
+                return;
+            }
         }
 
         collision_update();
@@ -2248,6 +2292,9 @@ void scene_draw(T3DViewport *viewport)
     t3d_matrix_pop(1); 
     // ===== DRAW 2D =====
 
+    // Screen-space ribbon trails, drawn right after 3D so they feel "in world"
+    sword_trail_draw_all(viewport);
+
     // Overlay lock-on marker above the boss
     if(DEV_MODE)
         draw_lockon_indicator(viewport);
@@ -2315,24 +2362,79 @@ void scene_draw(T3DViewport *viewport)
     }
     
     if (isEndScreen) {
-        // Full-screen overlay with prompt to restart
         rdpq_sync_pipe();
         rdpq_set_mode_standard();
-        // Use semi-transparent black to keep scene visible underneath
-        rdpq_set_prim_color(RGBA32(0, 0, 0, 140));
-        rdpq_fill_rectangle(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT);
-        rdpq_set_prim_color(RGBA32(255, 255, 255, 255));
-        
-        const char* header = isVictory ? "Victory!" : "You Died";
-        const char* prompt = "Press A to restart";
-        rdpq_text_printf(&(rdpq_textparms_t){
-            .align = ALIGN_CENTER,
-            .width = SCREEN_WIDTH,
-        }, FONT_UNBALANCED, 0, SCREEN_HEIGHT / 2 - 12, "%s", header);
-        rdpq_text_printf(&(rdpq_textparms_t){
-            .align = ALIGN_CENTER,
-            .width = SCREEN_WIDTH,
-        }, FONT_UNBALANCED, 0, SCREEN_HEIGHT / 2 + 4, "%s", prompt);
+        rdpq_mode_blender(RDPQ_BLENDER_MULTIPLY);
+        rdpq_mode_combiner(RDPQ_COMBINER_FLAT);
+
+        if (isDead) {
+            // Full-screen overlay with prompt to restart
+            rdpq_set_prim_color(RGBA32(0, 0, 0, 140));
+            rdpq_fill_rectangle(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT);
+            rdpq_set_prim_color(RGBA32(255, 255, 255, 255));
+
+            rdpq_text_printf(&(rdpq_textparms_t){
+                .align = ALIGN_CENTER,
+                .width = SCREEN_WIDTH,
+            }, FONT_UNBALANCED, 0, SCREEN_HEIGHT / 2 - 12, "%s", "You Died");
+            rdpq_text_printf(&(rdpq_textparms_t){
+                .align = ALIGN_CENTER,
+                .width = SCREEN_WIDTH,
+            }, FONT_UNBALANCED, 0, SCREEN_HEIGHT / 2 + 4, "%s", "Press A to restart");
+            return;
+        }
+
+        // Victory: Dark Souls–style title fade ("Enemy restored")
+        {
+            const float fadeIn = VICTORY_TITLE_FADEIN_S;
+            const float hold = VICTORY_TITLE_HOLD_S;
+            const float fadeOut = VICTORY_TITLE_FADEOUT_S;
+            const float total = fadeIn + hold + fadeOut;
+
+            float t = victoryTitleTimer;
+            if (t < 0.0f) t = 0.0f;
+            if (t > total) t = total;
+
+            float a01 = 0.0f;
+            if (t < fadeIn) {
+                a01 = (fadeIn > 0.0f) ? (t / fadeIn) : 1.0f;
+            } else if (t < fadeIn + hold) {
+                a01 = 1.0f;
+            } else {
+                float u = (fadeOut > 0.0f) ? ((t - (fadeIn + hold)) / fadeOut) : 1.0f;
+                if (u < 0.0f) u = 0.0f;
+                if (u > 1.0f) u = 1.0f;
+                a01 = 1.0f - u;
+            }
+
+            uint8_t textA = (uint8_t)fmaxf(0.0f, fminf(255.0f, a01 * 255.0f));
+            uint8_t barA  = (uint8_t)fmaxf(0.0f, fminf(200.0f, a01 * 140.0f));
+
+            if (!victoryTitleDone) {
+                if (textA > 0) {
+                    int barWidth = 250;
+                    int barHeight = 28;
+                    int barLeft = (SCREEN_WIDTH - barWidth) / 2;
+                    int barTop = (SCREEN_HEIGHT / 2) - (barHeight / 2) - 2;
+
+                    rdpq_set_prim_color(RGBA32(0, 0, 0, barA));
+                    rdpq_fill_rectangle(barLeft, barTop, barLeft + barWidth, barTop + barHeight);
+
+                    rdpq_set_prim_color(RGBA32(255, 255, 255, textA));
+                    rdpq_text_printf(&(rdpq_textparms_t){
+                        .align = ALIGN_CENTER,
+                        .width = SCREEN_WIDTH,
+                    }, FONT_UNBALANCED, 0, SCREEN_HEIGHT / 2 - 8, "%s", "Enemy restored");
+                }
+            } else {
+                // After the title fades out, show a subtle prompt
+                rdpq_set_prim_color(RGBA32(255, 255, 255, 255));
+                rdpq_text_printf(&(rdpq_textparms_t){
+                    .align = ALIGN_CENTER,
+                    .width = SCREEN_WIDTH,
+                }, FONT_UNBALANCED, 0, SCREEN_HEIGHT / 2 + 6, "%s", "Press A to restart");
+            }
+        }
         return;
     }
     
