@@ -1517,7 +1517,7 @@ void character_update(void)
             if (!character.currentAttackHasHit && attack_hit_test()) {
                 Boss* boss = boss_get_instance();
                 if (boss) {
-                    boss_apply_damage(boss, 1000);
+                    boss_apply_damage(boss, damage);
                 }
                 character.currentAttackHasHit = true; // Mark attack as having hit
                 character_play_hit();
