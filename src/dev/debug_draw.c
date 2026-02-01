@@ -23,6 +23,7 @@ uint16_t DEBUG_COLORS[6] = {
 static void debug_draw_line(int px0, int py0, int px1, int py1, uint16_t color)
 {
     uint16_t *fb = offscreenBuffer.buffer;
+    if (!fb) return;
 
     uint32_t width = display_get_width();
     uint32_t height = display_get_height();

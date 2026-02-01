@@ -49,11 +49,12 @@ void draw_boss_health_bar(const char *name, float ratio, float flash)
 	rdpq_mode_blender(RDPQ_BLENDER_MULTIPLY);
 	
 	// Background bar (darker so the red fill is clearly visible as it shrinks)
-	float margin = 10.0f;
-	int left = margin;
-	int right = SCREEN_WIDTH - margin;
-	int top = 5;
-	int bottom = 17;
+	// Keep inside title-safe area and reduce width a bit vs the old full-width bar.
+	const int marginX = TITLE_SAFE_MARGIN_X + 10;
+	int left = marginX;
+	int right = SCREEN_WIDTH - marginX;
+	int top = TITLE_SAFE_MARGIN_Y;       // move down into title-safe
+	int bottom = top + 12;
 
 	// center-out growth only (no vertical slide)
 	float p = boss_ui_intro;
@@ -127,13 +128,12 @@ void draw_player_health_bar(const char *name, float ratio, float flash)
 	rdpq_mode_combiner(RDPQ_COMBINER_FLAT);
 	rdpq_mode_blender(RDPQ_BLENDER_MULTIPLY);
 	
-	// Smaller background bar positioned at bottom-right
+	// Smaller background bar positioned near bottom-left (inside title-safe).
 	float barWidth = 120.0f;  // Smaller than boss bar
 	float barHeight = 8.0f;   // Smaller height
-	float margin = 10.0f;
-	float left = margin;
+	float left = (float)TITLE_SAFE_MARGIN_X; // move right into title-safe
 	float right = left + barWidth;
-	float bottom = SCREEN_HEIGHT - margin;
+	float bottom = (float)(SCREEN_HEIGHT - TITLE_SAFE_MARGIN_Y); // move up into title-safe
 	float top = bottom - barHeight;
 
 	// Slide from bottom (no alpha fade); full-width bar (no center reveal)

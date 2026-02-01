@@ -9,13 +9,25 @@
 
 // Menu state
 static MenuState currentMenu = MENU_MAIN;
+static MenuState parentMenu = MENU_MAIN;
 static int selectedOption = 0;
+static int parentSelectedOption = 0;
 static bool menuActive = false;
 static bool musicWasPaused = false;
+static bool menuIsTitleMenu = false;
+static GameState menuReturnState = GAME_STATE_PLAYING;
 
 // Pause menu background
 static sprite_t *pauseMenuBg = NULL;
 static surface_t pauseMenuBgSurf = {0};
+
+// Controls menu icons (prefer black-outline set for readability on bright backgrounds)
+static sprite_t *iconA = NULL;
+static sprite_t *iconB = NULL;
+static sprite_t *iconZ = NULL;
+static sprite_t *iconStart = NULL;
+static sprite_t *iconStick = NULL;
+static sprite_t *iconCLeft = NULL;
 
 // Input handling for edge detection
 static bool lastStartPressed = false;
@@ -25,12 +37,22 @@ static bool lastLeftPressed = false;
 static bool lastRightPressed = false;
 static bool lastAPressed = false;
 static bool lastBPressed = false;
+static bool lastStickUp = false;
+static bool lastStickDown = false;
 
 // Menu text
 static const char* mainMenuOptions[MENU_MAIN_COUNT] = {
     "Resume",
     "Restart",
     "Audio Settings",
+    "Controls",
+};
+
+static const char* titleMenuOptions[MENU_TITLE_COUNT] = {
+    "Play",
+    "Audio Settings",
+    "Controls",
+    "Credits",
 };
 
 static const char* audioMenuOptions[MENU_AUDIO_COUNT] = {
@@ -44,26 +66,64 @@ static const char* audioMenuOptions[MENU_AUDIO_COUNT] = {
 
 void menu_controller_init(void) {
     currentMenu = MENU_MAIN;
+    parentMenu = MENU_MAIN;
     selectedOption = 0;
+    parentSelectedOption = 0;
     menuActive = false;
+    menuIsTitleMenu = false;
     
     // Use the vertical dialog sprite as the pause menu background
     pauseMenuBg = sprite_load("rom:/dialog_vertical.ia8.sprite");
     if (pauseMenuBg) {
         pauseMenuBgSurf = sprite_get_pixels(pauseMenuBg);
     }
+
+    // Load button icons for the Controls submenu
+    // NOTE: Prefer black-outline sprites so they're visible on light/busy backgrounds.
+    // A is currently only available as a colored RGBA sprite in the white-outline set.
+    iconA = sprite_load("rom:/buttons/WhiteOutlineButtons/a.rgba16.sprite");
+
+    iconB = sprite_load("rom:/buttons/WhiteOutlineButtons/B.sprite");
+    iconZ = sprite_load("rom:/buttons/WhiteOutlineButtons/Z.sprite");
+    iconStart = sprite_load("rom:/buttons/WhiteOutlineButtons/Start.sprite");
+    iconStick = sprite_load("rom:/buttons/WhiteOutlineButtons/StickTexture.sprite");
+    iconCLeft = sprite_load("rom:/buttons/WhiteOutlineButtons/CLeft.sprite");
 }
 
 void menu_controller_update(void) {
     GameState state = scene_get_game_state();
-    if (state == GAME_STATE_DEAD || state == GAME_STATE_VICTORY) {
+    // Allow pause menu during victory (eg. after defeating the boss).
+    // Still disable during death screen.
+    if (state == GAME_STATE_DEAD) {
         return;
     }
 
-    // Only allow the pause menu during gameplay.
-    // While in GAME_STATE_MENU we still need to process menu input to allow closing/navigating.
-    if (state != GAME_STATE_PLAYING && state != GAME_STATE_MENU) {
+    // Hide title menu during the transition/cinematic move.
+    if (state == GAME_STATE_TITLE_TRANSITION) {
+        if (menuActive && menuIsTitleMenu) {
+            menuActive = false;
+        }
         return;
+    }
+
+    // Only allow the pause menu during gameplay/victory.
+    // While in GAME_STATE_MENU we still need to process menu input to allow closing/navigating.
+    // While in GAME_STATE_TITLE we use the same controller for the title menu.
+    if (state != GAME_STATE_PLAYING && state != GAME_STATE_MENU && state != GAME_STATE_TITLE && state != GAME_STATE_VICTORY) {
+        return;
+    }
+
+    // Title menu should always be visible (no "press Start to open").
+    if (state == GAME_STATE_TITLE) {
+        menuIsTitleMenu = true;
+        // Only initialize when it is closed; do NOT stomp submenus.
+        if (!menuActive) {
+            menuActive = true;
+            currentMenu = MENU_TITLE;
+            parentMenu = MENU_TITLE;
+            parentSelectedOption = 0;
+            selectedOption = 0;
+        }
     }
 
     // Handle start button to toggle menu
@@ -71,9 +131,9 @@ void menu_controller_update(void) {
     bool startJustPressed = startPressed && !lastStartPressed;
     lastStartPressed = startPressed;
     
-    if (startJustPressed) {
+    if (startJustPressed && state != GAME_STATE_TITLE) {
         // Don't allow pausing during cutscenes
-        if (!scene_is_cutscene_active()) {
+        if (!scene_is_cutscene_active() && state != GAME_STATE_TITLE_TRANSITION) {
             menu_controller_toggle();
         }
         return;
@@ -104,19 +164,43 @@ void menu_controller_update(void) {
     lastRightPressed = rightPressed;
     lastAPressed = aPressed;
     lastBPressed = bPressed;
+
+    // Add analog-stick navigation on title/pause menus (edge-triggered)
+    const int stickThreshold = 40;
+    bool stickUp = (joypad.stick_y > stickThreshold);
+    bool stickDown = (joypad.stick_y < -stickThreshold);
+    bool stickUpJustPressed = stickUp && !lastStickUp;
+    bool stickDownJustPressed = stickDown && !lastStickDown;
+    lastStickUp = stickUp;
+    lastStickDown = stickDown;
+
+    if (state == GAME_STATE_TITLE && startJustPressed) {
+        // On title, Start should act like A (activate current selection)
+        aJustPressed = true;
+    }
     
     // Navigation between options
-    if (upJustPressed) {
+    if (upJustPressed || stickUpJustPressed) {
         selectedOption--;
-        int maxOptions = (currentMenu == MENU_MAIN) ? MENU_MAIN_COUNT : MENU_AUDIO_COUNT;
+        int maxOptions = 0;
+        if (currentMenu == MENU_MAIN) maxOptions = MENU_MAIN_COUNT;
+        else if (currentMenu == MENU_TITLE) maxOptions = MENU_TITLE_COUNT;
+        else if (currentMenu == MENU_AUDIO) maxOptions = MENU_AUDIO_COUNT;
+        else if (currentMenu == MENU_CONTROLS) maxOptions = 1;
+        else if (currentMenu == MENU_CREDITS) maxOptions = 1;
         if (selectedOption < 0) {
             selectedOption = maxOptions - 1; // Wrap to bottom
         }
     }
     
-    if (downJustPressed) {
+    if (downJustPressed || stickDownJustPressed) {
         selectedOption++;
-        int maxOptions = (currentMenu == MENU_MAIN) ? MENU_MAIN_COUNT : MENU_AUDIO_COUNT;
+        int maxOptions = 0;
+        if (currentMenu == MENU_MAIN) maxOptions = MENU_MAIN_COUNT;
+        else if (currentMenu == MENU_TITLE) maxOptions = MENU_TITLE_COUNT;
+        else if (currentMenu == MENU_AUDIO) maxOptions = MENU_AUDIO_COUNT;
+        else if (currentMenu == MENU_CONTROLS) maxOptions = 1;
+        else if (currentMenu == MENU_CREDITS) maxOptions = 1;
         if (selectedOption >= maxOptions) {
             selectedOption = 0; // Wrap to top
         }
@@ -141,7 +225,45 @@ void menu_controller_update(void) {
                     scene_restart();
                     break;
                 case MENU_MAIN_SETTINGS:
+                    parentMenu = MENU_MAIN;
+                    parentSelectedOption = MENU_MAIN_SETTINGS;
                     currentMenu = MENU_AUDIO;
+                    selectedOption = 0;
+                    break;
+                case MENU_MAIN_CONTROLS:
+                    parentMenu = MENU_MAIN;
+                    parentSelectedOption = MENU_MAIN_CONTROLS;
+                    currentMenu = MENU_CONTROLS;
+                    selectedOption = 0;
+                    break;
+            }
+        }
+    } else if (currentMenu == MENU_TITLE) {
+        // Title menu is always visible; B does nothing here.
+
+        if (aJustPressed) {
+            switch (selectedOption) {
+                case MENU_TITLE_PLAY:
+                    // Close first so title doesn't interpret stale edges on the next frame.
+                    menu_controller_close();
+                    scene_begin_title_transition();
+                    break;
+                case MENU_TITLE_AUDIO_SETTINGS:
+                    parentMenu = MENU_TITLE;
+                    parentSelectedOption = MENU_TITLE_AUDIO_SETTINGS;
+                    currentMenu = MENU_AUDIO;
+                    selectedOption = 0;
+                    break;
+                case MENU_TITLE_CONTROLS:
+                    parentMenu = MENU_TITLE;
+                    parentSelectedOption = MENU_TITLE_CONTROLS;
+                    currentMenu = MENU_CONTROLS;
+                    selectedOption = 0;
+                    break;
+                case MENU_TITLE_CREDITS:
+                    parentMenu = MENU_TITLE;
+                    parentSelectedOption = MENU_TITLE_CREDITS;
+                    currentMenu = MENU_CREDITS;
                     selectedOption = 0;
                     break;
             }
@@ -183,16 +305,28 @@ void menu_controller_update(void) {
                     audio_toggle_stereo_mode();
                     break;
                 case MENU_AUDIO_BACK:
-                    currentMenu = MENU_MAIN;
-                    selectedOption = MENU_MAIN_SETTINGS;
+                    currentMenu = parentMenu;
+                    selectedOption = parentSelectedOption;
                     break;
             }
         }
         
         // B button to go back to main menu (not close the entire menu)
         if (bJustPressed) {
-            currentMenu = MENU_MAIN;
-            selectedOption = MENU_MAIN_SETTINGS;
+            currentMenu = parentMenu;
+            selectedOption = parentSelectedOption;
+        }
+    } else if (currentMenu == MENU_CONTROLS) {
+        // Any A/B returns
+        if (aJustPressed || bJustPressed) {
+            currentMenu = parentMenu;
+            selectedOption = parentSelectedOption;
+        }
+    } else if (currentMenu == MENU_CREDITS) {
+        // Any A/B returns
+        if (aJustPressed || bJustPressed) {
+            currentMenu = parentMenu;
+            selectedOption = parentSelectedOption;
         }
     }
 }
@@ -236,8 +370,148 @@ static void draw_pause_menu_background(int x, int y, int dialogWidth, int dialog
         });
 }
 
+static void draw_menu_selection_highlight(int x, int y, int w, int h)
+{
+    // Black translucent selection box
+    const int padX = 6;
+    const int padY = 2;
+    const int x0 = x - padX;
+    // rdpq_text_printf uses a top-left origin for y0, so match that.
+    const int y0 = y - padY;
+    const int x1 = x + w + padX;
+    const int y1 = y + h + padY;
+
+    rdpq_mode_combiner(RDPQ_COMBINER_FLAT);
+    rdpq_mode_blender(RDPQ_BLENDER_MULTIPLY);
+
+    rdpq_set_prim_color(RGBA32(0, 0, 0, 140));
+    rdpq_fill_rectangle(x0, y0, x1, y1);
+
+    // Thin white outline (requested)
+    rdpq_set_prim_color(RGBA32(255, 255, 255, 70));
+    rdpq_fill_rectangle(x0, y0, x1, y0 + 1);
+    rdpq_fill_rectangle(x0, y1 - 1, x1, y1);
+    rdpq_fill_rectangle(x0, y0, x0 + 1, y1);
+    rdpq_fill_rectangle(x1 - 1, y0, x1, y1);
+}
+
+// Title menu uses a slightly different text Y convention; keep a baseline-style variant.
+static void draw_menu_selection_highlight_baseline(int x, int baselineY, int w, int h)
+{
+    const int padX = 6;
+    const int padY = 2;
+    const int x0 = x - padX;
+    const int y0 = (baselineY - h) - padY + 2;
+    const int x1 = x + w + padX;
+    const int y1 = baselineY + padY + 4;
+
+    rdpq_mode_combiner(RDPQ_COMBINER_FLAT);
+    rdpq_mode_blender(RDPQ_BLENDER_MULTIPLY);
+
+    rdpq_set_prim_color(RGBA32(0, 0, 0, 140));
+    rdpq_fill_rectangle(x0, y0, x1, y1);
+}
+
+static void draw_menu_selection_highlight_centered(int contentX, int y, int contentW, int lineH, int maxW)
+{
+    int w = maxW;
+    if (w > contentW) w = contentW;
+    int x = contentX + (contentW - w) / 2;
+    draw_menu_selection_highlight(x, y, w, lineH);
+}
+
+static void draw_icon_line(sprite_t *icon, int x, int rowBaselineY, int lineH, int w, const char *text)
+{
+    const int gap = 8;
+    const int srcW = (icon && icon->width > 0) ? icon->width : lineH;
+    const int srcH = (icon && icon->height > 0) ? icon->height : lineH;
+    // Fixed icon box so every row aligns regardless of sprite dimensions.
+    const int box = lineH;
+    // rdpq_text_* uses Y as a BASELINE coordinate (see libdragon's rdpq_text.h).
+    // Our menu code generally tracks "y" as a baseline too, so convert that
+    // baseline into a row-top for sprite placement.
+    const int rowTop = rowBaselineY - lineH;
+
+    // Scale to fit within the box (keep aspect ratio)
+    float s = 1.0f;
+    if (srcW > 0 && srcH > 0) {
+        float sx = (float)box / (float)srcW;
+        float sy = (float)box / (float)srcH;
+        s = (sx < sy) ? sx : sy;
+    }
+
+    const int iconW = (int)(srcW * s);
+    const int iconH = (int)(srcH * s);
+    const int iconX = x + (box - iconW) / 2;
+    const int iconY = rowTop + (box - iconH) / 2;
+
+    rdpq_sync_pipe();
+    rdpq_set_mode_standard();
+    // Avoid alpha-compare clipping on anti-aliased/soft edges (eg. Z sprite)
+    rdpq_mode_alphacompare(0);
+    rdpq_mode_blender(RDPQ_BLENDER_MULTIPLY);
+
+    if (icon) {
+        // Use sprite blit so paletted sprites (CI4/CI8) render correctly (TLUT handled automatically)
+        rdpq_sprite_blit(icon, iconX, iconY, &(rdpq_blitparms_t){
+            .scale_x = s,
+            .scale_y = s,
+        });
+    }
+
+    rdpq_set_prim_color(RGBA32(255, 255, 255, 255));
+    rdpq_text_printf(&(rdpq_textparms_t){
+        .align = ALIGN_LEFT,
+        .width = w,
+        .wrap = WRAP_WORD,
+    }, FONT_UNBALANCED, x + box + gap, rowBaselineY, "%s", text ? text : "");
+}
+
 void menu_controller_draw(void) {
     if (!menuActive) {
+        return;
+    }
+
+    // Title main menu: left-aligned list, no dialog background/gradient.
+    if (currentMenu == MENU_TITLE) {
+        rdpq_sync_pipe();
+        rdpq_set_mode_standard();
+        rdpq_mode_blender(RDPQ_BLENDER_MULTIPLY);
+        rdpq_mode_combiner(RDPQ_COMBINER_FLAT);
+
+        // Nudge right so the title menu sits inside title-safe on CRTs.
+        const int menuX = TITLE_SAFE_MARGIN_X + 4; // ~+10px vs previous
+        int y = 40;
+        const int menuW = 140;
+        const int lineHeight = 16;
+
+        rdpq_set_prim_color(RGBA32(255, 255, 255, 255));
+        rdpq_text_printf(&(rdpq_textparms_t){
+            .align = ALIGN_LEFT,
+            .width = menuW,
+            .wrap = WRAP_WORD,
+        }, FONT_UNBALANCED, menuX, y, "Pandemonium");
+
+        y += (lineHeight * 2) + 6;
+
+        for (int i = 0; i < MENU_TITLE_COUNT; i++) {
+            if (i == selectedOption) {
+                // Slightly wider selection background on the top-level title menu.
+                draw_menu_selection_highlight_baseline(menuX, y, (menuW * 3) / 4, lineHeight);
+                rdpq_set_prim_color(RGBA32(255, 255, 255, 255));
+            } else {
+                rdpq_set_prim_color(RGBA32(220, 220, 220, 255));
+            }
+
+            rdpq_text_printf(&(rdpq_textparms_t){
+                .align = ALIGN_LEFT,
+                .width = menuW,
+                .wrap = WRAP_WORD,
+            }, FONT_UNBALANCED, menuX, y, "%s", titleMenuOptions[i]);
+
+            y += lineHeight + 6;
+        }
+
         return;
     }
     
@@ -248,6 +522,16 @@ void menu_controller_draw(void) {
     int dialogHeight = 200;
     if (currentMenu == MENU_AUDIO) {
         dialogHeight = 230;
+    } else if (currentMenu == MENU_CONTROLS || currentMenu == MENU_CREDITS) {
+        dialogHeight = 230;
+    }
+
+    // Submenus: use a tighter dialog width so the background fits the menu content better.
+    if (currentMenu == MENU_CONTROLS) {
+        // Controls screen needs more horizontal room (icons + text)
+        dialogWidth = 320; // ~2x the narrow submenu panel
+    } else if (currentMenu == MENU_AUDIO || currentMenu == MENU_CREDITS) {
+        dialogWidth = 260;
     }
     
     // Draw custom menu background
@@ -308,15 +592,17 @@ void menu_controller_draw(void) {
         for (int i = 0; i < MENU_MAIN_COUNT; i++) {
             // Highlight selected option
             if (i == selectedOption) {
-                rdpq_set_prim_color(RGBA32(255, 255, 0, 255));
+                // Pause menu panel is very wide; clamp highlight so it matches other menus visually.
+                draw_menu_selection_highlight_centered(x, y, contentW, lineHeight, 90);
+                rdpq_set_prim_color(RGBA32(255, 255, 255, 255));
                 rdpq_text_printf(&(rdpq_textparms_t){
                     .align = ALIGN_CENTER,
                     .width = contentW,
                     .height = contentH,
                     .wrap = WRAP_WORD,
-                }, FONT_UNBALANCED, x, y, "> %s", mainMenuOptions[i]);
-                rdpq_set_prim_color(RGBA32(255, 255, 255, 255));
+                }, FONT_UNBALANCED, x, y, "%s", mainMenuOptions[i]);
             } else {
+                rdpq_set_prim_color(RGBA32(220, 220, 220, 255));
                 rdpq_text_printf(&(rdpq_textparms_t){
                     .align = ALIGN_CENTER,
                     .width = contentW,
@@ -326,6 +612,39 @@ void menu_controller_draw(void) {
             }
             y += lineHeight + 4;
         }
+        rdpq_set_prim_color(RGBA32(255, 255, 255, 255));
+    } else if (currentMenu == MENU_TITLE) {
+        rdpq_text_printf(&(rdpq_textparms_t){
+            .align = ALIGN_CENTER,
+            .width = contentW,
+            .height = contentH,
+            .wrap = WRAP_WORD,
+        }, FONT_UNBALANCED, x, y + titleYOffset, "MAIN MENU");
+
+        y += (lineHeight * 3) + titleYOffset;
+
+        for (int i = 0; i < MENU_TITLE_COUNT; i++) {
+            if (i == selectedOption) {
+                draw_menu_selection_highlight_centered(x, y, contentW, lineHeight, contentW / 2);
+                rdpq_set_prim_color(RGBA32(255, 255, 255, 255));
+                rdpq_text_printf(&(rdpq_textparms_t){
+                    .align = ALIGN_CENTER,
+                    .width = contentW,
+                    .height = contentH,
+                    .wrap = WRAP_WORD,
+                }, FONT_UNBALANCED, x, y, "%s", titleMenuOptions[i]);
+            } else {
+                rdpq_set_prim_color(RGBA32(220, 220, 220, 255));
+                rdpq_text_printf(&(rdpq_textparms_t){
+                    .align = ALIGN_CENTER,
+                    .width = contentW,
+                    .height = contentH,
+                    .wrap = WRAP_WORD,
+                }, FONT_UNBALANCED, x, y, "%s", titleMenuOptions[i]);
+            }
+            y += lineHeight + 4;
+        }
+        rdpq_set_prim_color(RGBA32(255, 255, 255, 255));
     } else if (currentMenu == MENU_AUDIO) {
         // Draw audio menu with centered text
         rdpq_text_printf(&(rdpq_textparms_t){
@@ -358,15 +677,16 @@ void menu_controller_draw(void) {
             
             // Highlight selected option
             if (i == selectedOption) {
-                rdpq_set_prim_color(RGBA32(255, 255, 0, 255));
+                draw_menu_selection_highlight_centered(x, y, contentW, lineHeight, contentW / 2);
+                rdpq_set_prim_color(RGBA32(255, 255, 255, 255));
                 rdpq_text_printf(&(rdpq_textparms_t){
                     .align = ALIGN_CENTER,
                     .width = contentW,
                     .height = contentH,
                     .wrap = WRAP_WORD,
-                }, FONT_UNBALANCED, x, y, "> %s", optionText);
-                rdpq_set_prim_color(RGBA32(255, 255, 255, 255));
+                }, FONT_UNBALANCED, x, y, "%s", optionText);
             } else {
+                rdpq_set_prim_color(RGBA32(220, 220, 220, 255));
                 rdpq_text_printf(&(rdpq_textparms_t){
                     .align = ALIGN_CENTER,
                     .width = contentW,
@@ -376,15 +696,54 @@ void menu_controller_draw(void) {
             }
             y += lineHeight + 2;
         }
-        
-        // Add instructions (centered)
-        y += lineHeight;
+        rdpq_set_prim_color(RGBA32(255, 255, 255, 255));
+    } else if (currentMenu == MENU_CONTROLS) {
         rdpq_text_printf(&(rdpq_textparms_t){
             .align = ALIGN_CENTER,
             .width = contentW,
             .height = contentH,
             .wrap = WRAP_WORD,
-        }, FONT_UNBALANCED, x, y, "< > to adjust, B to go back");
+        }, FONT_UNBALANCED, x, y + titleYOffset, "CONTROLS");
+
+        y += (lineHeight * 3) + titleYOffset;
+
+        // Controls legend: left-aligned, but the whole block is centered in the panel.
+        // Slight right nudge for nicer visual balance with the wider panel.
+        const int listW = 150;
+        const int listX = x + (contentW - listW) / 2 + 12;
+
+        draw_icon_line(iconStick, listX, y, lineHeight, listW, "Move");
+        y += lineHeight + 6;
+        draw_icon_line(iconA, listX, y, lineHeight, listW, "Dodge / Interact");
+        y += lineHeight + 6;
+        draw_icon_line(iconB, listX, y, lineHeight, listW, "Attack");
+        y += lineHeight + 6;
+        draw_icon_line(iconZ, listX, y, lineHeight, listW, "Target");
+        y += lineHeight + 6;
+        draw_icon_line(iconStart, listX, y, lineHeight, listW, "Pause Menu");
+        y += lineHeight + 6;
+        // Use one C-button sprite to represent the cluster
+        draw_icon_line(iconCLeft, listX, y, lineHeight, listW, "Move Camera");
+    } else if (currentMenu == MENU_CREDITS) {
+        rdpq_text_printf(&(rdpq_textparms_t){
+            .align = ALIGN_CENTER,
+            .width = contentW,
+            .height = contentH,
+            .wrap = WRAP_WORD,
+        }, FONT_UNBALANCED, x, y + titleYOffset, "CREDITS");
+
+        y += (lineHeight * 3) + titleYOffset;
+
+        // Credits (requested)
+        rdpq_set_prim_color(RGBA32(255, 255, 255, 255));
+        rdpq_text_printf(&(rdpq_textparms_t){ .align = ALIGN_CENTER, .width = contentW, .height = contentH, .wrap = WRAP_WORD },
+                         FONT_UNBALANCED, x, y, "Zero Cool");
+        y += lineHeight + 8;
+        rdpq_text_printf(&(rdpq_textparms_t){ .align = ALIGN_CENTER, .width = contentW, .height = contentH, .wrap = WRAP_WORD },
+                         FONT_UNBALANCED, x, y, "BoxingBruin");
+        y += lineHeight + 6;
+        rdpq_text_printf(&(rdpq_textparms_t){ .align = ALIGN_CENTER, .width = contentW, .height = contentH, .wrap = WRAP_WORD },
+                         FONT_UNBALANCED, x, y, "HelloNewman");
     }
 }
 
@@ -395,40 +754,81 @@ void menu_controller_free(void) {
         pauseMenuBg = NULL;
         surface_free(&pauseMenuBgSurf);
     }
+
+    if (iconA) { sprite_free(iconA); iconA = NULL; }
+    if (iconB) { sprite_free(iconB); iconB = NULL; }
+    if (iconZ) { sprite_free(iconZ); iconZ = NULL; }
+    if (iconStart) { sprite_free(iconStart); iconStart = NULL; }
+    if (iconStick) { sprite_free(iconStick); iconStick = NULL; }
+    if (iconCLeft) { sprite_free(iconCLeft); iconCLeft = NULL; }
 }
 
 bool menu_controller_is_active(void) {
     return menuActive;
 }
 
+bool menu_controller_is_title_submenu_active(void) {
+    return menuActive && menuIsTitleMenu && currentMenu != MENU_TITLE;
+}
+
+bool menu_controller_is_pause_menu_active(void) {
+    return menuActive && !menuIsTitleMenu;
+}
+
 void menu_controller_toggle(void) {
     menuActive = !menuActive;
     if (menuActive) {
-        scene_set_game_state(GAME_STATE_MENU);
-        currentMenu = MENU_MAIN;
+        GameState state = scene_get_game_state();
+
+        // Pick which "root" menu to show based on where we are.
+        menuIsTitleMenu = (state == GAME_STATE_TITLE);
+        parentMenu = menuIsTitleMenu ? MENU_TITLE : MENU_MAIN;
+        parentSelectedOption = 0;
+
+        if (menuIsTitleMenu) {
+            currentMenu = MENU_TITLE;
+        } else {
+            // Remember which game state to return to when closing the pause menu.
+            menuReturnState = state;
+            // IMPORTANT: if we're on the victory screen, do NOT transition out of VICTORY.
+            // Otherwise, scene_set_game_state() will reset the victory title-card timer when
+            // we re-enter VICTORY, causing "Enemy restored" to replay after closing the menu.
+            if (state != GAME_STATE_VICTORY) {
+                scene_set_game_state(GAME_STATE_MENU);
+            }
+            currentMenu = MENU_MAIN;
+        }
+
         selectedOption = 0;
         
-        // Mute audio when menu opens (only if music is playing)
-        musicWasPaused = !audio_is_music_playing();
-        if (!musicWasPaused) {
-            audio_pause_music();
+        // Pause/Resume music only for in-game pause menu.
+        if (!menuIsTitleMenu) {
+            musicWasPaused = !audio_is_music_playing();
+            if (!musicWasPaused) {
+                audio_pause_music();
+            }
         }
     } else {
-        scene_set_game_state(GAME_STATE_PLAYING);
-        
-        // Unmute audio when menu closes (if it was playing)
-        if (!musicWasPaused) {
-            audio_resume_music();
+        if (!menuIsTitleMenu) {
+            scene_set_game_state(menuReturnState);
+
+            // Unmute audio when menu closes (if it was playing)
+            if (!musicWasPaused) {
+                audio_resume_music();
+            }
         }
     }
 }
 
 void menu_controller_close(void) {
     menuActive = false;
-    scene_set_game_state(GAME_STATE_PLAYING);
-    
-    // Unmute audio when menu closes (if it was playing)
-    if (!musicWasPaused) {
-        audio_resume_music();
+
+    if (!menuIsTitleMenu) {
+        scene_set_game_state(menuReturnState);
+
+        // Unmute audio when menu closes (if it was playing)
+        if (!musicWasPaused) {
+            audio_resume_music();
+        }
     }
 }

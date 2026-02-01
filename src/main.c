@@ -18,6 +18,7 @@
 
 #include "scene.h"
 #include "dev.h"
+#include "dev/crt_safe_area_overlay.h"
 
 #include "video_player_utility.h"
 
@@ -169,10 +170,16 @@ int main(void)
             rdpq_attach(display_get(), display_get_zbuf());
             rdpq_set_mode_standard();
             rdpq_tex_blit(&offscreenBuffer, 0, 0, NULL);
+            if (debugDraw && DRAW_CRT_SAFE_AREA) {
+                DrawCrtSafeAreaOverlay(display_get_width(), display_get_height());
+            }
             rdpq_detach_show();
         }
         else
         {
+            if (debugDraw && DRAW_CRT_SAFE_AREA) {
+                DrawCrtSafeAreaOverlay(display_get_width(), display_get_height());
+            }
             rdpq_detach_show();
         }
 

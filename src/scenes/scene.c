@@ -31,6 +31,7 @@
 #include "game/bosses/boss_render.h"
 #include "dialog_controller.h"
 #include "display_utility.h"
+#include "menu_controller.h"
 //#include "collision_mesh.h"
 #include "collision_system.h"
 #include "letterbox_utility.h"
@@ -298,6 +299,44 @@ static bool bossWasDead = false; // Tracks death transition for one-time post-de
 // Post-boss interaction distances (XZ)
 static const float POST_BOSS_PROMPT_DIST  = 140.0f;   // show A prompt and allow talk when inside this range
 
+// Require the camera to be facing the boss for post-boss interaction.
+// This keeps the on-screen A prompt and the A-press trigger consistent,
+// and prevents rolling away from accidentally starting the dialog.
+static bool scene_camera_facing_boss_xz(const Boss *boss, float minDot)
+{
+    if (!boss) return false;
+
+    // Camera forward (XZ)
+    float fwdX = camTarget.v[0] - camPos.v[0];
+    float fwdZ = camTarget.v[2] - camPos.v[2];
+    float fwdLen = sqrtf(fwdX*fwdX + fwdZ*fwdZ);
+    if (fwdLen < 0.001f) return false;
+    fwdX /= fwdLen;
+    fwdZ /= fwdLen;
+
+    // Direction from camera to boss (XZ)
+    float toX = boss->pos[0] - camPos.v[0];
+    float toZ = boss->pos[2] - camPos.v[2];
+    float toLen = sqrtf(toX*toX + toZ*toZ);
+    if (toLen < 0.001f) return true; // camera is basically on top of it
+    toX /= toLen;
+    toZ /= toLen;
+
+    float dot = fwdX * toX + fwdZ * toZ;
+    return dot >= minDot;
+}
+
+static bool scene_post_boss_interact_allowed(const Boss *boss)
+{
+    if (!boss) return false;
+    // Local XZ distance (avoid relying on helper defined later in this TU)
+    float dx = boss->pos[0] - character.pos[0];
+    float dz = boss->pos[2] - character.pos[2];
+    float d = sqrtf(dx*dx + dz*dz);
+    if (d > POST_BOSS_PROMPT_DIST) return false;
+    return scene_camera_facing_boss_xz(boss, 0.35f); // ~70° cone
+}
+
 // Boss title fade control (shown during intro, fades out when fight starts)
 static float bossTitleFade = 0.0f;
 static float bossTitleFadeSpeed = 1.8f;
@@ -329,6 +368,10 @@ static bool lastMenuActive = false;
 
 // Local-only restart counter (persists in RAM for the lifetime of the program)
 static uint32_t restartCounter = 0;
+
+// Death screen restart lockout (prevents rapid A-mash from instantly restarting)
+static float deathRestartLockoutTimer = 0.0f;
+static const float DEATH_RESTART_LOCKOUT_S = 2.0f;
 
 // Input state tracking
 static bool lastAPressed = false;
@@ -963,6 +1006,9 @@ void scene_reset(void)
     victoryTitleTimer = 0.0f;
     victoryTitleDone = false;
 
+    // Death end-card state
+    deathRestartLockoutTimer = 0.0f;
+
     // Post-boss interaction state
     bossPostDefeatTalkDone = false;
     bossPostDefeatDialogStep = 0;
@@ -1061,9 +1107,8 @@ static void draw_post_boss_a_prompt(T3DViewport *viewport)
     if (scene_is_cutscene_active() || !scene_is_boss_active() || !g_boss) return;
     if (g_boss->state != BOSS_STATE_DEAD) return;
 
-    // Only show when the player is close enough to interact (pre-cutscene)
-    float d = scene_dist_xz(character.pos[0], character.pos[2], g_boss->pos[0], g_boss->pos[2]);
-    if (d > POST_BOSS_PROMPT_DIST) return;
+    // Only show when the interaction is actually allowed (distance + camera facing)
+    if (!scene_post_boss_interact_allowed(g_boss)) return;
 
     // Anchor to the boss head bone (true attachment). Fall back to lock-focus if head bone isn't available.
     T3DVec3 worldPos;
@@ -1117,6 +1162,14 @@ void scene_set_game_state(GameState state) {
     GameState prev = gameState;
     gameState = state;
 
+    // Death: lock out restart input for a short duration so late gameplay inputs don't
+    // instantly skip the death screen straight back to title.
+    if (state == GAME_STATE_DEAD && prev != GAME_STATE_DEAD) {
+        deathRestartLockoutTimer = 0.0f;
+    } else if (prev == GAME_STATE_DEAD && state != GAME_STATE_DEAD) {
+        deathRestartLockoutTimer = 0.0f;
+    }
+
     // Reset the victory title card whenever we enter or leave victory
     if (state == GAME_STATE_VICTORY && prev != GAME_STATE_VICTORY) {
         victoryTitleTimer = 0.0f;
@@ -1129,6 +1182,28 @@ void scene_set_game_state(GameState state) {
 
 bool scene_is_menu_active(void) {
     return gameState == GAME_STATE_MENU;
+}
+
+void scene_begin_title_transition(void)
+{
+    if (gameState == GAME_STATE_TITLE_TRANSITION) return;
+    if (gameState != GAME_STATE_TITLE) return;
+
+    // Hide title menu immediately once we commit to transitioning.
+    menu_controller_close();
+
+    gameState = GAME_STATE_TITLE_TRANSITION;
+    skipButtonVisible = false; // Reset skip button state when entering transition
+    lastCutsceneAPressed = false;
+
+    camera_breath_active(false);
+    screenBreath = false;
+    audio_stop_music_fade(6); // duration
+    audio_play_scene_sfx_dist(
+        SCENE1_SFX_TITLE_WALK, // sfx id
+        1.0f,                  // base volume
+        0.0f                   // distance
+    );
 }
 
 // Check if character would collide with room boundaries at the given position
@@ -1761,27 +1836,10 @@ void scene_update_title(void)
         return;
     }
 
-    bool startJustPressed = btn.start && !lastStartPressed;
-    bool aJustPressed = btn.a && !lastAPressed;
+    // No "press A/Start to begin" here anymore; the title menu handles starting the game.
+    // Keep these updated so other title code relying on them doesn't see stale edges.
     lastStartPressed = btn.start;
     lastAPressed = btn.a;
-
-    if(startJustPressed || aJustPressed)
-    {
-        gameState = GAME_STATE_TITLE_TRANSITION;
-        skipButtonVisible = false; // Reset skip button state when entering transition
-        lastCutsceneAPressed = false;
-
-        camera_breath_active(false); 
-        screenBreath = false; 
-        audio_stop_music_fade(6); // duration
-        audio_play_scene_sfx_dist(
-            SCENE1_SFX_TITLE_WALK, // sfx id
-            1.0f,                  // base volume
-            0.0f                   // distance
-        );
-        return;
-    }
 
     if (!screenBreath) 
     { 
@@ -1791,25 +1849,28 @@ void scene_update_title(void)
 
     camera_breath_update(deltaTime);
 
-    if(titleTextActivationTimer >= titleTextActivationTime){
-        dialog_controller_update();
-        if(!dialog_controller_speaking())
-        {
-            currentTitleDialog ++;
-            if(currentTitleDialog >= TITLE_DIALOG_COUNT)
+    // Don't advance/play story dialog while browsing title submenus (Audio/Controls/Credits).
+    if (!menu_controller_is_title_submenu_active()) {
+        if(titleTextActivationTimer >= titleTextActivationTime){
+            dialog_controller_update();
+            if(!dialog_controller_speaking())
             {
-                titleTextActivationTimer = 0;
-                currentTitleDialog = -1;
-            }
-            else
-            {
-                dialog_controller_speak(titleDialogs[currentTitleDialog], 0, 9.0f, false, true);
+                currentTitleDialog ++;
+                if(currentTitleDialog >= TITLE_DIALOG_COUNT)
+                {
+                    titleTextActivationTimer = 0;
+                    currentTitleDialog = -1;
+                }
+                else
+                {
+                    dialog_controller_speak(titleDialogs[currentTitleDialog], 0, 9.0f, false, true);
+                }
             }
         }
-    }
-    else
-    {
-        titleTextActivationTimer += deltaTime;
+        else
+        {
+            titleTextActivationTimer += deltaTime;
+        }
     }
 }
 
@@ -1845,18 +1906,22 @@ void scene_update(void)
         return;
     }
 
-    // Check if menu was just closed - if so, reset character button state
-    bool menuActive = scene_is_menu_active();
-    if (lastMenuActive && !menuActive) {
+    // Check if pause menu was just closed - if so, reset character button state
+    // NOTE: during victory, the pause menu overlays without switching GAME_STATE to MENU.
+    bool pauseMenuBlocking = scene_is_menu_active() || menu_controller_is_pause_menu_active();
+    if (lastMenuActive && !pauseMenuBlocking) {
         // Menu was just closed - reset character button state to prevent false "just pressed"
         character_reset_button_state();
     }
-    lastMenuActive = menuActive;
+    lastMenuActive = pauseMenuBlocking;
 
     // If player is dead, disable player control but keep boss/UI moving
     // NOTE: Victory should NOT early-return here; we still want full gameplay updates
     // (collision/constraints) so the player's colliders don't "stick" in place.
     if (gameState == GAME_STATE_DEAD) {
+        // Accumulate lockout timer while dead (we still update animations/UI during the end state)
+        deathRestartLockoutTimer += deltaTime;
+
         // Still update the character so end-state animations (like Death) can play.
         character_update();
 
@@ -1870,14 +1935,14 @@ void scene_update(void)
 
         // Allow restart via A button only on death.
         // Victory should not force a restart prompt / flow.
-        if (gameState == GAME_STATE_DEAD && btn.a) {
+        if (gameState == GAME_STATE_DEAD && deathRestartLockoutTimer >= DEATH_RESTART_LOCKOUT_S && btn.a) {
             scene_restart();
         }
         return;
     }
     
-    // Don't update game logic when menu is active
-    if (scene_is_menu_active()) {
+    // Don't update game logic when pause menu is active (including victory overlay case)
+    if (pauseMenuBlocking) {
         return;
     }
 
@@ -1897,14 +1962,13 @@ void scene_update(void)
         // start the dialog/camera only when player presses A (held-edge).
         // IMPORTANT: check this BEFORE character_update so A doesn't also trigger a roll.
         if (bossActivated && g_boss && g_boss->state == BOSS_STATE_DEAD) {
-            float d = scene_dist_xz(character.pos[0], character.pos[2], g_boss->pos[0], g_boss->pos[2]);
             bool aHeld = joypad.btn.a;
             bool aJustPressed = aHeld && !lastInteractAHeld;
             lastInteractAHeld = aHeld;
 
             // Match the on-screen prompt behavior: if the "A" prompt is visible, A should talk.
             // Do NOT require Z-targeting; post-fight we untarget by default, but still allow re-targeting.
-            if (d <= POST_BOSS_PROMPT_DIST && aJustPressed) {
+            if (scene_post_boss_interact_allowed(g_boss) && aJustPressed) {
                 cutsceneState = CUTSCENE_POST_BOSS_RESTORED;
                 cutsceneTimer = 0.0f;
                 cutsceneCameraTimer = 0.0f;
@@ -2095,20 +2159,15 @@ void scene_draw_title(T3DViewport *viewport)
     {
         rdpq_set_mode_standard();
         rdpq_mode_blender(RDPQ_BLENDER_MULTIPLY);
-        rdpq_set_prim_color(RGBA32(0,0,0,120));
-        rdpq_mode_combiner(RDPQ_COMBINER_FLAT);
-        rdpq_fill_rectangle(15, 35, 75, 58);
-
-        rdpq_set_prim_color(RGBA32(255, 255, 255, 255));
-        rdpq_text_printf(NULL, FONT_UNBALANCED, 35, 50, "Play");
 
         // Restart counter (local-only). Don't show if there's 0 restarts.
         if (restartCounter > 0) {
-            const int margin = 10;
+            // Keep inside title-safe area for CRT overscan.
+            const int margin = TITLE_SAFE_MARGIN_X;
             const int panelW = 60;
             const int panelH = 18;
             const int panelX0 = margin;
-            const int panelY0 = SCREEN_HEIGHT - margin - panelH;
+            const int panelY0 = SCREEN_HEIGHT - TITLE_SAFE_MARGIN_Y - panelH;
 
             rdpq_set_prim_color(RGBA32(0, 0, 0, 120));
             rdpq_mode_combiner(RDPQ_COMBINER_FLAT);
@@ -2118,27 +2177,7 @@ void scene_draw_title(T3DViewport *viewport)
             rdpq_text_printf(NULL, FONT_UNBALANCED, panelX0 + 6, panelY0 + 13, "Runs: %lu", (unsigned long)restartCounter);
         }
 
-        // Draw A button graphic at bottom middle of play button, half off
-        if (aButtonSprite) {
-            int buttonWidth = aButtonSurf.width;
-            int buttonHeight = aButtonSurf.height;
-            // Play button rectangle: (15, 35) to (75, 58)
-            // Center horizontally: (15 + 75) / 2 = 45
-            // Bottom of button: y = 58
-            // Position so half is below the button edge: y = 58 - buttonHeight/2
-            int aButtonX = 45 - (buttonWidth / 2);
-            int aButtonY = 62 - (buttonHeight / 2);
-            
-            // Draw the A button sprite on top
-            rdpq_sync_pipe();
-            rdpq_set_mode_standard();
-            rdpq_mode_alphacompare(1);
-            rdpq_mode_blender(RDPQ_BLENDER_MULTIPLY);
-            
-            rdpq_tex_blit(&aButtonSurf, aButtonX, aButtonY, NULL);
-        }
-
-        if(titleTextActivationTimer >= titleTextActivationTime)
+        if(titleTextActivationTimer >= titleTextActivationTime && !menu_controller_is_title_submenu_active())
         {
             dialog_controller_draw(true, 190, 20, 120, 180);
         }
@@ -2181,18 +2220,35 @@ static void draw_cutscene_skip_indicator(void)
     int buttonWidth = aButtonSurf.width;
     int buttonHeight = aButtonSurf.height;
     
-    // Position at bottom right of screen, with margin from edges
-    int margin = 10; // Margin from screen edges
-    int buttonX = SCREEN_WIDTH - buttonWidth - margin;
-    int buttonY = SCREEN_HEIGHT - buttonHeight - margin;
+    // Position at bottom right of screen, inside title-safe area.
+    // (Helps avoid CRT overscan clipping.)
+    const int marginX = TITLE_SAFE_MARGIN_X;
+    const int marginY = TITLE_SAFE_MARGIN_Y;
+    int buttonX = SCREEN_WIDTH - buttonWidth - marginX;
+    int buttonY = SCREEN_HEIGHT - buttonHeight - marginY;
     
-    // Draw the A button sprite
+    // Draw the A button sprite first (text rendering changes RDP state)
     rdpq_sync_pipe();
     rdpq_set_mode_standard();
-    rdpq_mode_alphacompare(1);
+    // Avoid alpha-compare clipping on anti-aliased edges
+    rdpq_mode_alphacompare(0);
     rdpq_mode_blender(RDPQ_BLENDER_MULTIPLY);
-    
-    rdpq_tex_blit(&aButtonSurf, buttonX, buttonY, NULL);
+    // Use sprite blit for robustness across formats / states
+    rdpq_sprite_blit(aButtonSprite, buttonX, buttonY, NULL);
+
+    // Draw the "skip" label to the left of the A button
+    const int gap = 6;
+    const int textRight = buttonX - gap;
+    if (textRight > 0) {
+        // Baseline is generally "y" in this codebase; align near the icon's vertical center/bottom.
+        const int textY = buttonY + (buttonHeight / 2) + 6;
+        rdpq_set_prim_color(RGBA32(255, 255, 255, 255));
+        rdpq_text_printf(&(rdpq_textparms_t){
+            .align = ALIGN_RIGHT,
+            .width = textRight,
+            .wrap = WRAP_WORD,
+        }, FONT_UNBALANCED, 0, textY, "%s", "skip");
+    }
 }
 
 void scene_draw_cutscene_fog(){
@@ -2828,7 +2884,9 @@ void scene_draw(T3DViewport *viewport)
         draw_lockon_indicator(viewport);
 
     // Debug draw room colliders in gameplay
-    if (cutsceneState == CUTSCENE_NONE && debugDraw) {
+    // NOTE: The 3D debug draw path renders into `offscreenBuffer` (RGBA16). If DEV_MODE is off,
+    // that buffer isn't allocated/used, so avoid calling these routines to prevent invalid writes.
+    if (DEV_MODE && cutsceneState == CUTSCENE_NONE && debugDraw) {
         float capA[3], capB[3], r;
         scene_get_character_world_capsule(capA, capB, &r);
 
@@ -2851,10 +2909,11 @@ void scene_draw(T3DViewport *viewport)
     // Draw letterbox bars (they handle their own visibility and animation)
     letterbox_draw();
 
-    // Draw UI elements after 3D rendering is complete (hide during cutscenes or death)
-    if (!cutsceneActive && !isEndScreen) {
-        // Boss UI appears only after the boss title has fully slid off-screen
-        if (scene_is_boss_active() && g_boss && bossTitleFade <= 0.0f) {
+    // Draw UI elements after 3D rendering is complete.
+    // Keep player UI visible during victory; hide it during death and cutscenes.
+    if (!cutsceneActive && !isDead) {
+        // Boss UI appears only during normal gameplay, not on victory screens.
+        if (!isVictory && scene_is_boss_active() && g_boss && bossTitleFade <= 0.0f) {
             boss_draw_ui(g_boss, viewport);
         }
         character_draw_ui();
@@ -2907,10 +2966,36 @@ void scene_draw(T3DViewport *viewport)
                 .align = ALIGN_CENTER,
                 .width = SCREEN_WIDTH,
             }, FONT_UNBALANCED, 0, SCREEN_HEIGHT / 2 - 12, "%s", "You Died");
-            rdpq_text_printf(&(rdpq_textparms_t){
-                .align = ALIGN_CENTER,
-                .width = SCREEN_WIDTH,
-            }, FONT_UNBALANCED, 0, SCREEN_HEIGHT / 2 + 4, "%s", "Press A to restart");
+
+            // Delay restart prompt so rapid gameplay A-mashing doesn't instantly restart.
+            if (deathRestartLockoutTimer >= DEATH_RESTART_LOCKOUT_S) {
+                const char *label = "Restart";
+                const int gap = 6;
+                const int y = (SCREEN_HEIGHT / 2) + 20;
+
+                // Draw icon + label as a group slightly left of center (simple + stable; no text-width API used here).
+                int buttonW = aButtonSprite ? aButtonSurf.width : 0;
+                int buttonH = aButtonSprite ? aButtonSurf.height : 0;
+                int x0 = (SCREEN_WIDTH / 2) - 44;
+
+                if (aButtonSprite) {
+                    int buttonX = x0;
+                    int buttonY = y - (buttonH / 2) - 6;
+                    rdpq_sync_pipe();
+                    rdpq_set_mode_standard();
+                    rdpq_mode_alphacompare(0);
+                    rdpq_mode_blender(RDPQ_BLENDER_MULTIPLY);
+                    rdpq_sprite_blit(aButtonSprite, buttonX, buttonY, NULL);
+                }
+
+                // Text baseline aligned to match other UI codepaths (roughly icon vertical center)
+                int textX = x0 + buttonW + gap;
+                rdpq_set_prim_color(RGBA32(255, 255, 255, 255));
+                rdpq_text_printf(&(rdpq_textparms_t){
+                    .align = ALIGN_LEFT,
+                    .width = SCREEN_WIDTH - textX,
+                }, FONT_UNBALANCED, textX, y, "%s", label);
+            }
             return;
         }
 
