@@ -2096,8 +2096,8 @@ void character_init(void)
 
     CapsuleCollider collider = {
         .localCapA = {{0.0f, 4.0f, 0.0f}},
-        .localCapB = {{0.0f, 13.0f, 0.0f}},
-        .radius = 5.0f
+        .localCapB = {{0.0f, 16.0f, 0.0f}},
+        .radius = 8.0f
     };
 
     Character newCharacter = {
@@ -2391,7 +2391,7 @@ void character_update(void)
 
         float hitStart = (characterState == CHAR_STATE_ATTACKING_STRONG) ? STRONG_ATTACK_HIT_START : 0.25f;
         float hitEnd   = (characterState == CHAR_STATE_ATTACKING_STRONG) ? STRONG_ATTACK_HIT_END   : 1.0f;
-        float damage = (characterState == CHAR_STATE_ATTACKING_STRONG) ? STRONG_ATTACK_DAMAGE : 10.0f;
+        float damage = (characterState == CHAR_STATE_ATTACKING_STRONG) ? STRONG_ATTACK_DAMAGE : 3.0f;
 
         if (actionTimer > hitStart && actionTimer < hitEnd) {
             if (!character.currentAttackHasHit && charWeaponCollision) {
