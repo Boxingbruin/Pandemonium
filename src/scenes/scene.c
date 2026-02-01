@@ -839,7 +839,7 @@ void scene_init(void)
     dialog_controller_init();
 
     // Load A button sprite for cutscene skip indicator
-    aButtonSprite = sprite_load("rom:/buttons/WhiteOutlineButtons/a.rgb16.sprite");
+    aButtonSprite = sprite_load("rom:/buttons/WhiteOutlineButtons/a.rgba16.sprite");
     if (aButtonSprite) {
         aButtonSurf = sprite_get_pixels(aButtonSprite);
     }
@@ -2130,6 +2130,8 @@ void scene_draw_title(T3DViewport *viewport)
             int aButtonY = 62 - (buttonHeight / 2);
             
             // Draw the A button sprite on top
+            rdpq_sync_pipe();
+            rdpq_set_mode_standard();
             rdpq_mode_alphacompare(1);
             rdpq_mode_blender(RDPQ_BLENDER_MULTIPLY);
             
