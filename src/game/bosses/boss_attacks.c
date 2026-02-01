@@ -112,71 +112,183 @@ void boss_attacks_update(Boss* boss, float dt) {
 }
 
 
-static void boss_attacks_handle_power_jump(Boss* boss, float dt) {
+static void boss_attacks_handle_power_jump(Boss* boss, float dt)
+{
     // Frame timings at 30 FPS: 0-41 idle, 41-83 jump+land, 83-136 land+recover
-    const float idleDuration = 41.0f / 25.0f;      // 1.367s
-    const float jumpDuration = 42.0f / 25.0f;      // 1.4s
-    const float recoverDuration = 53.0f / 25.0f;   // 1.767s
-    const float totalDuration = idleDuration + jumpDuration + recoverDuration;
+    const float idleDuration    = 41.0f / 25.0f;      // 1.367s
+    const float jumpDuration    = 42.0f / 25.0f;      // 1.4s
+    const float recoverDuration = 53.0f / 25.0f;      // 1.767s
+    const float totalDuration   = idleDuration + jumpDuration + recoverDuration;
 
-    // Phase 1: Idle preparation (0.0 - 1.367s)
+    // -----------------------------
+    // Tuning
+    // -----------------------------
+    const float LEAD_TIME = 0.12f;
+
+    // Land "in front" but a bit closer than before
+    const float SHORT_FRAC = 0.28f;  // was 0.35
+    const float SHORT_MIN  = 20.0f;  // was 30
+    const float SHORT_MAX  = 55.0f;  // was 70
+
+    // Air tracking (fast-ish but not perfect)
+    const float TRACK_MAX_SPEED  = 100.0f;
+    const float TRACK_STRENGTH   = 0.30f;
+    const float TRACK_RAMP_IN_T0 = 0.08f;
+    const float TRACK_RAMP_IN_T1 = 0.70f;
+
+    // Impact sphere
+    const float IMPACT_RADIUS = 70.0f;     // <-- your request
+    const float IMPACT_WINDOW = 0.18f;     // slightly wider than 0.1f
+
+    // Local clamp
+    #define CLAMPF(x, a, b) ((x) < (a) ? (a) : ((x) > (b) ? (b) : (x)))
+
+    // ------------------------------------------------------------
+    // IMPORTANT: on entering POWER_JUMP, clear hit gate
+    // (otherwise a previous attack can keep it stuck "already hit")
+    // ------------------------------------------------------------
+    if (boss->stateTimer - dt < 0.0f) {
+        boss->currentAttackHasHit = false;
+        boss->sphereAttackColliderActive = false;
+    }
+
+    // Phase 1: Idle preparation
     if (boss->stateTimer < idleDuration) {
-        // Stay in place, face target direction
         float dx = boss->powerJumpTargetPos[0] - boss->pos[0];
         float dz = boss->powerJumpTargetPos[2] - boss->pos[2];
         if (dx != 0.0f || dz != 0.0f) {
             boss->rot[1] = -atan2f(-dz, dx) + T3D_PI;
         }
     }
-    // Phase 2: Jump arc (1.367 - 2.767s)
+    // Phase 2: Jump arc
     else if (boss->stateTimer < idleDuration + jumpDuration) {
+
         float t = (boss->stateTimer - idleDuration) / jumpDuration;
-        
-        // Smooth arc from start to target
-        boss->pos[0] = boss->powerJumpStartPos[0] + (boss->powerJumpTargetPos[0] - boss->powerJumpStartPos[0]) * t;
-        boss->pos[2] = boss->powerJumpStartPos[2] + (boss->powerJumpTargetPos[2] - boss->powerJumpStartPos[2]) * t;
-        
-        // Parabolic height
-        boss->pos[1] = boss->powerJumpStartPos[1] + boss->powerJumpHeight * sinf(t * T3D_PI);
-        
-        // Face movement direction - use consistent rotation formula
-        float dx = boss->powerJumpTargetPos[0] - boss->powerJumpStartPos[0];
-        float dz = boss->powerJumpTargetPos[2] - boss->powerJumpStartPos[2];
-        if (dx != 0.0f || dz != 0.0f) {
-            boss->rot[1] = -atan2f(-dz, dx) + T3D_PI;
+        t = CLAMPF(t, 0.0f, 1.0f);
+
+        // Jump start: pick an initial target once (at phase transition)
+        if (boss->stateTimer - dt < idleDuration) {
+
+            float aimX = character.pos[0] + boss->lastPlayerVel[0] * LEAD_TIME;
+            float aimZ = character.pos[2] + boss->lastPlayerVel[1] * LEAD_TIME;
+
+            float sx = boss->powerJumpStartPos[0];
+            float sz = boss->powerJumpStartPos[2];
+
+            float vx = aimX - sx;
+            float vz = aimZ - sz;
+            float jumpDist = sqrtf(vx*vx + vz*vz);
+
+            float landShort = CLAMPF(jumpDist * SHORT_FRAC, SHORT_MIN, SHORT_MAX);
+
+            if (jumpDist > 0.001f) {
+                float dirX = vx / jumpDist;
+                float dirZ = vz / jumpDist;
+
+                boss->powerJumpTargetPos[0] = aimX - dirX * landShort;
+                boss->powerJumpTargetPos[2] = aimZ - dirZ * landShort;
+            } else {
+                boss->powerJumpTargetPos[0] = sx;
+                boss->powerJumpTargetPos[2] = sz;
+            }
+
+            boss->powerJumpTargetPos[1] = boss->powerJumpStartPos[1];
+        }
+
+        // Soft mid-air tracking: nudge target toward the player's "in-front" point
+        {
+            float ramp = 0.0f;
+            if (t <= TRACK_RAMP_IN_T0) ramp = 0.0f;
+            else if (t >= TRACK_RAMP_IN_T1) ramp = 1.0f;
+            else {
+                float u = (t - TRACK_RAMP_IN_T0) / (TRACK_RAMP_IN_T1 - TRACK_RAMP_IN_T0);
+                ramp = u*u*(3.0f - 2.0f*u);
+            }
+
+            float aimX = character.pos[0] + boss->lastPlayerVel[0] * LEAD_TIME;
+            float aimZ = character.pos[2] + boss->lastPlayerVel[1] * LEAD_TIME;
+
+            float sx = boss->powerJumpStartPos[0];
+            float sz = boss->powerJumpStartPos[2];
+
+            float vx = aimX - sx;
+            float vz = aimZ - sz;
+            float jumpDist = sqrtf(vx*vx + vz*vz);
+
+            if (jumpDist > 0.001f) {
+                float dirX = vx / jumpDist;
+                float dirZ = vz / jumpDist;
+
+                float landShort = CLAMPF(jumpDist * SHORT_FRAC, SHORT_MIN, SHORT_MAX);
+
+                float desiredX = aimX - dirX * landShort;
+                float desiredZ = aimZ - dirZ * landShort;
+
+                float dx = desiredX - boss->powerJumpTargetPos[0];
+                float dz = desiredZ - boss->powerJumpTargetPos[2];
+                float d  = sqrtf(dx*dx + dz*dz);
+
+                if (d > 0.001f) {
+                    float maxStep = TRACK_MAX_SPEED * dt * ramp * TRACK_STRENGTH;
+                    if (maxStep > d) maxStep = d;
+
+                    boss->powerJumpTargetPos[0] += (dx / d) * maxStep;
+                    boss->powerJumpTargetPos[2] += (dz / d) * maxStep;
+                }
+            }
+        }
+
+        // Move along arc
+        boss->pos[0] = boss->powerJumpStartPos[0]
+                     + (boss->powerJumpTargetPos[0] - boss->powerJumpStartPos[0]) * t;
+
+        boss->pos[2] = boss->powerJumpStartPos[2]
+                     + (boss->powerJumpTargetPos[2] - boss->powerJumpStartPos[2]) * t;
+
+        boss->pos[1] = boss->powerJumpStartPos[1]
+                     + boss->powerJumpHeight * sinf(t * T3D_PI);
+
+        // Face travel direction
+        {
+            float dx = boss->powerJumpTargetPos[0] - boss->powerJumpStartPos[0];
+            float dz = boss->powerJumpTargetPos[2] - boss->powerJumpStartPos[2];
+            if (dx != 0.0f || dz != 0.0f) {
+                boss->rot[1] = -atan2f(-dz, dx) + T3D_PI;
+            }
         }
     }
-    // Phase 3: Landing impact + recovery (2.767 - 4.533s)
-    else if (boss->stateTimer < totalDuration) 
+    // Phase 3: Landing + recovery
+    else if (boss->stateTimer < totalDuration)
     {
-        // Boss hits ground and recovers
         boss->pos[1] = boss->powerJumpStartPos[1];
 
-        if (boss->stateTimer >= idleDuration + jumpDuration) 
-        {
+        // SFX once we land
+        if (boss->stateTimer >= idleDuration + jumpDuration) {
             boss_multi_attack_sfx(boss, bossJumpForwardSfx, 2);
         }
-        
-        // Check for impact damage
-        if (boss->stateTimer >= idleDuration + jumpDuration && 
-            boss->stateTimer < idleDuration + jumpDuration + 0.1f && 
-            !boss->currentAttackHasHit) {
-            // Power jump uses ground impact, so use distance check for now
-            // (hand collider is in air, ground impact is at boss position)
+
+        // Impact window
+        const float impactT0 = idleDuration + jumpDuration;
+        const float impactT1 = impactT0 + IMPACT_WINDOW;
+
+        boss->sphereAttackColliderActive = (boss->stateTimer >= impactT0 && boss->stateTimer < impactT1);
+
+        if (boss->sphereAttackColliderActive && !boss->currentAttackHasHit)
+        {
             float dx = character.pos[0] - boss->pos[0];
             float dz = character.pos[2] - boss->pos[2];
             float dist = sqrtf(dx*dx + dz*dz);
-            
-            boss->sphereAttackColliderActive = true;
-            if (dist < 6.0f) {
+
+            // Sphere radius is now 70
+            if (dist <= IMPACT_RADIUS) {
                 character_apply_damage(35.0f);
                 boss_attacks_on_player_hit(35.0f);
                 boss->currentAttackHasHit = true;
             }
         }
     }
-    // End attack - transition handled by AI
-    // (AI will check stateTimer >= totalDuration and transition to STRAFE)
+
+    #undef CLAMPF
 }
 
 static void boss_attacks_handle_combo(Boss* boss, float dt)
@@ -646,7 +758,7 @@ static void boss_attacks_handle_stomp(Boss* boss, float dt)
         float pz = character.pos[2] - boss->pos[2];
         float dist = sqrtf(px*px + pz*pz);
 
-        const float radius = 50.0f; // tight radius
+        const float radius = 70.0f; // tight radius
         if (dist <= radius) {
             // float damage = 40.0f * (1.0f - (dist / radius)); // falloff
             // if (damage < 6.0f) damage = 6.0f;               // minimum chip
