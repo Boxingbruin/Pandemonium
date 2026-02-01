@@ -6,7 +6,7 @@
 #include <t3d/t3dmodel.h>
 
 extern bool bossWeaponCollision;
-
+extern bool charWeaponCollision;
 void collision_init(void);
 void collision_update(void);
 void collision_draw(T3DViewport *viewport);
