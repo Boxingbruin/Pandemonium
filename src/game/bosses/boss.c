@@ -391,10 +391,10 @@ void boss_apply_damage(Boss* boss, float amount) {
     
     boss->damageFlashTimer = 0.3f;
     
-    // Set pending stagger request if not already dead
-    if (boss->health > 0.0f) {
-        boss->pendingRequests |= 0x01;  // BOSS_REQ_STAGGER flag
-    }
+    // // Set pending stagger request if not already dead
+    // if (boss->health > 0.0f) {
+    //     boss->pendingRequests |= 0x01;  // BOSS_REQ_STAGGER flag
+    // }
     
     // Check for death
     if (boss->health <= 0.0f) {

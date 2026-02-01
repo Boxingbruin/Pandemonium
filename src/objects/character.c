@@ -17,13 +17,14 @@
 #include "game/bosses/boss.h"
 #include "scene.h"
 #include "simple_collision_utility.h"
-#include "collision_mesh.h"
+#include "collision_system.h"
 #include "game_math.h"
 #include "display_utility.h"
 #include "controllers/audio_controller.h"
 #include "scenes/scene_sfx.h"
 #include "utilities/general_utility.h"
 #include "utilities/sword_trail.h"
+
 
 /*
  Character Controller
@@ -59,11 +60,14 @@ static float currentSpeed = 0.0f; // Track current movement speed for animation
 
 static const float MOVEMENT_ACCELERATION = 7.0f;
 static const float MOVEMENT_FRICTION = 12.0f;
-static const float MAX_MOVEMENT_SPEED = 60.0f;
+static const float MAX_MOVEMENT_SPEED = 50.0f;
 static const float SPEED_BUILDUP_RATE = 1.5f;
 static const float SPEED_DECAY_RATE = 4.0f;
 
 static const float ROLL_DURATION = 0.9f;
+static const float ROLL_DURATION_MOVING = 0.45f; // tune 0.45–0.70
+static const float ROLL_MOVING_MAG      = 0.20f; // stick magnitude threshold
+
 static const float ROLL_ANIM_SPEED = 1.0f;
 static const float ATTACK_DURATION = 0.9f; // (legacy, not used directly)
 static const float STRONG_ATTACK_DURATION = 1.2f;
@@ -93,8 +97,6 @@ static const float ATTACK_CROSSFADE_DURATION = 0.08f;
 
 static const float ATTACK_FORWARD_IMPULSE = 35.0f;
 static const float KNOCKDOWN_DURATION = 0.8f;
-static const float KNOCKDOWN_BACK_IMPULSE = 25.0f;
-static const float KNOCKDOWN_MAX_STUN_SECONDS = 2.0f;
 
 // Input state tracking
 static bool lastBPressed = false;
@@ -107,12 +109,10 @@ static const float STICK_MAX = 80.0f;
 static const float INPUT_DEADZONE = 0.12f;
 
 // Strafe activation tuning (to avoid accidental strafing on resting sticks)
-static const float STRAFE_LATERAL_AXIS_DEADZONE = 0.08f;
-static const float STRAFE_ACTIVATION_RATIO     = 0.22f;
-static const float STRAFE_DEACTIVATION_RATIO   = 0.12f;
+
 
 static const float TURN_RATE = 8.0f;
-static const float IDLE_THRESHOLD = 0.001f;
+static const float IDLE_THRESHOLD = 0.1f;
 static const float WALK_THRESHOLD = 0.03f;
 static const float RUN_THRESHOLD = 0.7f;
 static const float BLEND_MARGIN = 0.2f;         // (currently unused)
@@ -135,11 +135,11 @@ static CharacterState prevState = CHAR_STATE_NORMAL;
 
 // Character SFX state
 static float footstepTimer = 0.0f;
-static const float FOOTSTEP_WALK_INTERVAL = 0.45f;
-static const float FOOTSTEP_RUN_INTERVAL  = 0.28f;
+static const float FOOTSTEP_WALK_INTERVAL = 0.70f;
+static const float FOOTSTEP_RUN_INTERVAL  = 0.40f;
 
 /* -----------------------------------------------------------------------------
- * Animation driver state (single source of truth)
+ * Animation driver state
  * -------------------------------------------------------------------------- */
 
 // Lock-on blend “drivers”
@@ -175,9 +175,191 @@ static const float LOCOMOTION_CROSSFADE_DURATION = 0.10f; // tune 0.06–0.14
 static const float LOCOMOTION_MIN_SWITCH_INTERVAL = 0.00f; // set to 0.06f if you want
 static float locomotionSwitchCooldown = 0.0f;
 
+// Lock-on strafe enter ramp (prevents idle->strafe "pop" when base switches to RUN)
+static bool  lockonWasStrafing = false;
+
+
+// Lock-on strafe enter ramp + base hold (time-based, fixes idle->strafe snap)
+static float lockonStrafeEnterT        = 0.0f;
+static float lockonStrafeEnterWTarget  = 0.0f;
+
+// Hysteresis to prevent instant strafeWalk<->strafeRun swapping
+static bool  lockonStrafeUseRun        = false;
+
+
+// Tuning
+static const float LOCKON_RUN_HI           = 0.78f; // hysteresis high threshold
+static const float LOCKON_RUN_LO           = 0.62f; // hysteresis low threshold
+static const float LOCKON_STRAFE_EXIT_DUR  = 0.22f;
+
+// ---- Idle settle (fixes speed-based freeze -> snap) ----
+static float idleSettleT = 0.0f;
+
+
+// --- Input intent cached for animation selection ---
+static float g_moveIntentFwd = 0.0f;   // -1..+1 (negative = player intends backwards)
+static float g_moveIntentMag = 0.0f;   // 0..1
+
+// Regular (non lock-on) walk<->run blend tuning
+static const float FREE_WALKRUN_BLEND_START = 0.35f; // speedRatio where run begins to contribute
+static const float FREE_WALKRUN_BLEND_END   = 0.85f; // speedRatio where run is full weight
+
+// Playback scaling for regular locomotion (based on true speed)
+static const float FREE_MIN_LOCO_SPEED = 0.50f;
+static const float FREE_MAX_LOCO_SPEED = 1.00f;
+
+// Strong-hit knockback (displacement-driven)
+static bool  strongKnockbackActive   = false;
+static float strongKnockbackT        = 0.0f;
+static float strongKnockbackPrevDist = 0.0f;
+static float strongKnockbackDirX     = 0.0f;
+static float strongKnockbackDirZ     = 0.0f;
+
+// Tuning
+static const float STRONG_KNOCKBACK_DIST = 50.0f; // world units
+
+// Knockdown timing (seconds)
+static const float KNOCKDOWN_TOTAL_TIME_S      = 5.0f;
+static const float KNOCKDOWN_BREAKAWAY_MIN_S   = 2.0f;
+static const float KNOCKDOWN_BREAKAWAY_MOVE_MAG = 0.30f; // tune 0.20–0.45
+
+// Knockdown runtime (seconds elapsed)
+static float knockdownElapsedS = 0.0f;
+
+// uses (KNOCKDOWN_DURATION * 0.5f) as duration
+
+typedef enum {
+    KD_BRK_NONE   = 0,
+    KD_BRK_ROLL   = 1,
+    KD_BRK_ATTACK = 2,
+    KD_BRK_MOVE   = 3,
+} KnockdownBreakawayReq;
+
+typedef struct {
+    float x;
+    float y;
+    float magnitude;
+} StickInput;
+
+
+#define STRAFEPOSE_MAX_BONES 64
+
+typedef struct {
+    bool   valid;
+    int    count;
+    T3DVec3 pos[STRAFEPOSE_MAX_BONES];
+    T3DQuat rot[STRAFEPOSE_MAX_BONES];
+    T3DVec3 scl[STRAFEPOSE_MAX_BONES];
+} StrafePoseBuf;
+
+// NOTE: no 'g_' prefix — match compiler hints
+static StrafePoseBuf strafeFromPose;
+static float         strafePoseBlendT   = 0.0f;
+static float         strafePoseBlendDur = 0.0f;
+static bool          strafePoseBlending = false;
+
+
+static const float SWING_DELAY_ATTACK1 = 0.25f;
+static const float SWING_DELAY_ATTACK2 = 0.35f;
+static const float SWING_DELAY_ATTACK3 = 0.8f;
+static const float SWING_DELAY_STRONG  = 0.22f;
+
+// Player delayed swing scheduling (boss-style)
+static bool  charSwingSfxPlayed = false;
+static float charSwingAudioTimer = 0.0f;
+
 /* -----------------------------------------------------------------------------
  * Local helpers
  * -------------------------------------------------------------------------- */
+
+static inline float stick_axis_deadzone(float raw)
+{
+    float a = raw / STICK_MAX;
+    if (a < -1.0f) a = -1.0f;
+    if (a >  1.0f) a =  1.0f;
+
+    float ab = fabsf(a);
+    if (ab < INPUT_DEADZONE) return 0.0f;
+
+    // remap [deadzone..1] -> [0..1]
+    float t = (ab - INPUT_DEADZONE) / (1.0f - INPUT_DEADZONE);
+    if (t > 1.0f) t = 1.0f;
+    return (a < 0.0f) ? -t : t;
+}
+
+static inline void pose_capture(StrafePoseBuf* pb, const T3DSkeleton* sk)
+{
+    if (!pb || !sk || !sk->bones || !sk->skeletonRef) return;
+
+    int n = sk->skeletonRef->boneCount;
+    if (n > STRAFEPOSE_MAX_BONES) n = STRAFEPOSE_MAX_BONES;
+
+    pb->valid = true;
+    pb->count = n;
+
+    for (int i = 0; i < n; i++) {
+        pb->pos[i] = sk->bones[i].position;
+        pb->rot[i] = sk->bones[i].rotation;
+        pb->scl[i] = sk->bones[i].scale;
+    }
+}
+
+static inline void pose_blend_into_skeleton(const StrafePoseBuf* pb,
+                                            T3DSkeleton* sk,
+                                            float t)
+{
+    if (!pb || !pb->valid || !sk || !sk->bones || !sk->skeletonRef) return;
+
+    int n = sk->skeletonRef->boneCount;
+    if (n > pb->count) n = pb->count;
+
+    for (int i = 0; i < n; i++) {
+        T3DBone* b = &sk->bones[i];
+
+        t3d_vec3_lerp(&b->position, &pb->pos[i], &b->position, t);
+        t3d_vec3_lerp(&b->scale,    &pb->scl[i], &b->scale,    t);
+        t3d_quat_nlerp(&b->rotation, &pb->rot[i], &b->rotation, t);
+
+        b->hasChanged = true;
+    }
+}
+
+static inline float clamp01(float x) {
+    if (x < 0.0f) return 0.0f;
+    if (x > 1.0f) return 1.0f;
+    return x;
+}
+
+static inline float smoothstep01(float t) {
+    t = clamp01(t);
+    return t * t * (3.0f - 2.0f * t);
+}
+
+// Copy pose by copying bone SRT (THIS is what t3d_skeleton_blend uses)
+static inline void skeleton_copy_pose_bones(T3DSkeleton* dest, const T3DSkeleton* src)
+{
+    if (!dest || !src) return;
+    if (!dest->bones || !src->bones) return;
+    if (!dest->skeletonRef || !src->skeletonRef) return;
+
+    // Assuming both skeletons are clones of the same model skeleton
+    const int count = dest->skeletonRef->boneCount;
+
+    for (int i = 0; i < count; i++) {
+        dest->bones[i].position = src->bones[i].position;
+        dest->bones[i].rotation = src->bones[i].rotation;
+        dest->bones[i].scale    = src->bones[i].scale;
+
+        // mark changed so if someone ever updates matrices, they rebuild
+        dest->bones[i].hasChanged = true;
+    }
+}
+
+static inline void skeleton_prime_from_pose(T3DSkeleton* skel, const T3DSkeleton* poseSrc)
+{
+    if (!skel || !poseSrc) return;
+    skeleton_copy_pose_bones(skel, poseSrc);
+}
 
 static inline void anim_stop_all_except(T3DAnim** set, int count, int keepIdx)
 {
@@ -197,35 +379,114 @@ static inline void anim_stop(T3DAnim** set, int idx)
     t3d_anim_set_playing(set[idx], false);
 }
 
+static inline bool anim_idle_latched(float dt, float velMag, float inputMag, CharacterState state)
+{
+    if (state != CHAR_STATE_NORMAL) {
+        idleSettleT = 0.0f;
+        return false;
+    }
+
+    // IMPORTANT: stick noise means inputMag is almost never exactly 0.
+    // Treat small magnitude as neutral.
+    const float INPUT_NEUTRAL_EPS = 0.03f; // tune 0.02–0.06
+    const bool inputNeutral = (inputMag <= INPUT_NEUTRAL_EPS);
+
+    if (!inputNeutral) {
+        idleSettleT = 0.0f;
+        return false;
+    }
+
+    // Faster settle so we don't "hang" in slowed locomotion.
+    const float SETTLE_TIME = 0.06f; // tune 0.03–0.10
+
+    // Start/continue settling when basically stopped.
+    // (Your velocities are in world units/sec-ish.)
+    const float VEL_ENTER = 3.0f;  // tune 2.0–4.0
+    const float VEL_EXIT  = 5.0f;  // tune 4.0–7.0
+
+    if (velMag <= VEL_ENTER) {
+        idleSettleT += dt;
+        if (idleSettleT >= SETTLE_TIME) {
+            idleSettleT = SETTLE_TIME;
+            return true;
+        }
+    } else if (velMag >= VEL_EXIT) {
+        idleSettleT = 0.0f;
+    }
+
+    return false;
+}
+
 static inline void kill_lockon_drivers(void)
 {
-    if (activeMainAnim != -1) {
-        anim_stop(character.animations, activeMainAnim);
-        activeMainAnim = -1;
-    }
-    if (activeBlendAnim != -1) {
-        anim_stop(character.animations, activeBlendAnim);
-        activeBlendAnim = -1;
-    }
+    // DO NOT stop animations here.
+    // Stopping them causes a "freeze" on the exact frame lock-on blend mode ends,
+    // because t3d_anim_update won't write bones when isPlaying==false.
+
+    activeMainAnim  = -1;
+    activeBlendAnim = -1;
 
     lastBaseAnimLock   = -1;
     lastStrafeAnimLock = -1;
     lastBaseSpeed      = -1.0f;
     lastStrafeSpeed    = -1.0f;
 
-    // CRITICAL: lock-on path attaches clips directly; invalidate attach/speed caches
+    // invalidate attach/speed caches
     lastAttachedMain  = -1;
     lastAttachedBlend = -1;
     lastAnimSpeed     = -1.0f;
 
+    // exit fade
     lockonStrafeExitT = 0.0f;
     lockonLastDir = 0;
     lockonLastW = 0.0f;
+
+    // enter ramp
+    lockonStrafeEnterT = 0.0f;
+    lockonStrafeEnterWTarget = 0.0f;
+    lockonWasStrafing = false;
 }
 
 
 static inline void character_play_swing(void) {
     audio_play_scene_sfx_dist(SCENE1_SFX_CHAR_SWING1, 1.0f, 0.0f);
+}
+
+static inline void character_reset_swing_sfx(void)
+{
+    charSwingSfxPlayed = false;
+    charSwingAudioTimer = 0.0f;
+}
+
+static inline void character_play_swing_timed(float triggerTime)
+{
+    // identical structure to boss_play_attack_sfx, but local to character
+    if (charSwingSfxPlayed) return;
+
+    if (charSwingAudioTimer >= triggerTime) {
+        charSwingSfxPlayed = true;
+        charSwingAudioTimer = 0.0f;
+
+        // distance 0.0f like you already do for player
+        character_play_swing();
+    } else {
+        charSwingAudioTimer += deltaTime;
+    }
+}
+
+static inline float character_get_swing_time(void)
+{
+    if (characterState == CHAR_STATE_ATTACKING_STRONG) return SWING_DELAY_STRONG;
+
+    // only swing during the actual attack, not the end anim
+    if (characterState != CHAR_STATE_ATTACKING || attackEnding) return -1.0f;
+
+    switch (attackComboIndex) {
+        case 1: return SWING_DELAY_ATTACK1;
+        case 2: return SWING_DELAY_ATTACK2;
+        case 3: return SWING_DELAY_ATTACK3;
+        default: return SWING_DELAY_ATTACK1;
+    }
 }
 
 static inline int character_random_hit_sfx(void) {
@@ -266,26 +527,6 @@ static inline void skeleton_copy_pose(T3DSkeleton* dest, T3DSkeleton* src)
     }
 }
 
-// Copy pose by copying bone SRT (THIS is what t3d_skeleton_blend uses)
-static inline void skeleton_copy_pose_bones(T3DSkeleton* dest, const T3DSkeleton* src)
-{
-    if (!dest || !src) return;
-    if (!dest->bones || !src->bones) return;
-    if (!dest->skeletonRef || !src->skeletonRef) return;
-
-    // Assuming both skeletons are clones of the same model skeleton
-    const int count = dest->skeletonRef->boneCount;
-
-    for (int i = 0; i < count; i++) {
-        dest->bones[i].position = src->bones[i].position;
-        dest->bones[i].rotation = src->bones[i].rotation;
-        dest->bones[i].scale    = src->bones[i].scale;
-
-        // mark changed so if someone ever updates matrices, they rebuild
-        dest->bones[i].hasChanged = true;
-    }
-}
-
 static inline bool is_locomotion_anim(int a)
 {
     switch (a) {
@@ -298,7 +539,6 @@ static inline bool is_locomotion_anim(int a)
         case ANIM_STRAFE_WALK_RIGHT:
         case ANIM_STRAFE_RUN_LEFT:
         case ANIM_STRAFE_RUN_RIGHT:
-        case ANIM_RUN_END:
             return true;
         default:
             return false;
@@ -324,6 +564,30 @@ static inline void anim_bind_and_play(T3DAnim** set, int idx, T3DSkeleton* skel,
     }
 
     t3d_anim_set_playing(a, true);
+}
+
+static inline void strong_knockback_update(float dt)
+{
+    if (!strongKnockbackActive) return;
+    if (characterState != CHAR_STATE_KNOCKDOWN) { strongKnockbackActive = false; return; }
+
+    const float dur = KNOCKDOWN_DURATION * 0.5f; // “half the duration”
+    if (dur <= 0.0001f) { strongKnockbackActive = false; return; }
+
+    strongKnockbackT += dt;
+    float t = strongKnockbackT / dur;
+    if (t >= 1.0f) { t = 1.0f; strongKnockbackActive = false; }
+
+    // Smooth displacement 0 -> 50, with velocity easing to 0 by halfway point.
+    float eased = smoothstep01(t);
+    float dist  = STRONG_KNOCKBACK_DIST * eased;
+
+    float delta = dist - strongKnockbackPrevDist;
+    strongKnockbackPrevDist = dist;
+
+    // Apply incremental displacement along knockback direction
+    character.pos[0] += strongKnockbackDirX * delta;
+    character.pos[2] += strongKnockbackDirZ * delta;
 }
 
 /* -----------------------------------------------------------------------------
@@ -369,11 +633,6 @@ static inline void character_update_shadow_mat(void)
  * Input/movement helpers
  * -------------------------------------------------------------------------- */
 
-typedef struct {
-    float x;
-    float y;
-    float magnitude;
-} StickInput;
 
 void character_reset(void)
 {
@@ -497,6 +756,17 @@ static inline void compute_desired_velocity_lockon(float inputX, float inputY, c
     *outZ = fwdZ * inputY + rightZ * inputX;
 }
 
+static inline void anim_stop_all_except_two(T3DAnim** set, int count, int keepA, int keepB)
+{
+    if (!set) return;
+    for (int i = 0; i < count; i++) {
+        if (!set[i]) continue;
+        if (i == keepA || i == keepB) continue;
+        t3d_anim_set_playing(set[i], false);
+    }
+}
+
+
 /* -----------------------------------------------------------------------------
  * Sword segment helper (for trail)
  * -------------------------------------------------------------------------- */
@@ -519,70 +789,6 @@ static inline bool character_sword_world_segment(float outBase[3], float outTip[
     mat4fp_mul_point_f32_row3_colbasis(M, p0_model, outBase);
     mat4fp_mul_point_f32_row3_colbasis(M, p1_model, outTip);
     return true;
-}
-
-/* -----------------------------------------------------------------------------
- * Combat hit test
- * -------------------------------------------------------------------------- */
-
-// ===== PLEASE DONT USE THE FIXED POINT API =====
-// NOTE: CHECK collision_system.c for a demo
-static inline bool attack_hit_test(void)
-{
-    Boss* boss = boss_get_instance();
-    if (!boss) return false;
-
-    const float bossCapA[3] = {
-        boss->pos[0] + boss->capsuleCollider.localCapA.v[0],
-        boss->pos[1] + boss->capsuleCollider.localCapA.v[1],
-        boss->pos[2] + boss->capsuleCollider.localCapA.v[2],
-    };
-    const float bossCapB[3] = {
-        boss->pos[0] + boss->capsuleCollider.localCapB.v[0],
-        boss->pos[1] + boss->capsuleCollider.localCapB.v[1],
-        boss->pos[2] + boss->capsuleCollider.localCapB.v[2],
-    };
-    const float bossRadius = boss->capsuleCollider.radius;
-
-    bool attackHit = false;
-
-    if (characterSwordBoneIndex >= 0 && character.skeleton && character.modelMat) {
-        T3DSkeleton *sk = (T3DSkeleton*)character.skeleton;
-        const T3DMat4FP *B = &sk->boneMatricesFP[characterSwordBoneIndex];
-        const T3DMat4FP *M = (const T3DMat4FP*)character.modelMat;
-
-        const float p0_local[3] = { 0.0f, 0.0f, 0.0f };
-        const float p1_local[3] = { -SWORD_LENGTH, 0.0f, 0.0f };
-
-        float p0_model[3], p1_model[3];
-        mat4fp_mul_point_f32_row3_colbasis(B, p0_local, p0_model);
-        mat4fp_mul_point_f32_row3_colbasis(B, p1_local, p1_model);
-
-        float p0_world[3], p1_world[3];
-        mat4fp_mul_point_f32_row3_colbasis(M, p0_model, p0_world);
-        mat4fp_mul_point_f32_row3_colbasis(M, p1_model, p1_world);
-
-        attackHit = scu_capsule_vs_capsule_f(p0_world, p1_world, SWORD_COLLIDER_RADIUS, bossCapA, bossCapB, bossRadius);
-    }
-
-    if (!attackHit) {
-        float yaw = character.rot[1];
-        float reachStart = 1.0f;
-        float reachEnd = 2.5f;
-        float hitX = character.pos[0] - fm_sinf(yaw) * reachStart;
-        float hitZ = character.pos[2] + fm_cosf(yaw) * reachStart;
-
-        float dx = boss->pos[0] - hitX;
-        float dz = boss->pos[2] - hitZ;
-        float dist = sqrtf(dx * dx + dz * dz);
-
-        float bossRadiusReach = boss->capsuleCollider.radius;
-        if (dist <= (reachEnd + bossRadiusReach)) {
-            attackHit = true;
-        }
-    }
-
-    return attackHit;
 }
 
 /* -----------------------------------------------------------------------------
@@ -613,7 +819,19 @@ static inline void try_start_roll(const joypad_buttons_t* buttons, const StickIn
 
     characterState = CHAR_STATE_ROLLING;
     actionTimer = 0.0f;
-    currentActionDuration = ROLL_DURATION;
+
+    // Shorten roll when moving so we return to locomotion sooner (prevents long slide)
+    float mag = stick ? stick->magnitude : 0.0f;
+    if (mag >= ROLL_MOVING_MAG) {
+        // Scale smoothly: at threshold -> near full duration, at full tilt -> moving duration
+        float t = (mag - ROLL_MOVING_MAG) / (1.0f - ROLL_MOVING_MAG);
+        if (t < 0.0f) t = 0.0f;
+        if (t > 1.0f) t = 1.0f;
+        currentActionDuration = ROLL_DURATION + (ROLL_DURATION_MOVING - ROLL_DURATION) * t;
+    } else {
+        currentActionDuration = ROLL_DURATION;
+    }
+
     clear_lockon_strafe_flags_on_action();
 
     if (ANIM_ROLL >= 0 && ANIM_ROLL < character.animationCount && character.animations[ANIM_ROLL]) {
@@ -637,7 +855,6 @@ static inline float get_attack_duration(int comboIndex)
         case 1: animIdx = ANIM_ATTACK1; break;
         case 2: animIdx = ANIM_ATTACK2; break;
         case 3: animIdx = ANIM_ATTACK3; break;
-        case 4: animIdx = ANIM_ATTACK4; break;
         default: return 0.9f;
     }
 
@@ -646,6 +863,120 @@ static inline float get_attack_duration(int comboIndex)
         return (len > 0.0f) ? len : 0.9f;
     }
     return 0.9f;
+}
+
+
+
+
+static inline bool try_free_locomotion_speed_blend(float speedRatio, CharacterState state, float dt)
+{
+    // Only normal locomotion, and ONLY when not lock-on and not doing your other blend systems
+    if (state != CHAR_STATE_NORMAL) return false;
+    if (cameraLockOnActive) return false;
+    if (character.isBlending) return false; // don't fight your existing crossfades
+    if (!character.animations || !character.skeleton || !character.skeletonBlend) return false;
+
+    // Not moving => let normal system handle idle etc.
+    if (speedRatio <= IDLE_THRESHOLD) return false;
+
+    // Decide forward vs backward (same as your freecam logic)
+    bool isBackward = false;
+    {
+        float yaw = character.rot[1];
+        float fwdX = -fm_sinf(yaw);
+        float fwdZ =  fm_cosf(yaw);
+        float dotForward = movementVelocityX * fwdX + movementVelocityZ * fwdZ;
+        isBackward = (dotForward < -0.001f);
+    }
+
+    const int walkAnim = isBackward ? ANIM_WALK_BACK : ANIM_WALK;
+    const int runAnim  = isBackward ? ANIM_RUN_BACK  : ANIM_RUN;
+
+    if (walkAnim < 0 || runAnim < 0) return false;
+    if (walkAnim >= character.animationCount || runAnim >= character.animationCount) return false;
+    if (!character.animations[walkAnim] || !character.animations[runAnim]) return false;
+
+    // Run weight from speed (linear)
+    float wRun = 0.0f;
+    {
+        float denom = (FREE_WALKRUN_BLEND_END - FREE_WALKRUN_BLEND_START);
+        if (denom <= 0.0001f) denom = 0.0001f;
+        wRun = (speedRatio - FREE_WALKRUN_BLEND_START) / denom;
+        if (wRun < 0.0f) wRun = 0.0f;
+        if (wRun > 1.0f) wRun = 1.0f;
+    }
+
+    // Keep ONLY these two alive so nothing else fights the pose
+    anim_stop_all_except_two(character.animations, character.animationCount, walkAnim, runAnim);
+
+    T3DAnim* walkA = character.animations[walkAnim];
+    T3DAnim* runA  = character.animations[runAnim];
+
+    // ---------------------------------------------------------------------
+    // CRITICAL FIX:
+    // Always ensure attachments are correct for this mode.
+    // "s_freeBlend" was not sufficient because other paths can attach ANIM_RUN
+    // to the main skeleton, leaving runA writing into the wrong skeleton.
+    // ---------------------------------------------------------------------
+    if (lastAttachedMain != walkAnim) {
+        t3d_anim_attach(walkA, character.skeleton);
+        lastAttachedMain = walkAnim;
+    }
+    if (lastAttachedBlend != runAnim) {
+        t3d_anim_attach(runA, character.skeletonBlend);
+        lastAttachedBlend = runAnim;
+    }
+
+    // Loop + ensure playing (no restart to avoid pops)
+    t3d_anim_set_looping(walkA, true);
+    t3d_anim_set_looping(runA,  true);
+    if (!walkA->isPlaying) t3d_anim_set_playing(walkA, true);
+    if (!runA->isPlaying)  t3d_anim_set_playing(runA,  true);
+
+    // Playback speed based on joystick magnitude (0..1 post-deadzone)
+    float stick01 = clamp01(g_moveIntentMag);
+    float s = FREE_MIN_LOCO_SPEED + (FREE_MAX_LOCO_SPEED - FREE_MIN_LOCO_SPEED) * stick01;
+    t3d_anim_set_speed(walkA, s);
+    t3d_anim_set_speed(runA,  s);
+
+    // ---------------------------------------------------------------------
+    // Phase-locked update:
+    // Walk advances normally. Run is slaved to walk's phase.
+    // ---------------------------------------------------------------------
+    t3d_anim_update(walkA, dt);
+
+    float walkLen = t3d_anim_get_length(walkA);
+    float walkT   = t3d_anim_get_time(walkA);
+
+    float phase = 0.0f;
+    if (walkLen > 0.0001f) {
+        while (walkT >= walkLen) walkT -= walkLen;
+        while (walkT <  0.0f)    walkT += walkLen;
+        phase = walkT / walkLen;
+    }
+
+    // Prime blend skeleton from walk pose first
+    skeleton_copy_pose_bones(character.skeletonBlend, character.skeleton);
+
+    float runLen = t3d_anim_get_length(runA);
+    if (runLen > 0.0001f) {
+        float runT = phase * runLen;
+        while (runT >= runLen) runT -= runLen;
+        while (runT <  0.0f)   runT += runLen;
+        t3d_anim_set_time(runA, runT);
+    }
+
+    // Sample run pose at that time without advancing
+    t3d_anim_update(runA, 0.0f);
+
+    // Blend run into walk on main skeleton
+    t3d_skeleton_blend(character.skeleton, character.skeleton, character.skeletonBlend, wRun);
+    t3d_skeleton_update(character.skeleton);
+
+    // Keep state machine sane
+    character.currentAnimation = (wRun >= 0.5f) ? runAnim : walkAnim;
+
+    return true;
 }
 
 static inline void try_start_attack(bool leftJustPressed)
@@ -658,6 +989,7 @@ static inline void try_start_attack(bool leftJustPressed)
         attackQueued = false;
         attackEnding = false;
         actionTimer = 0.0f;
+        character_reset_swing_sfx();
 
         currentActionDuration = get_attack_duration(1);
         character.currentAttackHasHit = false;
@@ -668,7 +1000,7 @@ static inline void try_start_attack(bool leftJustPressed)
         movementVelocityX += fx * ATTACK_FORWARD_IMPULSE;
         movementVelocityZ += fz * ATTACK_FORWARD_IMPULSE;
 
-        character_play_swing();
+        character_play_swing_timed(SWING_DELAY_ATTACK1);
     } else if (characterState == CHAR_STATE_ATTACKING && !attackEnding) {
         if (actionTimer >= ATTACK_QUEUE_OPEN && actionTimer <= ATTACK_QUEUE_CLOSE) {
             attackQueued = true;
@@ -693,13 +1025,14 @@ static inline void upgrade_to_strong_attack(bool leftHeldNow)
         attackEnding = false;
 
         actionTimer = 0.0f;
+        character_reset_swing_sfx();
         currentActionDuration = STRONG_ATTACK_DURATION;
 
         character.currentAttackHasHit = false;
         movementVelocityX = 0.0f;
         movementVelocityZ = 0.0f;
 
-        character_play_swing();
+        character_play_swing_timed(SWING_DELAY_STRONG);
     }
 
     if (characterState == CHAR_STATE_NORMAL) {
@@ -707,93 +1040,7 @@ static inline void upgrade_to_strong_attack(bool leftHeldNow)
     }
 }
 
-static inline void progress_action_timers(float dt)
-{
-    if (characterState == CHAR_STATE_NORMAL) return;
-    if (currentActionDuration <= 0.0001f) currentActionDuration = 1.0f;
 
-    actionTimer += dt / currentActionDuration;
-
-    if (characterState == CHAR_STATE_ROLLING) {
-        T3DAnim* rollAnim = NULL;
-        if (ANIM_ROLL >= 0 && ANIM_ROLL < character.animationCount) {
-            rollAnim = character.animations[ANIM_ROLL];
-        }
-        if (actionTimer > 0.05f && rollAnim && !rollAnim->isPlaying) {
-            characterState = CHAR_STATE_NORMAL;
-            actionTimer = 0.0f;
-        } else if (actionTimer >= 2.0f) {
-            characterState = CHAR_STATE_NORMAL;
-            actionTimer = 0.0f;
-        }
-    } else if (characterState == CHAR_STATE_ATTACKING) {
-        if (!attackEnding && attackQueued && actionTimer >= ATTACK_TRANSITION_TIME && attackComboIndex < 4) {
-            attackComboIndex++;
-            attackQueued = false;
-
-            actionTimer = 0.0f;
-            currentActionDuration = get_attack_duration(attackComboIndex);
-            character.currentAttackHasHit = false;
-
-            float yaw = character.rot[1];
-            float fx = -fm_sinf(yaw);
-            float fz =  fm_cosf(yaw);
-            movementVelocityX += fx * ATTACK_FORWARD_IMPULSE;
-            movementVelocityZ += fz * ATTACK_FORWARD_IMPULSE;
-
-        } else if (!attackEnding && actionTimer >= 1.0f) {
-            if (attackComboIndex < 4) {
-                attackEnding = true;
-                actionTimer = 0.0f;
-                currentActionDuration = ATTACK_END_DURATION;
-            } else {
-                characterState = CHAR_STATE_NORMAL;
-                actionTimer = 0.0f;
-                attackComboIndex = 0;
-                attackQueued = false;
-                attackEnding = false;
-            }
-        } else if (attackEnding && actionTimer >= 1.0f) {
-            characterState = CHAR_STATE_NORMAL;
-            actionTimer = 0.0f;
-            attackComboIndex = 0;
-            attackQueued = false;
-            attackEnding = false;
-        }
-    } else if (characterState == CHAR_STATE_ATTACKING_STRONG) {
-        if (actionTimer >= 1.0f) {
-            characterState = CHAR_STATE_NORMAL;
-            actionTimer = 0.0f;
-        }
-    } else if (characterState == CHAR_STATE_KNOCKDOWN) {
-        T3DAnim* kd = NULL;
-        if (character.currentAnimation == ANIM_KNOCKDOWN &&
-            ANIM_KNOCKDOWN >= 0 && ANIM_KNOCKDOWN < character.animationCount) {
-            kd = character.animations[ANIM_KNOCKDOWN];
-        }
-        if (kd && !kd->isPlaying) {
-            characterState = CHAR_STATE_NORMAL;
-            actionTimer = 0.0f;
-        } else if (actionTimer >= (KNOCKDOWN_MAX_STUN_SECONDS / currentActionDuration)) {
-            characterState = CHAR_STATE_NORMAL;
-            actionTimer = 0.0f;
-        }
-    }
-}
-
-static inline void update_actions(const joypad_buttons_t* buttons,
-                                  bool leftHeldNow,
-                                  bool leftJustPressed,
-                                  bool jumpJustPressed,
-                                  const StickInput* stick,
-                                  float dt)
-{
-    (void)jumpJustPressed;
-    try_start_roll(buttons, stick);
-    try_start_attack(leftJustPressed);
-    upgrade_to_strong_attack(leftHeldNow);
-    progress_action_timers(dt);
-}
 
 static inline bool character_is_invulnerable(void)
 {
@@ -880,25 +1127,56 @@ static inline int get_target_animation(CharacterState state, float speedRatio)
                 case 1: return ANIM_ATTACK1;
                 case 2: return ANIM_ATTACK2;
                 case 3: return ANIM_ATTACK3;
-                case 4: return ANIM_ATTACK4;
                 default: return ANIM_ATTACK1;
             }
         }
         return ANIM_ATTACK1;
     }
 
-    // In lock-on, locomotion blending is handled separately
+    // In lock-on, locomotion blending is handled separately (try_lockon_locomotion_blend)
     if (cameraLockOnActive && ((animStrafeDirFlag != 0) || (lockonStrafeExitT > 0.0f))) {
         return ANIM_IDLE;
     }
 
-    // Determine if moving backwards relative to facing
-    float yaw = character.rot[1];
-    float fwdX = -fm_sinf(yaw);
-    float fwdZ =  fm_cosf(yaw);
-    float dotForward = movementVelocityX * fwdX + movementVelocityZ * fwdZ;
-    bool isBackward = (dotForward < -0.001f);
+    // ------------------------------------------------------------
+    // Backward selection:
+    // - FREECAM: use velocity vs facing (original correct behavior)
+    // - LOCKON (but not in blend mode): use intent hysteresis (optional safety)
+    // ------------------------------------------------------------
+    bool isBackward = false;
 
+    if (!cameraLockOnActive) {
+        // ORIGINAL: determine if moving backwards relative to facing
+        float yaw = character.rot[1];
+        float fwdX = -fm_sinf(yaw);
+        float fwdZ =  fm_cosf(yaw);
+        float dotForward = movementVelocityX * fwdX + movementVelocityZ * fwdZ;
+        isBackward = (dotForward < -0.001f);
+    } else {
+        // If you ever hit this path (lock-on but not in lock-on blend mode),
+        // use input-intent gating so sideways doesn't become "walk back".
+        const float BACK_INTENT_ENTER = -0.35f; // tune
+        const float BACK_INTENT_EXIT  = -0.20f; // tune
+        const float INTENT_MIN_MAG    = 0.06f;
+
+        static bool wantBackAnim = false;
+
+        if (g_moveIntentMag < INTENT_MIN_MAG) {
+            wantBackAnim = false;
+        } else {
+            if (!wantBackAnim) {
+                if (g_moveIntentFwd <= BACK_INTENT_ENTER) wantBackAnim = true;
+            } else {
+                if (g_moveIntentFwd >= BACK_INTENT_EXIT) wantBackAnim = false;
+            }
+        }
+
+        isBackward = wantBackAnim;
+    }
+
+    // ------------------------------------------------------------
+    // Speed -> clip
+    // ------------------------------------------------------------
     if (speedRatio < IDLE_THRESHOLD) return ANIM_IDLE;
     if (speedRatio < WALK_THRESHOLD) return isBackward ? ANIM_WALK_BACK : ANIM_WALK;
     if (speedRatio < RUN_THRESHOLD)  return isBackward ? ANIM_WALK_BACK : ANIM_WALK;
@@ -920,16 +1198,19 @@ static inline bool try_lockon_locomotion_blend(float speedRatio, CharacterState 
     if (character.isBlending) return false;
     if (!(state == CHAR_STATE_NORMAL && cameraLockOnActive && character.animations)) return false;
 
-    // Allow the lock-on blend path to keep running briefly while we fade strafe out.
+    // We run this path whenever strafing is active OR we are fading out.
     const bool wantLockonBlend = (animStrafeDirFlag != 0) || (lockonStrafeExitT > 0.0f);
     if (!wantLockonBlend) return false;
 
-    // Fade-out strafe weight if we're exiting
+    // ------------------------------------------------------------
+    // Exit fade (time-based)
+    // ------------------------------------------------------------
     if (lockonStrafeExitT > 0.0f) {
+        const float EXIT_DUR = LOCKON_STRAFE_EXIT_DUR;
+
         lockonStrafeExitT -= dt;
         if (lockonStrafeExitT < 0.0f) lockonStrafeExitT = 0.0f;
 
-        const float EXIT_DUR = 0.10f; // must match what you set when starting fade
         float t = (EXIT_DUR > 0.0f) ? (lockonStrafeExitT / EXIT_DUR) : 0.0f;
         animStrafeBlendRatio = lockonLastW * t;
 
@@ -938,79 +1219,170 @@ static inline bool try_lockon_locomotion_blend(float speedRatio, CharacterState 
             animStrafeDirFlag = 0;
             lockonLastDir = 0;
             lockonLastW = 0.0f;
+            lockonStrafeExitT = 0.0f;
         }
     }
 
-    // Compute backward relative to facing
-    float yaw = character.rot[1];
-    float fwdX = -fm_sinf(yaw);
-    float fwdZ =  fm_cosf(yaw);
-    float dotForward = movementVelocityX * fwdX + movementVelocityZ * fwdZ;
-    bool isBackward = (dotForward < -0.001f);
-
-    // Decide whether we're effectively idle (velocity-based)
-    const float LOCKON_IDLE_VEL = 1.5f; // tune
+    // ------------------------------------------------------------
+    // Idle test (velocity-based)
+    // ------------------------------------------------------------
+    const float LOCKON_IDLE_VEL = 1.8f;
     float velMag = sqrtf(movementVelocityX * movementVelocityX +
                          movementVelocityZ * movementVelocityZ);
-    const bool isIdle = (velMag <= LOCKON_IDLE_VEL) || (speedRatio < IDLE_THRESHOLD);
 
-    // IMPORTANT: don't swap walk/run clips in lock-on.
-    // Use idle when idle, otherwise always use RUN variants and scale speed.
-    int baseAnim = isIdle ? ANIM_IDLE
-                          : (isBackward ? ANIM_RUN_BACK : ANIM_RUN);
+    const bool isIdle = (velMag <= LOCKON_IDLE_VEL) || (speedRatio < 0.01f);
 
-    int strafeAnim;
-    if (isIdle || animStrafeDirFlag == 0) {
-        strafeAnim = ANIM_IDLE;
-    } else {
-        strafeAnim = (animStrafeDirFlag > 0) ? ANIM_STRAFE_RUN_RIGHT : ANIM_STRAFE_RUN_LEFT;
+    // ------------------------------------------------------------
+    // LOCK-ON BASE CLIP SELECTION (intent-gated forward/back)
+    // ------------------------------------------------------------
+    const float LOCKON_FB_MAG_MIN   = 0.16f;
+    const float LOCKON_FB_FWD_MIN   = 0.22f;
+    const float LOCKON_FB_FWD_ENTER = 0.28f;
+    const float LOCKON_FB_FWD_EXIT  = 0.18f;
+
+    static int lockonFBDir = 0; // -1 back, +1 forward, 0 none
+
+    // ------------------------------------------------------------
+    // HACK: "fake diagonal" forward/back component while strafing
+    // Only affects the F/B decision logic. Does NOT change baseAnim rules.
+    // ------------------------------------------------------------
+    static int s_lastRealFBDir = +1; // last meaningful FB direction (default forward)
+
+    // Track last real FB direction when user actually pushes FB meaningfully
+    if (!isIdle && fabsf(g_moveIntentFwd) >= LOCKON_FB_FWD_ENTER) {
+        s_lastRealFBDir = (g_moveIntentFwd >= 0.0f) ? +1 : -1;
     }
 
-    // Keep only baseAnim running on main skeleton
-    anim_stop_all_except(character.animations, character.animationCount, baseAnim);
+    float fwdForDecision = g_moveIntentFwd;
 
-    bool baseChanged   = (lastBaseAnimLock   != baseAnim);
-    bool strafeChanged = (lastStrafeAnimLock != strafeAnim);
+    // If strafing (left/right) and FB is near zero, inject a small FB
+    if (!isIdle && animStrafeDirFlag != 0) {
+        const float PURE_STRAFE_FWD_DEADBAND = 0.18f;  // consider this "no FB"
+        const float INJECT_FWD              = 0.30f;  // must be > LOCKON_FB_FWD_ENTER (0.28)
 
+        if (fabsf(fwdForDecision) < PURE_STRAFE_FWD_DEADBAND) {
+            fwdForDecision = (s_lastRealFBDir > 0) ? +INJECT_FWD : -INJECT_FWD;
+        }
+    }
+
+    if (isIdle || g_moveIntentMag < LOCKON_FB_MAG_MIN) {
+        lockonFBDir = 0;
+    } else {
+        if (lockonFBDir == 0) {
+            if (fwdForDecision >=  LOCKON_FB_FWD_ENTER) lockonFBDir = +1;
+            if (fwdForDecision <= -LOCKON_FB_FWD_ENTER) lockonFBDir = -1;
+        } else if (lockonFBDir > 0) {
+            if (fwdForDecision <=  LOCKON_FB_FWD_EXIT) lockonFBDir = 0;
+        } else { // lockonFBDir < 0
+            if (fwdForDecision >= -LOCKON_FB_FWD_EXIT) lockonFBDir = 0;
+        }
+
+        if (fabsf(fwdForDecision) < LOCKON_FB_FWD_MIN) {
+            lockonFBDir = 0;
+        }
+    }
+
+    // Walk vs run hysteresis
+    if (isIdle) {
+        lockonStrafeUseRun = false;
+    } else {
+        if (!lockonStrafeUseRun) {
+            if (speedRatio >= LOCKON_RUN_HI) lockonStrafeUseRun = true;
+        } else {
+            if (speedRatio <= LOCKON_RUN_LO) lockonStrafeUseRun = false;
+        }
+    }
+
+    int baseAnim = ANIM_IDLE;
+    if (!isIdle && lockonFBDir != 0) {
+        const bool wantRun = lockonStrafeUseRun;
+        if (wantRun) baseAnim = (lockonFBDir > 0) ? ANIM_RUN      : ANIM_RUN_BACK;
+        else         baseAnim = (lockonFBDir > 0) ? ANIM_WALK     : ANIM_WALK_BACK;
+    }
+
+    // ------------------------------------------------------------
+    // Strafe clip selection: always STRAFE_RUN L/R (or idle if not strafing)
+    // ------------------------------------------------------------
+    int strafeAnim = ANIM_IDLE;
+    if (!isIdle && animStrafeDirFlag != 0) {
+        const bool right = (animStrafeDirFlag > 0);
+        strafeAnim = right ? ANIM_STRAFE_RUN_RIGHT : ANIM_STRAFE_RUN_LEFT;
+    }
+
+    debugf("lockon base=%d strafe=%d w=%.2f fwd=%.2f fwdHack=%.2f fbDir=%d\n",
+        baseAnim, strafeAnim, animStrafeBlendRatio,
+        g_moveIntentFwd, fwdForDecision, lockonFBDir);
+
+    // ------------------------------------------------------------
+    // CRITICAL FIX:
+    // Keep BOTH base + strafe alive. Do NOT stop everything except base.
+    // If both are same, this degenerates fine.
+    // ------------------------------------------------------------
+    anim_stop_all_except_two(character.animations, character.animationCount, baseAnim, strafeAnim);
+
+    const bool baseChanged   = (lastBaseAnimLock   != baseAnim);
+    const bool strafeChanged = (lastStrafeAnimLock != strafeAnim);
+
+    // ------------------------------------------------------------
+    // Base on main skeleton
+    // ------------------------------------------------------------
     if (baseChanged) {
         if (activeMainAnim != -1 && activeMainAnim != baseAnim) {
             anim_stop(character.animations, activeMainAnim);
         }
         activeMainAnim = baseAnim;
 
-        // restart on change is fine here because we eliminated the fast walk/run swapping
-        anim_bind_and_play(character.animations, baseAnim, character.skeleton, true, true);
+        // no restart to avoid pops
+        anim_bind_and_play(character.animations, baseAnim, character.skeleton, true, false);
 
         lastAttachedMain = baseAnim;
         lastBaseAnimLock = baseAnim;
-    } else {
-        if (character.animations[baseAnim] && !character.animations[baseAnim]->isPlaying) {
-            t3d_anim_set_looping(character.animations[baseAnim], true);
-            t3d_anim_set_playing(character.animations[baseAnim], true);
-        }
     }
 
+    // Guarantee base is playing
+    if (character.animations[baseAnim] && !character.animations[baseAnim]->isPlaying) {
+        t3d_anim_set_looping(character.animations[baseAnim], true);
+        t3d_anim_set_playing(character.animations[baseAnim], true);
+    }
+
+    // ------------------------------------------------------------
+    // Strafe on blend skeleton
+    // ------------------------------------------------------------
     if (strafeChanged) {
+        if (character.skeletonBlend) {
+            pose_capture(&strafeFromPose, character.skeletonBlend);
+            strafePoseBlendT   = 0.0f;
+            strafePoseBlendDur = 0.10f;
+            strafePoseBlending = true;
+        }
+
         if (activeBlendAnim != -1 && activeBlendAnim != strafeAnim) {
             anim_stop(character.animations, activeBlendAnim);
         }
         activeBlendAnim = strafeAnim;
 
-        anim_bind_and_play(character.animations, strafeAnim, character.skeletonBlend, true, true);
+        anim_bind_and_play(character.animations, strafeAnim, character.skeletonBlend, true, false);
 
         lastAttachedBlend  = strafeAnim;
         lastStrafeAnimLock = strafeAnim;
-    } else {
-        if (character.animations[strafeAnim] && !character.animations[strafeAnim]->isPlaying) {
-            t3d_anim_set_looping(character.animations[strafeAnim], true);
-            t3d_anim_set_playing(character.animations[strafeAnim], true);
-        }
     }
 
-    // Speed scaling: makes RUN clip look like WALK at low speed
+    // Guarantee strafe is playing (prevents “stuck in idle”)
+    if (character.animations[strafeAnim] && !character.animations[strafeAnim]->isPlaying) {
+        t3d_anim_set_looping(character.animations[strafeAnim], true);
+        t3d_anim_set_playing(character.animations[strafeAnim], true);
+    }
+
+    // ------------------------------------------------------------
+    // Speed scaling
+    // ------------------------------------------------------------
     float move01 = isIdle ? 0.0f : fminf(1.0f, fmaxf(0.0f, speedRatio));
-    float baseSpeed   = fmaxf(move01 * 0.9f + 0.15f, 0.25f);
-    float strafeSpeed = fmaxf(move01 * 0.9f + 0.15f, 0.25f);
+
+    const float MIN_LOCO_SPEED = 0.88f;
+    const float MAX_LOCO_SPEED = 1.15f;
+
+    float baseSpeed   = MIN_LOCO_SPEED + (MAX_LOCO_SPEED - MIN_LOCO_SPEED) * move01;
+    float strafeSpeed = MIN_LOCO_SPEED + (MAX_LOCO_SPEED - MIN_LOCO_SPEED) * move01;
 
     if (fabsf(baseSpeed - lastBaseSpeed) > 0.01f) {
         if (character.animations[baseAnim]) t3d_anim_set_speed(character.animations[baseAnim], baseSpeed);
@@ -1021,21 +1393,27 @@ static inline bool try_lockon_locomotion_blend(float speedRatio, CharacterState 
         lastStrafeSpeed = strafeSpeed;
     }
 
-    // ---- CRITICAL ORDER FIX (prevents bind/T-pose bleeding) ----
-    // 1) Update base anim on main skeleton (drives character.skeleton bones)
+    // ------------------------------------------------------------
+    // Update order
+    // ------------------------------------------------------------
     t3d_anim_update(character.animations[baseAnim], dt);
 
-    // 2) PRIME blend skeleton with base pose so any un-keyed bones are NOT bind pose
+    // Prime blend skeleton from base pose first (prevents bind-pose on unkeyed bones)
     skeleton_copy_pose_bones(character.skeletonBlend, character.skeleton);
 
-    // 3) Update strafe anim on blend skeleton (overwrites keyed channels only)
     t3d_anim_update(character.animations[strafeAnim], dt);
 
-    // 4) Blend pose A vs B using weight (now also fades out smoothly)
+    // Crossfade across left/right switches
+    if (strafePoseBlending) {
+        strafePoseBlendT += dt;
+        float t = (strafePoseBlendDur > 0.0f) ? (strafePoseBlendT / strafePoseBlendDur) : 1.0f;
+        if (t >= 1.0f) { t = 1.0f; strafePoseBlending = false; }
+        t = smoothstep01(t);
+        pose_blend_into_skeleton(&strafeFromPose, character.skeletonBlend, t);
+    }
+
     float w = fminf(1.0f, fmaxf(0.0f, animStrafeBlendRatio));
     t3d_skeleton_blend(character.skeleton, character.skeleton, character.skeletonBlend, w);
-
-    // 5) Build final matrices once (after pose blend)
     t3d_skeleton_update(character.skeleton);
 
     return true;
@@ -1058,39 +1436,53 @@ static inline void ensure_locomotion_playing(CharacterState state)
 
 static void switch_to_action_animation(int targetAnim)
 {
-    // Stop lock-on drivers
     kill_lockon_drivers();
 
-    // Ensure no other clips remain playing
     anim_stop_all_except(character.animations, character.animationCount, targetAnim);
 
     character.previousAnimation = character.currentAnimation;
     character.currentAnimation  = targetAnim;
 
-    character.isBlending = true;
-    character.blendDuration = ATTACK_CROSSFADE_DURATION;
-    character.blendTimer = 0.0f;
-    character.blendFactor = 0.0f;
+    character.isBlending    = false;
+    hasBlendSnapshot        = false;
 
+    // Snapshot FROM pose (current skeleton) before attach resets anything
     if (character.previousAnimation >= 0 &&
+        character.previousAnimation < character.animationCount &&
         character.animations[character.previousAnimation] &&
         character.skeleton && character.skeletonBlend)
     {
-        // IMPORTANT: snapshot bones (SRT), not matrices
         skeleton_copy_pose_bones(character.skeletonBlend, character.skeleton);
         hasBlendSnapshot = true;
-        lastAttachedBlend = character.previousAnimation;
-    } else {
-        hasBlendSnapshot = false;
     }
 
-
+    // Stop previous clip if any
     if (character.previousAnimation >= 0 && character.animations[character.previousAnimation]) {
         anim_stop(character.animations, character.previousAnimation);
     }
 
-    anim_bind_and_play(character.animations, targetAnim, character.skeleton, false, true);
-    lastAttachedMain = targetAnim;
+    // Attach + play target on main skeleton
+    if (character.animations[targetAnim]) {
+        t3d_anim_attach(character.animations[targetAnim], character.skeleton);
+        lastAttachedMain = targetAnim;
+
+        // PRIME from snapshot so first update isn't bind pose
+        if (hasBlendSnapshot) {
+            skeleton_prime_from_pose(character.skeleton, character.skeletonBlend);
+        }
+
+        t3d_anim_set_looping(character.animations[targetAnim], false);
+        t3d_anim_set_time(character.animations[targetAnim], 0.0f);
+        t3d_anim_set_playing(character.animations[targetAnim], true);
+    }
+
+    // Start blend
+    if (hasBlendSnapshot) {
+        character.isBlending    = true;
+        character.blendDuration = ATTACK_CROSSFADE_DURATION;
+        character.blendTimer    = 0.0f;
+        character.blendFactor   = 0.0f;
+    }
 }
 
 static void switch_to_action_animation_immediate(int targetAnim)
@@ -1114,191 +1506,443 @@ static void switch_to_action_animation_immediate(int targetAnim)
     lastAttachedMain = targetAnim;
 }
 
+static inline void start_knockdown_breakaway_attack(void)
+{
+    // Breakaway => transition into ATTACK1 immediately
+    characterState = CHAR_STATE_ATTACKING;
+
+    attackComboIndex = 1;
+    attackQueued = false;
+    attackEnding = false;
+
+    actionTimer = 0.0f;
+    character_reset_swing_sfx();
+    currentActionDuration = get_attack_duration(1);
+
+    character.currentAttackHasHit = false;
+
+    clear_lockon_strafe_flags_on_action();
+
+    // Same forward impulse you already use
+    float yaw = character.rot[1];
+    float fx = -fm_sinf(yaw);
+    float fz =  fm_cosf(yaw);
+    movementVelocityX += fx * ATTACK_FORWARD_IMPULSE;
+    movementVelocityZ += fz * ATTACK_FORWARD_IMPULSE;
+
+    // Play the attack anim NOW
+    if (ANIM_ATTACK1 >= 0 && ANIM_ATTACK1 < character.animationCount && character.animations[ANIM_ATTACK1]) {
+        t3d_anim_set_looping(character.animations[ANIM_ATTACK1], false);
+        t3d_anim_set_time(character.animations[ANIM_ATTACK1], 0.0f);
+        t3d_anim_set_playing(character.animations[ANIM_ATTACK1], true);
+    }
+
+    character_play_swing_timed(SWING_DELAY_ATTACK1);
+
+    // Ensure pose driver switches instantly
+    switch_to_action_animation_immediate(ANIM_ATTACK1);
+}
+
+static inline void start_knockdown_breakaway_roll(void)
+{
+    // Breakaway => transition into rolling (invuln maintained by your state check)
+    characterState = CHAR_STATE_ROLLING;
+    actionTimer = 0.0f;
+
+    // Breakaway roll duration: pick whichever feels right.
+    // If you want it snappier, use ROLL_DURATION_MOVING.
+    currentActionDuration = ROLL_DURATION_MOVING;
+
+    // Clear lock-on flags so we don't fight locomotion blend
+    clear_lockon_strafe_flags_on_action();
+
+    // Optional: kill movement so roll anim reads clean
+    movementVelocityX = 0.0f;
+    movementVelocityZ = 0.0f;
+
+    // Play roll anim immediately
+    if (ANIM_ROLL >= 0 && ANIM_ROLL < character.animationCount && character.animations[ANIM_ROLL]) {
+        t3d_anim_set_looping(character.animations[ANIM_ROLL], false);
+        t3d_anim_set_time(character.animations[ANIM_ROLL], 0.0f);
+        t3d_anim_set_playing(character.animations[ANIM_ROLL], true);
+    }
+
+    // Ensure we switch pose driver now (so you see it instantly)
+    switch_to_action_animation_immediate(ANIM_ROLL);
+}
+
+static inline void progress_action_timers(float dt, KnockdownBreakawayReq breakawayReq)
+{
+    if (characterState == CHAR_STATE_NORMAL) return;
+    if (currentActionDuration <= 0.0001f) currentActionDuration = 1.0f;
+
+    // Default behavior: your "normalized" actionTimer
+    actionTimer += dt / currentActionDuration;
+
+    if (characterState == CHAR_STATE_ROLLING) {
+        T3DAnim* rollAnim = NULL;
+        if (ANIM_ROLL >= 0 && ANIM_ROLL < character.animationCount) {
+            rollAnim = character.animations[ANIM_ROLL];
+        }
+        if (actionTimer > 0.05f && rollAnim && !rollAnim->isPlaying) {
+            characterState = CHAR_STATE_NORMAL;
+            actionTimer = 0.0f;
+        } else if (actionTimer >= 2.0f) {
+            characterState = CHAR_STATE_NORMAL;
+            actionTimer = 0.0f;
+        }
+        return;
+    }
+
+    if (characterState == CHAR_STATE_ATTACKING) {
+        if (!attackEnding && attackQueued &&
+            actionTimer >= ATTACK_TRANSITION_TIME &&
+            attackComboIndex < 3)
+        {
+            attackComboIndex++;
+            attackQueued = false;
+
+            actionTimer = 0.0f;
+            character_reset_swing_sfx();
+            currentActionDuration = get_attack_duration(attackComboIndex);
+            character.currentAttackHasHit = false;
+
+            // ---- SWING SFX (combo-specific timing) ----
+            if (attackComboIndex == 2) {
+                character_play_swing_timed(SWING_DELAY_ATTACK2);
+            } else if (attackComboIndex == 3) {
+                character_play_swing_timed(SWING_DELAY_ATTACK3);
+            }
+
+            float yaw = character.rot[1];
+            float fx = -fm_sinf(yaw);
+            float fz =  fm_cosf(yaw);
+            movementVelocityX += fx * ATTACK_FORWARD_IMPULSE;
+            movementVelocityZ += fz * ATTACK_FORWARD_IMPULSE;
+        } else if (!attackEnding && actionTimer >= 1.0f) {
+            if (attackComboIndex <= 3) {
+                attackEnding = true;
+                actionTimer = 0.0f;
+                currentActionDuration = ATTACK_END_DURATION;
+            } else {
+                characterState = CHAR_STATE_NORMAL;
+                actionTimer = 0.0f;
+                attackComboIndex = 0;
+                attackQueued = false;
+                attackEnding = false;
+            }
+        }
+        else if (attackEnding && actionTimer >= 1.0f) {
+            characterState = CHAR_STATE_NORMAL;
+            actionTimer = 0.0f;
+            attackComboIndex = 0;
+            attackQueued = false;
+            attackEnding = false;
+        }
+        return;
+    }
+
+    if (characterState == CHAR_STATE_ATTACKING_STRONG) {
+        if (actionTimer >= 1.0f) {
+            characterState = CHAR_STATE_NORMAL;
+            actionTimer = 0.0f;
+        }
+        return;
+    }
+
+    if (characterState == CHAR_STATE_KNOCKDOWN) {
+        // ------------------------------------------------------------
+        // Knockdown timing model:
+        // - total duration is EXACTLY 5 seconds (unless breakaway)
+        // - breakaway allowed only after KNOCKDOWN_BREAKAWAY_MIN_S
+        // - knockdown anim is forced-looping so it never "auto-ends"
+        // ------------------------------------------------------------
+        knockdownElapsedS += dt;
+
+        T3DAnim* kd = NULL;
+        if (ANIM_KNOCKDOWN >= 0 && ANIM_KNOCKDOWN < character.animationCount) {
+            kd = character.animations[ANIM_KNOCKDOWN];
+        }
+
+        if (kd) {
+            t3d_anim_set_looping(kd, true);
+
+            if (!kd->isPlaying) {
+                t3d_anim_set_time(kd, 0.0f);
+                t3d_anim_set_playing(kd, true);
+            } else {
+                float len = t3d_anim_get_length(kd);
+                if (len > 0.0001f) {
+                    float t = t3d_anim_get_time(kd);
+                    if (t >= len) {
+                        while (t >= len) t -= len;
+                        t3d_anim_set_time(kd, t);
+                    }
+                }
+            }
+        }
+
+        // Breakaway gate
+        if (breakawayReq != KD_BRK_NONE && knockdownElapsedS >= KNOCKDOWN_BREAKAWAY_MIN_S) {
+            if (kd) t3d_anim_set_looping(kd, false);
+
+            switch (breakawayReq) {
+                case KD_BRK_ROLL:
+                    start_knockdown_breakaway_roll();
+                    return;
+
+                case KD_BRK_ATTACK:
+                    start_knockdown_breakaway_attack();
+                    return;
+
+                case KD_BRK_MOVE:
+                    // Stand up into normal locomotion immediately
+                    characterState = CHAR_STATE_NORMAL;
+                    actionTimer = 0.0f;
+                    knockdownElapsedS = 0.0f;
+                    return;
+
+                default:
+                    break;
+            }
+        }
+
+        // Full duration expiry
+        if (knockdownElapsedS >= KNOCKDOWN_TOTAL_TIME_S) {
+            if (kd) t3d_anim_set_looping(kd, false);
+
+            characterState = CHAR_STATE_NORMAL;
+            actionTimer = 0.0f;
+            knockdownElapsedS = 0.0f;
+            return;
+        }
+
+        return;
+    }
+}
+
+static inline void update_actions(const joypad_buttons_t* buttons,
+                                  bool leftHeldNow,
+                                  bool leftJustPressed,
+                                  bool jumpJustPressed,
+                                  const StickInput* stick,
+                                  KnockdownBreakawayReq breakawayReq,
+                                  float dt)
+{
+    (void)jumpJustPressed;
+
+    // Normal action starts (these won't fire while knocked down anyway)
+    try_start_roll(buttons, stick);
+    try_start_attack(leftJustPressed);
+    upgrade_to_strong_attack(leftHeldNow);
+
+    // Knockdown breakaway handling happens inside progress_action_timers()
+    progress_action_timers(dt, breakawayReq);
+}
+
 static void switch_to_locomotion_animation(int targetAnim)
 {
-    // leaving lock-on blending path
     kill_lockon_drivers();
 
-    // stop everything except target
     anim_stop_all_except(character.animations, character.animationCount, targetAnim);
 
-    // Capture what we are coming FROM before we overwrite currentAnimation
     const int fromAnim = character.currentAnimation;
 
-    // Set the new current animation
-    character.currentAnimation = targetAnim;
-
-    // Default: no crossfade unless we explicitly start one
+    // Default: no crossfade
     character.isBlending = false;
     hasBlendSnapshot     = false;
 
-    // ------------------------------------------------------------
-    // Crossfade sources:
-    //  A) Action -> locomotion (your existing behavior)
-    //  B) Locomotion -> locomotion (NEW: fixes idle/walk/run snapping)
-    // ------------------------------------------------------------
+    bool  startCrossfade = false;
+    float crossfadeDur   = 0.0f;
 
-    bool startCrossfade = false;
-    float crossfadeDur  = 0.0f;
-
+    // --- Decide if we crossfade ---
     if (is_action_state(prevState)) {
-        // Action -> locomotion: keep your existing 0.12
-        character.previousAnimation = -1;
-
+        // your action -> locomotion behavior
         int prevClip = -1;
         if (prevState == CHAR_STATE_ROLLING) prevClip = ANIM_ROLL;
         else if (prevState == CHAR_STATE_KNOCKDOWN) prevClip = ANIM_KNOCKDOWN;
         else if (prevState == CHAR_STATE_ATTACKING || prevState == CHAR_STATE_ATTACKING_STRONG)
-            prevClip = character.previousAnimation; // might already be set by action switch code
-
-        character.previousAnimation = prevClip;
+            prevClip = character.previousAnimation;
 
         if (prevClip >= 0 && prevClip < character.animationCount &&
             character.animations[prevClip] && character.skeleton && character.skeletonBlend)
         {
-            // snapshot "from" pose from current skeleton bones
+            // Snapshot FROM pose (bones currently on main skeleton)
             skeleton_copy_pose_bones(character.skeletonBlend, character.skeleton);
             hasBlendSnapshot = true;
-            lastAttachedBlend = prevClip;
-
-            startCrossfade = true;
-            crossfadeDur   = 0.12f;
+            startCrossfade   = true;
+            crossfadeDur     = 0.12f;
         }
-    }
-    else {
-        // NEW: Locomotion -> locomotion crossfade (idle/walk/run, including back variants)
+    } else {
+        // locomotion -> locomotion crossfade (idle/walk/run/back variants)
         const bool fromIsLocomotion = is_locomotion_anim(fromAnim);
         const bool toIsLocomotion   = is_locomotion_anim(targetAnim);
 
-        // optional cooldown to avoid jittery re-crossfades
-        if (locomotionSwitchCooldown <= 0.0f &&
-            fromIsLocomotion && toIsLocomotion &&
-            character.skeleton && character.skeletonBlend)
-        {
+        if (fromIsLocomotion && toIsLocomotion && character.skeleton && character.skeletonBlend) {
             skeleton_copy_pose_bones(character.skeletonBlend, character.skeleton);
             hasBlendSnapshot = true;
-            lastAttachedBlend = fromAnim;
-
-            startCrossfade = true;
-            crossfadeDur   = LOCOMOTION_CROSSFADE_DURATION;
-
-            locomotionSwitchCooldown = LOCOMOTION_MIN_SWITCH_INTERVAL;
+            startCrossfade   = true;
+            crossfadeDur     = LOCOMOTION_CROSSFADE_DURATION;
         }
     }
 
-    if (startCrossfade) {
-        character.isBlending   = true;
-        character.blendDuration = crossfadeDur;
-        character.blendTimer    = 0.0f;
-        character.blendFactor   = 0.0f;
-    }
+    // Switch current animation id AFTER snapshot
+    character.previousAnimation = fromAnim;
+    character.currentAnimation  = targetAnim;
 
-    // Attach + play the target anim on main skeleton
+    // Attach + play target on main skeleton
     if (character.animations[targetAnim]) {
         t3d_anim_attach(character.animations[targetAnim], character.skeleton);
         lastAttachedMain = targetAnim;
 
+        // CRITICAL: attach() can reset bones -> prime skeleton with FROM pose snapshot
+        // so the very first anim_update starts from the previous pose, not bind pose.
+        if (startCrossfade && hasBlendSnapshot) {
+            skeleton_prime_from_pose(character.skeleton, character.skeletonBlend);
+        }
+
         bool shouldLoop = (targetAnim == ANIM_IDLE || targetAnim == ANIM_IDLE_TITLE || targetAnim == ANIM_WALK ||
-                           targetAnim == ANIM_RUN || targetAnim == ANIM_WALK_BACK ||
+                           targetAnim == ANIM_RUN  || targetAnim == ANIM_WALK_BACK ||
                            targetAnim == ANIM_RUN_BACK || targetAnim == ANIM_STRAFE_WALK_LEFT ||
                            targetAnim == ANIM_STRAFE_WALK_RIGHT || targetAnim == ANIM_STRAFE_RUN_LEFT ||
                            targetAnim == ANIM_STRAFE_RUN_RIGHT);
 
         t3d_anim_set_looping(character.animations[targetAnim], shouldLoop);
+        t3d_anim_set_time(character.animations[targetAnim], 0.0f);
         t3d_anim_set_playing(character.animations[targetAnim], true);
+    }
+
+    if (startCrossfade && hasBlendSnapshot) {
+        character.isBlending    = true;
+        character.blendDuration = crossfadeDur;
+        character.blendTimer    = 0.0f;
+        character.blendFactor   = 0.0f;
     }
 }
 
 static inline void apply_run_end_transition(CharacterState state, float speedRatio, int* targetAnim, bool* runEndActive)
 {
-    // RunEnd should only trigger when we're basically stopping, not when easing to WALK.
-    // Use WALK_THRESHOLD (or slightly above) instead of RUN_THRESHOLD.
-    const float RUN_END_TRIGGER = WALK_THRESHOLD; // tune: WALK_THRESHOLD .. (WALK_THRESHOLD*1.5f)
+    (void)state;
+    (void)speedRatio;
+    (void)targetAnim;
 
-    if (!*runEndActive &&
-        character.currentAnimation == ANIM_RUN &&
-        state == CHAR_STATE_NORMAL &&
-        speedRatio < RUN_END_TRIGGER &&
-        speedRatio >= IDLE_THRESHOLD)
-    {
-        *targetAnim = ANIM_RUN_END;
-        *runEndActive = true;
-    }
-
-    if (*runEndActive) {
-        if (state == CHAR_STATE_NORMAL) {
-            if (speedRatio >= IDLE_THRESHOLD) {
-                *targetAnim = ANIM_RUN_END;
-            } else {
-                *runEndActive = false;
-            }
-        } else {
-            *runEndActive = false;
-        }
-    }
+    // Hard-disabled: RunEnd causes freeze / pop behavior on N64 due to non-looping anim + bone update buffering.
+    *runEndActive = false;
 }
 
-static inline void update_animations(float speedRatio, CharacterState state, float dt)
+// static inline void apply_run_end_transition(CharacterState state, float speedRatio, int* targetAnim, bool* runEndActive, float inputMag)
+// {
+//     // Only normal locomotion, and NEVER in lock-on.
+//     if (state != CHAR_STATE_NORMAL || cameraLockOnActive) {
+//         *runEndActive = false;
+//         return;
+//     }
+
+//     // RunEnd is ONLY for "run -> full stop".
+//     if (*targetAnim != ANIM_IDLE) {
+//         *runEndActive = false;
+//         return;
+//     }
+
+//     // Require input to be neutral (player is letting go), otherwise this is run->walk, not run->end.
+//     // This MUST match your stick noise reality.
+//     const float INPUT_NEUTRAL_EPS = 0.03f; // same as idle latch
+//     if (inputMag > INPUT_NEUTRAL_EPS) {
+//         *runEndActive = false;
+//         return;
+//     }
+
+//     // Only trigger from forward RUN clip.
+//     if (character.currentAnimation != ANIM_RUN) {
+//         // Only keep it if we're already in RunEnd.
+//         if (character.currentAnimation != ANIM_RUN_END) *runEndActive = false;
+//         return;
+//     }
+
+//     // Track whether we were "actually running" recently, based on speed being above RUN_THRESHOLD
+//     // while input was NOT neutral.
+//     static bool  wasRunning = false;
+//     static float prevSpeedRatio = 0.0f;
+
+//     if (speedRatio >= RUN_THRESHOLD) {
+//         wasRunning = true;
+//     }
+
+//     // Deceleration check (must be falling)
+//     const bool decelerating = (speedRatio < prevSpeedRatio - 0.001f);
+//     prevSpeedRatio = speedRatio;
+
+//     if (!wasRunning || !decelerating) {
+//         *runEndActive = false;
+//         return;
+//     }
+
+//     // Near-stop gate: only start RunEnd when very close to idle.
+//     const float RUN_END_TRIGGER = 0.10f; // tune 0.06–0.14
+//     if (!*runEndActive &&
+//         speedRatio < RUN_END_TRIGGER &&
+//         speedRatio >= IDLE_THRESHOLD)
+//     {
+//         *targetAnim = ANIM_RUN_END;
+//         *runEndActive = true;
+//         return;
+//     }
+
+//     if (*runEndActive) {
+//         *targetAnim = ANIM_RUN_END;
+//     }
+// }
+
+static inline void update_animations(float speedRatio, CharacterState state, float dt,
+                                     float velMag, float inputMag)
 {
     if (!character.animations || !character.skeleton || !character.skeletonBlend) return;
-
-    // tick optional locomotion switch cooldown
-    if (locomotionSwitchCooldown > 0.0f) {
-        locomotionSwitchCooldown -= dt;
-        if (locomotionSwitchCooldown < 0.0f) locomotionSwitchCooldown = 0.0f;
-    }
 
     const bool lockonBlendMode = (state == CHAR_STATE_NORMAL &&
                                  cameraLockOnActive &&
                                  ((animStrafeDirFlag != 0) || (lockonStrafeExitT > 0.0f)));
-    if (!lockonBlendMode) {
+
+    // Only reset lock-on driver bookkeeping when we EXIT lock-on blend mode,
+    // not every single frame we are outside of it.
+    static bool wasLockonBlendMode = false;
+    if (!lockonBlendMode && wasLockonBlendMode) {
         kill_lockon_drivers();
     }
+    wasLockonBlendMode = lockonBlendMode;
 
     if (try_lockon_locomotion_blend(speedRatio, state, dt)) {
         return;
     }
 
-    int targetAnim = get_target_animation(state, speedRatio);
+    // Regular (non lock-on) smooth walk<->run blending by speed
+    if (try_free_locomotion_speed_blend(speedRatio, state, dt)) {
+        return;
+    }
+
+    const bool forceIdle = anim_idle_latched(dt, velMag, inputMag, state);
+    int targetAnim = forceIdle ? ANIM_IDLE : get_target_animation(state, speedRatio);
 
     static bool runEndActive = false;
     apply_run_end_transition(state, speedRatio, &targetAnim, &runEndActive);
 
     if (targetAnim < 0 || targetAnim >= character.animationCount || !character.animations[targetAnim]) {
         targetAnim = ANIM_IDLE;
-        runEndActive = false;
     }
 
     const bool needsSwitch = (character.currentAnimation != targetAnim);
 
-    // Only “rescue” locomotion if we’re NOT switching this frame.
     if (!needsSwitch) {
         ensure_locomotion_playing(state);
     }
 
-    // IMPORTANT: for locomotion crossfade we need to know the old anim, so store it
-    const int oldAnim = character.currentAnimation;
-
     if (needsSwitch) {
-        // keep previousAnimation coherent for action transitions too
-        character.previousAnimation = oldAnim;
-
         if (is_action_state(state)) switch_to_action_animation(targetAnim);
         else                        switch_to_locomotion_animation(targetAnim);
     }
 
-    // ---------------------------------------------------------------------
-    // BLEND TIMER UPDATE (once per frame, before applying blend)
-    // ---------------------------------------------------------------------
-    if (character.isBlending && !hasBlendSnapshot) {
-        character.isBlending  = false;
-        character.blendTimer  = 0.0f;
-        character.blendFactor = 0.0f;
-    }
-
+    // Blend timer
     if (character.isBlending) {
         character.blendTimer += dt;
-
         if (character.blendTimer >= character.blendDuration) {
             character.isBlending  = false;
             character.blendFactor = 1.0f;
@@ -1309,9 +1953,7 @@ static inline void update_animations(float speedRatio, CharacterState state, flo
         }
     }
 
-    // ---------------------------------------------------------------------
-    // Update current animation (drives character.skeleton bone SRT)
-    // ---------------------------------------------------------------------
+    // Drive current anim
     const int cur = character.currentAnimation;
     if (cur >= 0 && cur < character.animationCount && character.animations[cur]) {
         T3DAnim* currentAnim = character.animations[cur];
@@ -1322,25 +1964,20 @@ static inline void update_animations(float speedRatio, CharacterState state, flo
         }
 
         float animSpeed = 1.0f;
+
         if (state == CHAR_STATE_NORMAL) {
-            if (cur == ANIM_WALK || cur == ANIM_WALK_BACK) {
-                animSpeed = fmaxf(speedRatio * 2.0f + 0.3f, 0.5f);
-            } else if (cur == ANIM_RUN || cur == ANIM_RUN_BACK) {
-                animSpeed = fmaxf(speedRatio * 0.8f + 0.2f, 0.6f);
+            if (is_locomotion_anim(cur) && cur != ANIM_IDLE && cur != ANIM_IDLE_TITLE) {
+                const float MIN_LOCO_SPEED = 0.88f;
+                const float MAX_LOCO_SPEED = 1.15f;
+                float s01 = fminf(1.0f, fmaxf(0.0f, speedRatio));
+                animSpeed = MIN_LOCO_SPEED + (MAX_LOCO_SPEED - MIN_LOCO_SPEED) * s01;
+            } else {
+                animSpeed = 1.0f;
             }
         } else if (state == CHAR_STATE_ATTACKING_STRONG) {
             animSpeed = 0.8f;
         } else if (state == CHAR_STATE_ROLLING) {
             animSpeed = ROLL_ANIM_SPEED;
-        }
-
-        if (state == CHAR_STATE_TITLE_IDLE && cur == ANIM_IDLE_TITLE) {
-            t3d_anim_set_looping(currentAnim, true);
-            if (!currentAnim->isPlaying) t3d_anim_set_playing(currentAnim, true);
-
-            float len = t3d_anim_get_length(currentAnim);
-            float t   = t3d_anim_get_time(currentAnim);
-            if (len > 0.0f && t >= len) t3d_anim_set_time(currentAnim, 0.0f);
         }
 
         if (fabsf(animSpeed - lastAnimSpeed) > 0.001f) {
@@ -1351,24 +1988,14 @@ static inline void update_animations(float speedRatio, CharacterState state, flo
         t3d_anim_update(currentAnim, dt);
     }
 
-    // ---------------------------------------------------------------------
-    // Apply crossfade using the snapshot (skeletonBlend holds "from" pose)
-    // ---------------------------------------------------------------------
     if (character.isBlending && hasBlendSnapshot) {
         t3d_skeleton_blend(character.skeleton,
-                           character.skeletonBlend,  // from-pose snapshot (bones)
-                           character.skeleton,       // to-pose (current anim bones)
+                           character.skeletonBlend,
+                           character.skeleton,
                            character.blendFactor);
     }
 
-    // Build matrices ONCE from the final pose (after any blend)
     t3d_skeleton_update(character.skeleton);
-
-    if (runEndActive && character.currentAnimation == ANIM_RUN_END) {
-        if (character.animations[ANIM_RUN_END] && !character.animations[ANIM_RUN_END]->isPlaying) {
-            runEndActive = false;
-        }
-    }
 }
 
 /* -----------------------------------------------------------------------------
@@ -1528,7 +2155,7 @@ void character_update(void)
             }
         }
 
-        update_animations(0.0f, characterState, deltaTime);
+        update_animations(0.0f, characterState, deltaTime, 0.0f, 0.0f);
 
         character_update_camera();
         character_anim_apply_pose();
@@ -1566,13 +2193,10 @@ void character_update(void)
             }
         }
 
-        update_animations(animationSpeedRatio, characterState, deltaTime);
+        update_animations(animationSpeedRatio, characterState, deltaTime, 0.0f, 0.0f);
 
-        float newPosX = character.pos[0] + movementVelocityX * deltaTime;
-        float newPosZ = character.pos[2] + movementVelocityZ * deltaTime;
-
-        character.pos[0] = newPosX;
-        character.pos[2] = newPosZ;
+        character.pos[0] += movementVelocityX * deltaTime;
+        character.pos[2] += movementVelocityZ * deltaTime;
 
         character_anim_apply_pose();
         character_finalize_frame(false);
@@ -1586,13 +2210,10 @@ void character_update(void)
         update_current_speed(0.0f, deltaTime);
         float animationSpeedRatio = currentSpeed;
 
-        update_animations(animationSpeedRatio, characterState, deltaTime);
+        update_animations(animationSpeedRatio, characterState, deltaTime, 0.0f, 0.0f);
 
-        float newPosX = character.pos[0] + movementVelocityX * deltaTime;
-        float newPosZ = character.pos[2] + movementVelocityZ * deltaTime;
-
-        character.pos[0] = newPosX;
-        character.pos[2] = newPosZ;
+        character.pos[0] += movementVelocityX * deltaTime;
+        character.pos[2] += movementVelocityZ * deltaTime;
 
         character_update_camera();
         character_anim_apply_pose();
@@ -1602,7 +2223,11 @@ void character_update(void)
 
     bool jumpJustPressed = false;
 
-    bool leftJustPressed = btn.b && !lastBPressed;
+    bool leftJustPressed = (btn.b && !lastBPressed);
+    bool aJustPressed    = (btn.a && !lastAPressed);
+
+    lastBPressed = btn.b;
+    lastAPressed = btn.a;
 
     if (leftJustPressed) {
         leftTriggerHeld = true;
@@ -1618,52 +2243,78 @@ void character_update(void)
         leftTriggerHoldTime = 0.0f;
     }
 
-    lastBPressed = btn.b;
-
     StickInput stick = normalize_stick((float)joypad.stick_x, (float)joypad.stick_y);
+
+    float axisX = stick_axis_deadzone((float)joypad.stick_x);
+    float axisY = stick_axis_deadzone((float)joypad.stick_y);
+
+    g_moveIntentFwd = axisY;
+    g_moveIntentMag = fminf(1.0f, sqrtf(axisX*axisX + axisY*axisY));
+
+    // Build the breakaway request TYPE (so it doesn't always roll)
+    KnockdownBreakawayReq breakawayReq = KD_BRK_NONE;
+    if (characterState == CHAR_STATE_KNOCKDOWN) {
+        if (aJustPressed) {
+            breakawayReq = KD_BRK_ROLL;
+        } else if (leftJustPressed) {
+            breakawayReq = KD_BRK_ATTACK;
+        } else if (g_moveIntentMag >= KNOCKDOWN_BREAKAWAY_MOVE_MAG) {
+            breakawayReq = KD_BRK_MOVE;
+        }
+    }
 
     if (!cameraLockOnActive) {
         animLockOnStrafingFlag = false;
         animStrafeDirFlag = 0;
         animStrafeBlendRatio = 0.0f;
     } else {
-        const float STRAFE_NEUTRAL_MAG = 0.02f; // tune 0.02–0.06
-
+        const float STRAFE_NEUTRAL_MAG = 0.02f;
         if (stick.magnitude <= STRAFE_NEUTRAL_MAG) {
-            // start a short fade-out instead of snapping
             if (animStrafeDirFlag != 0) {
                 lockonLastDir = animStrafeDirFlag;
                 lockonLastW   = animStrafeBlendRatio;
-                lockonStrafeExitT = 0.10f; // tune 0.06–0.14
+                lockonStrafeExitT = LOCKON_STRAFE_EXIT_DUR;
             }
 
             animLockOnStrafingFlag = false;
-            // keep dir during fade, so lock-on blend path can finish smoothly
             animStrafeDirFlag = lockonLastDir;
-            // keep ratio; we'll decay it in the lock-on blend function
             animStrafeBlendRatio = lockonLastW;
         }
-
     }
 
-    update_actions(&btn, leftTriggerHeld, leftJustPressed, jumpJustPressed, &stick, deltaTime);
+    update_actions(&btn, leftTriggerHeld, leftJustPressed, jumpJustPressed, &stick, breakawayReq, deltaTime);
+
+    {
+        float t = character_get_swing_time();
+        if (t >= 0.0f) {
+            character_play_swing_timed(t);
+        }
+    }
+
+    const bool wantsMove = (stick.magnitude > 0.0f);
+    const bool wantsStrafeIntent = (cameraLockOnActive && fabsf(axisX) > 0.0f);
 
     if (characterState != CHAR_STATE_ATTACKING &&
         characterState != CHAR_STATE_ATTACKING_STRONG &&
         characterState != CHAR_STATE_KNOCKDOWN &&
-        stick.magnitude > 0.0f) {
+        (wantsMove || wantsStrafeIntent))
+    {
+        float desiredVelX = 0.0f, desiredVelZ = 0.0f;
 
-        float desiredVelX, desiredVelZ;
-
-        if (cameraLockOnActive) {
-            T3DVec3 toTarget = (T3DVec3){{
-                cameraLockOnTarget.v[0] - character.pos[0],
-                0.0f,
-                cameraLockOnTarget.v[2] - character.pos[2]
-            }};
-            compute_desired_velocity_lockon(stick.x, stick.y, &toTarget, &desiredVelX, &desiredVelZ);
+        if (wantsMove) {
+            if (cameraLockOnActive) {
+                T3DVec3 toTarget = (T3DVec3){{
+                    cameraLockOnTarget.v[0] - character.pos[0],
+                    0.0f,
+                    cameraLockOnTarget.v[2] - character.pos[2]
+                }};
+                compute_desired_velocity_lockon(stick.x, stick.y, &toTarget, &desiredVelX, &desiredVelZ);
+            } else {
+                compute_desired_velocity(stick.x, stick.y, cameraAngleX, &desiredVelX, &desiredVelZ);
+            }
         } else {
-            compute_desired_velocity(stick.x, stick.y, cameraAngleX, &desiredVelX, &desiredVelZ);
+            desiredVelX = 0.0f;
+            desiredVelZ = 0.0f;
         }
 
         float currentMaxSpeed = (characterState == CHAR_STATE_ROLLING) ? ROLL_SPEED : MAX_MOVEMENT_SPEED;
@@ -1675,36 +2326,25 @@ void character_update(void)
         }
 
         if (cameraLockOnActive && characterState != CHAR_STATE_ROLLING) {
-            T3DVec3 toTargetDir = {{
-                cameraLockOnTarget.v[0] - character.pos[0],
-                0.0f,
-                cameraLockOnTarget.v[2] - character.pos[2]
-            }};
-            t3d_vec3_norm(&toTargetDir);
+            float absIntent = fabsf(axisX);
 
-            T3DVec3 rightDir = {{ -toTargetDir.v[2], 0.0f, toTargetDir.v[0] }};
-
-            float forward = desiredVelX * toTargetDir.v[0] + desiredVelZ * toTargetDir.v[2];
-            float lateral = desiredVelX * rightDir.v[0]   + desiredVelZ * rightDir.v[2];
-
-            float sum = fabsf(forward) + fabsf(lateral) + 0.0001f;
-            float lateralRatio = fminf(1.0f, fmaxf(0.0f, fabsf(lateral) / sum));
-
-            // HARD neutral band to kill joystick noise
-            const float STRAFE_NEUTRAL_X = 0.10f;   // tune: 0.08–0.16
-            bool sidewaysEnough = fabsf(stick.x) >= STRAFE_NEUTRAL_X;
+            const float STRAFE_INTENT_ENTER = 0.16f;
+            const float STRAFE_INTENT_EXIT  = 0.10f;
 
             if (!animLockOnStrafingFlag) {
-                animLockOnStrafingFlag = sidewaysEnough && (lateralRatio >= STRAFE_ACTIVATION_RATIO);
+                animLockOnStrafingFlag = (absIntent >= STRAFE_INTENT_ENTER);
             } else {
-                animLockOnStrafingFlag = sidewaysEnough && (lateralRatio >= STRAFE_DEACTIVATION_RATIO);
+                animLockOnStrafingFlag = (absIntent >= STRAFE_INTENT_EXIT);
             }
 
             if (animLockOnStrafingFlag) {
-                animStrafeBlendRatio = lateralRatio;
-                animStrafeDirFlag = (lateral > 0.0f) ? +1 : (lateral < 0.0f ? -1 : 0);
+                animStrafeDirFlag = (axisX >= 0.0f) ? +1 : -1;
+                animStrafeBlendRatio = fminf(1.0f, absIntent);
+
+                lockonStrafeExitT = 0.0f;
+                lockonLastDir = animStrafeDirFlag;
+                lockonLastW   = animStrafeBlendRatio;
             } else {
-                // start exit fade instead of snapping
                 if (animStrafeDirFlag != 0) {
                     lockonLastDir = animStrafeDirFlag;
                     lockonLastW   = animStrafeBlendRatio;
@@ -1713,7 +2353,6 @@ void character_update(void)
                 animStrafeBlendRatio = lockonLastW;
                 animStrafeDirFlag    = lockonLastDir;
             }
-
 
             float targetAngle = atan2f(-(cameraLockOnTarget.v[0] - character.pos[0]),
                                        ( cameraLockOnTarget.v[2] - character.pos[2]));
@@ -1739,7 +2378,9 @@ void character_update(void)
             animStrafeDirFlag = 0;
             animStrafeBlendRatio = 0.0f;
         }
-    } else if (characterState == CHAR_STATE_ATTACKING || characterState == CHAR_STATE_ATTACKING_STRONG) {
+    }
+    else if (characterState == CHAR_STATE_ATTACKING || characterState == CHAR_STATE_ATTACKING_STRONG)
+    {
         float frictionScale = (characterState == CHAR_STATE_ATTACKING_STRONG) ? 1.0f : ATTACK_FRICTION_SCALE;
         apply_friction(deltaTime, frictionScale);
 
@@ -1749,12 +2390,11 @@ void character_update(void)
         }
 
         float hitStart = (characterState == CHAR_STATE_ATTACKING_STRONG) ? STRONG_ATTACK_HIT_START : 0.25f;
-        float hitEnd   = (characterState == CHAR_STATE_ATTACKING_STRONG) ? STRONG_ATTACK_HIT_END   : 0.55f;
-        float damage   = (characterState == CHAR_STATE_ATTACKING_STRONG) ? STRONG_ATTACK_DAMAGE    : 10.0f;
-        (void)damage; // you currently hardcode boss_apply_damage(boss, 1000)
+        float hitEnd   = (characterState == CHAR_STATE_ATTACKING_STRONG) ? STRONG_ATTACK_HIT_END   : 1.0f;
+        float damage = (characterState == CHAR_STATE_ATTACKING_STRONG) ? STRONG_ATTACK_DAMAGE : 10.0f;
 
         if (actionTimer > hitStart && actionTimer < hitEnd) {
-            if (!character.currentAttackHasHit && attack_hit_test()) {
+            if (!character.currentAttackHasHit && charWeaponCollision) {
                 Boss* boss = boss_get_instance();
                 if (boss) {
                     boss_apply_damage(boss, damage);
@@ -1763,20 +2403,23 @@ void character_update(void)
                 character_play_hit();
             }
         }
-    } else {
+    }
+    else
+    {
         float friction = (characterState == CHAR_STATE_ROLLING) ? ROLL_FRICTION_SCALE : 1.0f;
         apply_friction(deltaTime, friction);
     }
 
-    update_current_speed(stick.magnitude, deltaTime);
+    float animInputMag = fmaxf(stick.magnitude, g_moveIntentMag);
+
+    update_current_speed(animInputMag, deltaTime);
 
     float velMag = sqrtf(movementVelocityX * movementVelocityX + movementVelocityZ * movementVelocityZ);
     float animationSpeedRatio = fminf(1.0f, velMag / MAX_MOVEMENT_SPEED);
 
-    update_animations(animationSpeedRatio, characterState, deltaTime);
+    update_animations(animationSpeedRatio, characterState, deltaTime, velMag, animInputMag);
     prevState = characterState;
 
-    // Footsteps
     if (characterState == CHAR_STATE_NORMAL) {
         bool isRunning = (animationSpeedRatio >= RUN_THRESHOLD);
         bool isWalking = (!isRunning) && (animationSpeedRatio >= WALK_THRESHOLD);
@@ -1794,16 +2437,14 @@ void character_update(void)
         footstepTimer = 0.0f;
     }
 
-    float newPosX = character.pos[0] + movementVelocityX * deltaTime;
-    float newPosZ = character.pos[2] + movementVelocityZ * deltaTime;
+    strong_knockback_update(deltaTime);
 
-    character.pos[0] = newPosX;
-    character.pos[2] = newPosZ;
+    character.pos[0] += movementVelocityX * deltaTime;
+    character.pos[2] += movementVelocityZ * deltaTime;
 
     character_anim_apply_pose();
     character_finalize_frame(true);
 
-    // Sword trail emission
     bool emitting = false;
     if (characterState == CHAR_STATE_ATTACKING && !attackEnding) {
         emitting = (actionTimer >= 0.15f && actionTimer <= 0.75f);
@@ -2002,21 +2643,43 @@ void character_apply_damage(float amount)
     if (character.health <= 0.0f) {
         characterState = CHAR_STATE_DEAD;
         scene_set_game_state(GAME_STATE_DEAD);
-    } else {
-        if (amount >= 20.0f && characterState != CHAR_STATE_ROLLING) {
-            characterState = CHAR_STATE_KNOCKDOWN;
-            actionTimer = 0.0f;
-            currentActionDuration = KNOCKDOWN_DURATION;
+        return;
+    }
 
+    // ALWAYS knockdown on any hit (unless invulnerable)
+    if (characterState != CHAR_STATE_ROLLING) {
+        characterState = CHAR_STATE_KNOCKDOWN;
+        actionTimer = 0.0f;
+        currentActionDuration = KNOCKDOWN_DURATION;
+
+        knockdownElapsedS = 0.0f; // NEW: start knockdown clock
+
+        // freeze regular movement so knockdown is “clean”
+        movementVelocityX = 0.0f;
+        movementVelocityZ = 0.0f;
+
+        // Strong hit => displacement knockback of ~50 units over half duration
+        if (amount > 20.0f) {
             float yaw = character.rot[1];
+
+            // Back direction (same basis you were using)
             float bx = fm_sinf(yaw);
             float bz = -fm_cosf(yaw);
 
-            movementVelocityX += bx * KNOCKDOWN_BACK_IMPULSE;
-            movementVelocityZ += bz * KNOCKDOWN_BACK_IMPULSE;
+            // Normalize just in case
+            float len = sqrtf(bx*bx + bz*bz);
+            if (len > 0.0001f) { bx /= len; bz /= len; }
 
-            switch_to_action_animation_immediate(ANIM_KNOCKDOWN);
+            strongKnockbackActive   = true;
+            strongKnockbackT        = 0.0f;
+            strongKnockbackPrevDist = 0.0f;
+            strongKnockbackDirX     = bx;
+            strongKnockbackDirZ     = bz;
+        } else {
+            strongKnockbackActive = false;
         }
+
+        switch_to_action_animation_immediate(ANIM_KNOCKDOWN);
     }
 
     character.damageFlashTimer = 0.3f;

@@ -27,6 +27,11 @@ float bossWeaponRadius = 1.0f;
 
 bool bossWeaponCollision = false;
 
+T3DVec3 charWeaponCapA;
+T3DVec3 charWeaponCapB;
+float   charWeaponRadius = 5.0f;
+bool    charWeaponCollision = false;
+
 // ------------------------------------------------------------
 // Helpers
 // ------------------------------------------------------------
@@ -111,6 +116,7 @@ void collision_init(void)
 {
     bodyHitboxCollision = false;
     bossWeaponCollision = false;
+    charWeaponCollision = false;
 
     update_character_capsule_world();
 
@@ -118,25 +124,10 @@ void collision_init(void)
     if (update_boss_capsule_world(&boss)) {
         bossWeaponRadius = 5.0f;
     }
-}
 
-// TODO: use this...
-// void collision_get_character_capsule_world(float outA[3], float outB[3], float *outR)
-// {
-//     if (outA) {
-//         outA[0] = charCapA.v[0];
-//         outA[1] = charCapA.v[1];
-//         outA[2] = charCapA.v[2];
-//     }
-//     if (outB) {
-//         outB[0] = charCapB.v[0];
-//         outB[1] = charCapB.v[1];
-//         outB[2] = charCapB.v[2];
-//     }
-//     if (outR) {
-//         *outR = charRadius;
-//     }
-// }
+    // Ensure weapon radius is sane even before first update
+    charWeaponRadius = 5.0f;
+}
 
 void collision_update(void) // Disable viewport after development
 {
@@ -146,6 +137,7 @@ void collision_update(void) // Disable viewport after development
     if (!update_boss_capsule_world(&boss)) {
         bodyHitboxCollision = false;
         bossWeaponCollision = false;
+        charWeaponCollision = false;
         return;
     }
 
@@ -191,43 +183,97 @@ void collision_update(void) // Disable viewport after development
 
     // ------------------------------------------------------------
     // BOSS HAND WEAPON collider (debug + hit test)
+    // (DO NOT early-return, or we skip character weapon debug)
     // ------------------------------------------------------------
     bossWeaponCollision = false;
 
-    if (!boss->handAttackColliderActive) return;
-    if (!boss->skeleton || !boss->modelMat) return;
-    if (boss->handRightBoneIndex < 0) return;
+    if (boss->handAttackColliderActive &&
+        boss->skeleton && boss->modelMat &&
+        boss->handRightBoneIndex >= 0)
+    {
+        T3DSkeleton *sk = (T3DSkeleton*)boss->skeleton;
 
-    T3DSkeleton *sk = (T3DSkeleton*)boss->skeleton;
+        const T3DMat4FP *B = &sk->boneMatricesFP[boss->handRightBoneIndex]; // bone in MODEL space
+        const T3DMat4FP *M = (const T3DMat4FP*)boss->modelMat;             // model in WORLD space
 
-    const T3DMat4FP *B = &sk->boneMatricesFP[boss->handRightBoneIndex]; // bone in MODEL space
-    const T3DMat4FP *M = (const T3DMat4FP*)boss->modelMat;             // model in WORLD space
+        // Bone-local points
+        const float p0_local[3] = { 0.0f, 0.0f, 0.0f };
 
-    // Bone-local points
-    const float p0_local[3] = { 0.0f, 0.0f, 0.0f };
+        // Capsule segment length in bone-local space
+        const float len = 640.0f;
+        const float p1_local[3] = { -len, 0.0f, 0.0f };
 
-    // Capsule segment length in bone-local space
-    const float len = 640.0f;
-    const float p1_local[3] = { -len, 0.0f, 0.0f };
+        // 1) bone-local -> MODEL space (apply B)
+        float p0_model[3], p1_model[3];
+        mat4fp_mul_point_f32_row3_colbasis(B, p0_local, p0_model);
+        mat4fp_mul_point_f32_row3_colbasis(B, p1_local, p1_model);
 
-    // 1) bone-local -> MODEL space (apply B)
-    float p0_model[3], p1_model[3];
-    mat4fp_mul_point_f32_row3_colbasis(B, p0_local, p0_model);
-    mat4fp_mul_point_f32_row3_colbasis(B, p1_local, p1_model);
+        // 2) MODEL -> WORLD space (apply M)
+        float p0_world[3], p1_world[3];
+        mat4fp_mul_point_f32_row3_colbasis(M, p0_model, p0_world);
+        mat4fp_mul_point_f32_row3_colbasis(M, p1_model, p1_world);
 
-    // 2) MODEL -> WORLD space (apply M)
-    float p0_world[3], p1_world[3];
-    mat4fp_mul_point_f32_row3_colbasis(M, p0_model, p0_world);
-    mat4fp_mul_point_f32_row3_colbasis(M, p1_model, p1_world);
+        // 3) Store endpoints (WORLD space) for testing + debug draw
+        bossWeaponCapA = (T3DVec3){{ p0_world[0], p0_world[1], p0_world[2] }};
+        bossWeaponCapB = (T3DVec3){{ p1_world[0], p1_world[1], p1_world[2] }};
 
-    // 3) Store endpoints (WORLD space) for testing + debug draw
-    bossWeaponCapA = (T3DVec3){{ p0_world[0], p0_world[1], p0_world[2] }};
-    bossWeaponCapB = (T3DVec3){{ p1_world[0], p1_world[1], p1_world[2] }};
+        bossWeaponCollision = scu_capsule_vs_capsule_f(
+            bossWeaponCapA.v, bossWeaponCapB.v, bossWeaponRadius,
+            charCapA.v, charCapB.v, charRadius
+        );
+    }
 
-    bossWeaponCollision = scu_capsule_vs_capsule_f(
-        bossWeaponCapA.v, bossWeaponCapB.v, bossWeaponRadius,
-        charCapA.v, charCapB.v, charRadius
-    );
+    // ------------------------------------------------------------
+    // CHARACTER HAND WEAPON collider (debug + hit test)
+    // ------------------------------------------------------------
+    charWeaponCollision = false;
+
+    {
+        // collision_system.c can't see character.c's static bone index,
+        // so we find/cache it here.
+        static int s_charSwordBoneIndex = -1;
+
+        if (character.skeleton && character.modelMat) {
+
+            if (s_charSwordBoneIndex < 0) {
+                s_charSwordBoneIndex = t3d_skeleton_find_bone((T3DSkeleton*)character.skeleton, "Hand-Right");
+                // If your bone name differs, change it here.
+            }
+
+            if (s_charSwordBoneIndex >= 0) {
+                T3DSkeleton *sk = (T3DSkeleton*)character.skeleton;
+
+                const T3DMat4FP *B = &sk->boneMatricesFP[s_charSwordBoneIndex]; // bone in MODEL space
+                const T3DMat4FP *M = (const T3DMat4FP*)character.modelMat;      // model in WORLD space
+
+                const float p0_local[3] = { 0.0f, 0.0f, 0.0f };
+
+                // Match your character.c sword values
+                const float len = 640.0f;
+                const float p1_local[3] = { -len, 0.0f, 0.0f };
+
+                float p0_model[3], p1_model[3];
+                mat4fp_mul_point_f32_row3_colbasis(B, p0_local, p0_model);
+                mat4fp_mul_point_f32_row3_colbasis(B, p1_local, p1_model);
+
+                float p0_world[3], p1_world[3];
+                mat4fp_mul_point_f32_row3_colbasis(M, p0_model, p0_world);
+                mat4fp_mul_point_f32_row3_colbasis(M, p1_model, p1_world);
+
+                charWeaponCapA = (T3DVec3){{ p0_world[0], p0_world[1], p0_world[2] }};
+                charWeaponCapB = (T3DVec3){{ p1_world[0], p1_world[1], p1_world[2] }};
+
+                // Make sure radius is visible
+                charWeaponRadius = 5.0f;
+
+                // Debug collision target: boss body capsule
+                charWeaponCollision = scu_capsule_vs_capsule_f(
+                    charWeaponCapA.v, charWeaponCapB.v, charWeaponRadius,
+                    bossCapA.v, bossCapB.v, bossRadius
+                );
+            }
+        }
+    }
 }
 
 void collision_draw(T3DViewport *viewport)
@@ -254,7 +300,7 @@ void collision_draw(T3DViewport *viewport)
     if (!boss) return;
 
     // Draw boss hand collider
-    if(boss->handAttackColliderActive){
+    if (boss->handAttackColliderActive) {
         debug_draw_capsule(
             viewport,
             &bossWeaponCapA,
@@ -283,5 +329,23 @@ void collision_draw(T3DViewport *viewport)
             20,
             DEBUG_COLORS[5]
         );
+    }
+
+    // Draw player weapon collider (always)
+    debug_draw_capsule(
+        viewport,
+        &charWeaponCapA,
+        &charWeaponCapB,
+        charWeaponRadius,
+        DEBUG_COLORS[2]
+    );
+
+    if (charWeaponCollision) {
+        T3DVec3 mid = {{
+            0.5f * (charWeaponCapA.v[0] + charWeaponCapB.v[0]),
+            0.5f * (charWeaponCapA.v[1] + charWeaponCapB.v[1]),
+            0.5f * (charWeaponCapA.v[2] + charWeaponCapB.v[2]),
+        }};
+        debug_draw_cross(viewport, &mid, 6.0f, DEBUG_COLORS[0]);
     }
 }
