@@ -2391,7 +2391,7 @@ void character_update(void)
 
         float hitStart = (characterState == CHAR_STATE_ATTACKING_STRONG) ? STRONG_ATTACK_HIT_START : 0.25f;
         float hitEnd   = (characterState == CHAR_STATE_ATTACKING_STRONG) ? STRONG_ATTACK_HIT_END   : 1.0f;
-        float damage = (characterState == CHAR_STATE_ATTACKING_STRONG) ? STRONG_ATTACK_DAMAGE : 3.0f;
+        float damage = (characterState == CHAR_STATE_ATTACKING_STRONG) ? STRONG_ATTACK_DAMAGE : 5.0f;
 
         if (actionTimer > hitStart && actionTimer < hitEnd) {
             if (!character.currentAttackHasHit && charWeaponCollision) {
