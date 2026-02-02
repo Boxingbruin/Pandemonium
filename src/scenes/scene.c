@@ -1256,7 +1256,7 @@ void scene_restart(void)
 
 void scene_init_playing(bool skippedCutscene)
 {
-    character.pos[0] = -361.43f;
+    character.pos[0] = -320.43f;
     character.pos[1] = 4.0f;
     character.pos[2] = 0.0f;
 
@@ -1976,12 +1976,12 @@ void scene_update(void)
     // Debug hotkey: L-trigger skips to boss defeated (dead + fully stopped)
     // NOTE: This is intentionally not gated by DEV_MODE because DEV_MODE is currently
     // compiled as false in `globals.h`, which would otherwise compile this out.
-    bool lHeld = joypad.btn.l;
-    bool lJustPressed = lHeld && !lastLPressed;
-    lastLPressed = lHeld;
-    if (lJustPressed && bossActivated && g_boss) {
-        scene_debug_force_boss_defeated();
-    }
+    // bool lHeld = joypad.btn.l;
+    // bool lJustPressed = lHeld && !lastLPressed;
+    // lastLPressed = lHeld;
+    // if (lJustPressed && bossActivated && g_boss) {
+    //     scene_debug_force_boss_defeated();
+    // }
 
     if(cutsceneState == CUTSCENE_NONE) // Normal gameplay
     {

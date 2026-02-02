@@ -299,8 +299,8 @@ static void boss_attacks_handle_combo(Boss* boss, float dt)
     const float hitPart1Start = 0.5f;
     const float hitPart1End   = 1.5f;
 
-    const float hitPart2Start = 2.0f;
-    const float hitPart2End   = 4.0f;
+    const float hitPart2Start = 3.0f;
+    const float hitPart2End   = 3.8f;
 
     // -------------------------
     // Late push movement
@@ -570,7 +570,7 @@ static void boss_attacks_handle_roar_stomp(Boss* boss, float dt) {
 static void boss_attacks_handle_tracking_slam(Boss* boss, float dt) {
 
     const float hitStart = 2.5f;
-    const float hitEnd   = 3.5f;
+    const float hitEnd   = 3.2f;
 
     if(boss->stateTimer >= hitStart && boss->stateTimer <  hitEnd)
     {
@@ -734,7 +734,7 @@ static void boss_attacks_handle_stomp(Boss* boss, float dt)
 {
     // Short, nasty close stomp
     const float windupEnd = 2.0f;
-    const float impactEnd = 3.0f;
+    const float impactEnd = 2.2f;
 
     // Stationary
     boss->velX = 0.0f;

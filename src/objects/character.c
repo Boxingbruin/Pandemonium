@@ -2121,7 +2121,7 @@ void character_init(void)
         .dpl_model = dpl_model,
         .dpl_shadow = dpl_shadow,
         .visible = true,
-        .maxHealth = 100.0f,
+        .maxHealth = 150.0f,
         .health = 100.0f,
         .damageFlashTimer = 0.0f,
         .currentAttackHasHit = false
