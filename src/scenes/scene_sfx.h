@@ -41,6 +41,8 @@ typedef enum Scene1Sfx
     SCENE1_SFX_CHAR_FOOTSTEP_WALK3,
     SCENE1_SFX_CHAR_FOOTSTEP_WALK4,
 
+    SCENE1_SFX_CHAR_UMPH,
+
     SCENE1_SFX_COUNT
 } Scene1Sfx; // TODO: Change this from scene to a entity specific later.
 

@@ -29,7 +29,7 @@ bool bossWeaponCollision = false;
 
 T3DVec3 charWeaponCapA;
 T3DVec3 charWeaponCapB;
-float   charWeaponRadius = 5.0f;
+float   charWeaponRadius = 2.0f;
 bool    charWeaponCollision = false;
 
 // ------------------------------------------------------------
@@ -126,7 +126,7 @@ void collision_init(void)
     }
 
     // Ensure weapon radius is sane even before first update
-    charWeaponRadius = 5.0f;
+    charWeaponRadius = 2.0f;
 }
 
 void collision_update(void) // Disable viewport after development
@@ -264,7 +264,7 @@ void collision_update(void) // Disable viewport after development
                 charWeaponCapB = (T3DVec3){{ p1_world[0], p1_world[1], p1_world[2] }};
 
                 // Make sure radius is visible
-                charWeaponRadius = 5.0f;
+                charWeaponRadius = 2.0f;
 
                 // Debug collision target: boss body capsule
                 charWeaponCollision = scu_capsule_vs_capsule_f(
@@ -337,7 +337,7 @@ void collision_draw(T3DViewport *viewport)
         &charWeaponCapA,
         &charWeaponCapB,
         charWeaponRadius,
-        DEBUG_COLORS[2]
+        DEBUG_COLORS[5]
     );
 
     if (charWeaponCollision) {

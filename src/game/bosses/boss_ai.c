@@ -434,7 +434,7 @@ static void boss_ai_select_attack(Boss* boss, float dist) {
         boss->attackNameDisplayTimer = 2.0f;
         boss->currentAttackId = BOSS_ATTACK_FLIP_ATTACK;
     }
-    else if (boss->powerJumpCooldown <= 0.0f && dist >= 250.0f) {
+    else if (boss->powerJumpCooldown <= 0.0f && dist >= 200.0f) {
         boss->state = BOSS_STATE_POWER_JUMP;
         boss->stateTimer = 0.0f;
         boss->powerJumpCooldown = 12.0f;

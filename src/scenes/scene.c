@@ -430,6 +430,8 @@ static const char *SCENE1_SFX_PATHS[SCENE1_SFX_COUNT] = {
     [SCENE1_SFX_CHAR_FOOTSTEP_WALK2] = "rom:/audio/sfx/character/char_footstep_walk2_22k.wav64",
     [SCENE1_SFX_CHAR_FOOTSTEP_WALK3] = "rom:/audio/sfx/character/char_footstep_walk3_22k.wav64",
     [SCENE1_SFX_CHAR_FOOTSTEP_WALK4] = "rom:/audio/sfx/character/char_footstep_walk4_22k.wav64",
+
+    [SCENE1_SFX_CHAR_UMPH] = "rom:/audio/sfx/character/umph_22k.wav64",
 };
 
 static void scene_get_character_world_capsule(float capA[3], float capB[3], float *radius)
@@ -1256,7 +1258,7 @@ void scene_restart(void)
 
 void scene_init_playing(bool skippedCutscene)
 {
-    character.pos[0] = -361.43f;
+    character.pos[0] = -320.43f;
     character.pos[1] = 4.0f;
     character.pos[2] = 0.0f;
 
@@ -1976,12 +1978,12 @@ void scene_update(void)
     // Debug hotkey: L-trigger skips to boss defeated (dead + fully stopped)
     // NOTE: This is intentionally not gated by DEV_MODE because DEV_MODE is currently
     // compiled as false in `globals.h`, which would otherwise compile this out.
-    bool lHeld = joypad.btn.l;
-    bool lJustPressed = lHeld && !lastLPressed;
-    lastLPressed = lHeld;
-    if (lJustPressed && bossActivated && g_boss) {
-        scene_debug_force_boss_defeated();
-    }
+    // bool lHeld = joypad.btn.l;
+    // bool lJustPressed = lHeld && !lastLPressed;
+    // lastLPressed = lHeld;
+    // if (lJustPressed && bossActivated && g_boss) {
+    //     scene_debug_force_boss_defeated();
+    // }
 
     if(cutsceneState == CUTSCENE_NONE) // Normal gameplay
     {
