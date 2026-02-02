@@ -5,6 +5,13 @@
 ## Story
 A century of darkness smothers the land beneath the Demon King’s throne of gold, guarded by knights that were reduced to hollow armor. You are one of them, cursed into a horrific form as you push through a ruined kingdom. Pandemonium is a dark-fantasy action-adventure platformer. Prevail and the restored ones whisper a final command—free the sun.
 
+## Controls
+Stick: Move
+A button: Dodge
+B button: Attack
+C-Pad: Look
+Z trigger: Pause Menu
+
 ## 2025 N64brew Game Jam - Pandemonium
 - December 1st - Feburary 1st
 - Theme Annonced on December 8th
@@ -25,6 +32,11 @@ A century of darkness smothers the land beneath the Demon King’s throne of gol
 <img width="1311" height="939" alt="screen shot 1" src="screenshot-1.png">
 <img width="1311" height="939" alt="screen shot 1" src="screenshot-2.png">
 <img width="1311" height="939" alt="screen shot 1" src="screenshot-3.png">
+
+## Build
+- Install libdragon (preview)
+- Install Tiny3D (main)
+- run make file
 
 ### Team Members 
 BoxingBruin:
