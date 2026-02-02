@@ -299,6 +299,12 @@ static bool bossWasDead = false; // Tracks death transition for one-time post-de
 // Post-boss interaction distances (XZ)
 static const float POST_BOSS_PROMPT_DIST  = 140.0f;   // show A prompt and allow talk when inside this range
 
+// ------------------------------------------------------------
+// Cutscene music -> looping boss music handoff
+// ------------------------------------------------------------
+static bool s_pendingBossLoopMusic = false;
+static const char *s_bossLoopMusicPath = "rom:/audio/music/boss_phase1-looping-22k.wav64";
+
 // Require the camera to be facing the boss for post-boss interaction.
 // This keeps the on-screen A prompt and the A-press trigger consistent,
 // and prevents rolling away from accidentally starting the dialog.
@@ -1013,6 +1019,8 @@ void scene_reset(void)
     bossPostDefeatTalkDone = false;
     bossPostDefeatDialogStep = 0;
 
+    s_pendingBossLoopMusic = false;
+
     // Reset letterbox to show state for intro
     letterbox_show(false);
 }
@@ -1246,7 +1254,8 @@ void scene_restart(void)
            cameraState, dialog_controller_speaking() ? "true" : "false");
 }
 
-void scene_init_playing(){
+void scene_init_playing(bool skippedCutscene)
+{
     character.pos[0] = -361.43f;
     character.pos[1] = 4.0f;
     character.pos[2] = 0.0f;
@@ -1265,11 +1274,23 @@ void scene_init_playing(){
     cutsceneState = CUTSCENE_NONE;
     cutsceneCameraTimer = 0.0f;
     bossActivated = true;
-    // Switch music from intro cinematic to boss fight
-    audio_stop_music();
-    audio_play_music("rom:/audio/music/boss_phase1-looping-22k.wav64", true);
+
+    // ---- Music handoff behavior ----
+    // If the cutscene was skipped, slam immediately into looping music.
+    // If not skipped, let the current (non-looping) cutscene track finish naturally,
+    // then start the loop once it's done.
+    if (skippedCutscene) {
+        s_pendingBossLoopMusic = false;  // we are starting it now
+        audio_stop_music();
+        audio_play_music(s_bossLoopMusicPath, true);
+    } else {
+        // Do NOT stop the current music. Just arm the handoff.
+        s_pendingBossLoopMusic = true;
+    }
+
     // Hide letterbox bars with animation
     letterbox_hide();
+
     // Return camera control to the player
     camera_mode_smooth(CAMERA_CHARACTER, 1.0f);
     cameraLockOnActive = true;
@@ -1285,7 +1306,6 @@ void scene_init_playing(){
     playerUiIntro = 0.0f;
     display_utility_set_boss_ui_intro(bossUiIntro);
     display_utility_set_player_ui_intro(playerUiIntro);
-
 }
 
 void scene_set_cinematic_camera(T3DVec3 posStart, T3DVec3 posEnd, T3DVec3 posTarget)
@@ -1383,7 +1403,7 @@ void scene_init_cutscene()
 
             // Start first line (auto-ends after a short hold)
             dialog_controller_speak(
-                "^i am no longer under his control, restored to my glory",
+                "<Released... ^I am no longer\nbound by the kinds will.~ ",
                 0, 4.0f, false, true
             );
         } break;
@@ -1665,7 +1685,7 @@ void scene_cutscene_update()
             {
                 cutsceneTimer = 0.0f;
                 cutsceneCameraTimer = 0.0f;
-                scene_init_playing();
+                scene_init_playing(false);
                 return;
             }
 
@@ -1696,7 +1716,7 @@ void scene_cutscene_update()
                 if (bossPostDefeatDialogStep == 0) {
                     bossPostDefeatDialogStep = 1;
                     dialog_controller_speak(
-                        "^Go on and free the sun",
+                        "^Restore these shattered lands...\nThe king must fall...~ ",
                         0, 4.0f, false, true
                     );
                 } else {
@@ -1742,7 +1762,7 @@ void scene_cutscene_update()
                 skipButtonVisible = false;
                 cutsceneTimer = 0.0f;
                 cutsceneCameraTimer = 0.0f;
-                scene_init_playing();
+                scene_init_playing(true);
                 return;
             }
         }
@@ -1881,6 +1901,13 @@ void scene_update(void)
     }
 
     audio_update_fade(deltaTime);
+
+    if (s_pendingBossLoopMusic) {
+        if (!audio_is_music_playing() && g_boss->health > 0) {
+            s_pendingBossLoopMusic = false;
+            audio_play_music(s_bossLoopMusicPath, true);
+        }
+    }
 
     if (g_boss && g_boss->health <= 0.0f && gameState != GAME_STATE_VIDEO) {
         if(!bossDeathMusicFadeStarted){
@@ -2769,7 +2796,7 @@ void scene_draw(T3DViewport *viewport)
     t3d_matrix_pop(1);
     
 
-    if(g_boss->isAttacking || g_boss->health <= 0 || g_boss->state == BOSS_STATE_COMBO_ATTACK) // TODO: Hacky fix but something weird is going on with comnbo1 and we dont have time
+    if(g_boss->isAttacking || g_boss->health <= 0 || g_boss->state == BOSS_STATE_COMBO_ATTACK || g_boss->state == BOSS_STATE_STOMP) // TODO: Hacky fix but something weird is going on with comnbo1 and we dont have time
     {
         //Draw depth environment
         rdpq_sync_pipe();

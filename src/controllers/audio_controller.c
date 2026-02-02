@@ -321,8 +321,11 @@ void audio_play_music(const char *path, bool loop)
     musicPlaying = true;
 }
 
-bool audio_is_music_playing(void) {
-    return musicPlaying && !pauseMuted;
+bool audio_is_music_playing(void)
+{
+    if (!musicPlaying) return false;
+    if (pauseMuted) return false;
+    return mixer_ch_playing(CHANNEL_MUSIC);
 }
 
 void audio_pause_music(void)

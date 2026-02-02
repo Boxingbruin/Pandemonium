@@ -281,8 +281,8 @@ static void boss_attacks_handle_power_jump(Boss* boss, float dt)
 
             // Sphere radius is now 70
             if (dist <= IMPACT_RADIUS) {
-                character_apply_damage(35.0f);
-                boss_attacks_on_player_hit(35.0f);
+                character_apply_damage(30.0f);
+                boss_attacks_on_player_hit(30.0f);
                 boss->currentAttackHasHit = true;
             }
         }
@@ -384,7 +384,7 @@ static void boss_attacks_handle_combo(Boss* boss, float dt)
     if (boss->stateTimer >= hitPart1Start && boss->stateTimer < hitPart1End) {
         boss->handAttackColliderActive = true;
         if (!boss->currentAttackHasHit && bossWeaponCollision) {
-            character_apply_damage(18.0f);
+            character_apply_damage(15.0f);
             boss_attacks_on_player_hit(18.0f);
             boss->currentAttackHasHit = true;
         }
@@ -448,7 +448,7 @@ static void boss_attacks_handle_throw(Boss* boss, float dt) // TODO: add after t
         float hitDy = character.pos[1] - boss->swordProjectilePos[1];
         float hitDist = sqrtf(hitDx*hitDx + hitDy*hitDy + hitDz*hitDz);
         if (hitDist < 3.0f && !boss->currentAttackHasHit) {
-            character_apply_damage(20.0f);
+            character_apply_damage(15.0f);
             boss_attacks_on_player_hit(20.0f);
             //boss_play_attack_sfx(boss, SCENE1_SFX_BOSS_SMASH2, 0.0f);
             boss->currentAttackHasHit = true;
@@ -487,8 +487,8 @@ static void boss_attacks_handle_combo_starter(Boss* boss, float dt) {
     {
         boss->handAttackColliderActive  = true;
         if (!boss->currentAttackHasHit && bossWeaponCollision) {
-            character_apply_damage(18.0f);
-            boss_attacks_on_player_hit(18.0f);
+            character_apply_damage(10.0f);
+            boss_attacks_on_player_hit(10.0f);
             boss->currentAttackHasHit = true;
         }
     }
@@ -635,8 +635,8 @@ static void boss_attacks_handle_charge(Boss* boss, float dt) {
         boss->handAttackColliderActive  = true;
         //boss->sphereAttackColliderActive = true;
         if (!boss->currentAttackHasHit && bossWeaponCollision) {
-            character_apply_damage(18.0f);
-            boss_attacks_on_player_hit(18.0f);
+            character_apply_damage(15.0f);
+            boss_attacks_on_player_hit(15.0f);
             boss->currentAttackHasHit = true;
         }
     }
@@ -747,6 +747,8 @@ static void boss_attacks_handle_stomp(Boss* boss, float dt)
         boss->rot[1] = -atan2f(-dz, dx) + T3D_PI;
     }
 
+    boss->isAttacking = true;
+
     boss_play_attack_sfx(boss, SCENE1_SFX_BOSS_LAND2, 2.0f);
 
     // Impact hit
@@ -762,8 +764,8 @@ static void boss_attacks_handle_stomp(Boss* boss, float dt)
         if (dist <= radius) {
             // float damage = 40.0f * (1.0f - (dist / radius)); // falloff
             // if (damage < 6.0f) damage = 6.0f;               // minimum chip
-            character_apply_damage(40.0f);
-            boss_attacks_on_player_hit(40.0f);
+            character_apply_damage(30.0f);
+            boss_attacks_on_player_hit(30.0f);
             boss->currentAttackHasHit = true;
         }
     }
@@ -780,8 +782,8 @@ static void boss_attacks_handle_attack1(Boss* boss, float dt)
     {
         boss->handAttackColliderActive  = true;
         if (!boss->currentAttackHasHit && bossWeaponCollision) {
-            character_apply_damage(18.0f);
-            boss_attacks_on_player_hit(18.0f);
+            character_apply_damage(10.0f);
+            boss_attacks_on_player_hit(10.0f);
             boss->currentAttackHasHit = true;
         }
     }
@@ -887,8 +889,8 @@ static void boss_attacks_handle_flip_attack(Boss* boss, float dt)
     {
         boss->handAttackColliderActive  = true;
         if (!boss->currentAttackHasHit && bossWeaponCollision) {
-            character_apply_damage(18.0f);
-            boss_attacks_on_player_hit(18.0f);
+            character_apply_damage(10.0f);
+            boss_attacks_on_player_hit(10.0f);
             boss->currentAttackHasHit = true;
         }
     }
