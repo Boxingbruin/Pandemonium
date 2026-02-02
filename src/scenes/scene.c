@@ -1403,7 +1403,7 @@ void scene_init_cutscene()
 
             // Start first line (auto-ends after a short hold)
             dialog_controller_speak(
-                "<Released... ^I am no longer\nbound by the kinds will.~ ",
+                "<Released... ^I am no longer\nbound by the kings will.~ ",
                 0, 4.0f, false, true
             );
         } break;
@@ -1716,7 +1716,7 @@ void scene_cutscene_update()
                 if (bossPostDefeatDialogStep == 0) {
                     bossPostDefeatDialogStep = 1;
                     dialog_controller_speak(
-                        "^Restore these shattered lands...\nThe king must fall...~ ",
+                        "^Restore these shattered\nlands... The king must fall...~ ",
                         0, 4.0f, false, true
                     );
                 } else {
