@@ -2646,40 +2646,47 @@ void character_apply_damage(float amount)
         return;
     }
 
-    // ALWAYS knockdown on any hit (unless invulnerable)
-    if (characterState != CHAR_STATE_ROLLING) {
-        characterState = CHAR_STATE_KNOCKDOWN;
-        actionTimer = 0.0f;
-        currentActionDuration = KNOCKDOWN_DURATION;
+    // Only knockdown if the hit is strong enough (>= 20 dmg)
+    if (amount >= 20.0f) {
+        // Prevent re-triggering knockdown if we are already rolling (invuln) or similar
+        if (characterState != CHAR_STATE_ROLLING) {
+            characterState = CHAR_STATE_KNOCKDOWN;
+            actionTimer = 0.0f;
+            currentActionDuration = KNOCKDOWN_DURATION;
 
-        knockdownElapsedS = 0.0f; // NEW: start knockdown clock
+            knockdownElapsedS = 0.0f; // start knockdown clock
 
-        // freeze regular movement so knockdown is “clean”
-        movementVelocityX = 0.0f;
-        movementVelocityZ = 0.0f;
+            // freeze regular movement so knockdown is “clean”
+            movementVelocityX = 0.0f;
+            movementVelocityZ = 0.0f;
 
-        // Strong hit => displacement knockback of ~50 units over half duration
-        if (amount > 20.0f) {
-            float yaw = character.rot[1];
+            // Optional: only do displacement knockback on hits strictly > 20
+            // (keeps "exactly 20" as knockdown-only, without extra shove)
+            if (amount > 20.0f) {
+                float yaw = character.rot[1];
 
-            // Back direction (same basis you were using)
-            float bx = fm_sinf(yaw);
-            float bz = -fm_cosf(yaw);
+                // Back direction
+                float bx = fm_sinf(yaw);
+                float bz = -fm_cosf(yaw);
 
-            // Normalize just in case
-            float len = sqrtf(bx*bx + bz*bz);
-            if (len > 0.0001f) { bx /= len; bz /= len; }
+                // Normalize just in case
+                float len = sqrtf(bx*bx + bz*bz);
+                if (len > 0.0001f) { bx /= len; bz /= len; }
 
-            strongKnockbackActive   = true;
-            strongKnockbackT        = 0.0f;
-            strongKnockbackPrevDist = 0.0f;
-            strongKnockbackDirX     = bx;
-            strongKnockbackDirZ     = bz;
-        } else {
-            strongKnockbackActive = false;
+                strongKnockbackActive   = true;
+                strongKnockbackT        = 0.0f;
+                strongKnockbackPrevDist = 0.0f;
+                strongKnockbackDirX     = bx;
+                strongKnockbackDirZ     = bz;
+            } else {
+                strongKnockbackActive = false;
+            }
+
+            switch_to_action_animation_immediate(ANIM_KNOCKDOWN);
         }
-
-        switch_to_action_animation_immediate(ANIM_KNOCKDOWN);
+    } else {
+        // Non-knockdown hits should not leave knockback running
+        strongKnockbackActive = false;
     }
 
     character.damageFlashTimer = 0.3f;
