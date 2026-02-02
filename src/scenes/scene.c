@@ -1327,6 +1327,8 @@ void scene_set_cinematic_camera(T3DVec3 posStart, T3DVec3 posEnd, T3DVec3 posTar
 
 void scene_init_cutscene()
 {
+    skipButtonVisible = false;
+
     switch (cutsceneState) 
     {
         case CUTSCENE_PHASE1_INTRO:
