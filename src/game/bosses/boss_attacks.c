@@ -36,8 +36,19 @@ static inline void boss_attacks_on_player_hit(float damage)
     if (damage <= 25.0f) return;
 
     // Fixed, noticeable impulse (units are world-space and applied in camera right/up).
-    animation_utility_set_screen_shake_mag(45.0f);
+    animation_utility_set_screen_shake_mag(20.0f);
 }
+
+// static inline void boss_shake_on_window_end(bool windowActiveNow,
+//                                             bool *prevWindowActive,
+//                                             float damageForThisWindow)
+// {
+//     // We want the *end* edge: active -> inactive
+//     if (*prevWindowActive && !windowActiveNow) {
+//         boss_attacks_play_impact_shake(damageForThisWindow);
+//     }
+//     *prevWindowActive = windowActiveNow;
+// }
 
 // Forward declarations
 static void boss_attacks_handle_power_jump(Boss* boss, float dt);

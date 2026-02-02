@@ -24,7 +24,7 @@
 #include "scenes/scene_sfx.h"
 #include "utilities/general_utility.h"
 #include "utilities/sword_trail.h"
-
+#include "animation_utility.h"
 
 /*
  Character Controller
@@ -1308,10 +1308,6 @@ static inline bool try_lockon_locomotion_blend(float speedRatio, CharacterState 
         const bool right = (animStrafeDirFlag > 0);
         strafeAnim = right ? ANIM_STRAFE_RUN_RIGHT : ANIM_STRAFE_RUN_LEFT;
     }
-
-    debugf("lockon base=%d strafe=%d w=%.2f fwd=%.2f fwdHack=%.2f fbDir=%d\n",
-        baseAnim, strafeAnim, animStrafeBlendRatio,
-        g_moveIntentFwd, fwdForDecision, lockonFBDir);
 
     // ------------------------------------------------------------
     // CRITICAL FIX:
@@ -2686,6 +2682,8 @@ void character_apply_damage(float amount)
         }
     } else {
         // Non-knockdown hits should not leave knockback running
+        audio_play_scene_sfx_dist(SCENE1_SFX_CHAR_UMPH, 1.0f, 0.0f);
+        animation_utility_set_screen_shake_mag(10.0f);
         strongKnockbackActive = false;
     }
 

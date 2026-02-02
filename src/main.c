@@ -82,8 +82,6 @@ int main(void)
     scene_init();
     menu_controller_init();
 
-    rspq_syncpoint_t syncPoint = 0; // flipbook textures
-
     if (DEV_MODE && debugDraw) {
         offscreenBuffer = surface_alloc(FMT_RGBA16, SCREEN_WIDTH, SCREEN_HEIGHT);
     }
@@ -109,9 +107,6 @@ int main(void)
         } else {
             rdpq_attach(display_get(), display_get_zbuf());
         }
-
-        if (syncPoint) rspq_syncpoint_wait(syncPoint);
-
         // ===== UPDATE LOOP =====
         mixer_try_play();
 
@@ -146,9 +141,7 @@ int main(void)
         }
 
         menu_controller_draw();
-
-        syncPoint = rspq_syncpoint_new();
-
+        
         if (DEV_MODE)
         {
             dev_draw_update(&viewport);
