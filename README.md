@@ -18,7 +18,7 @@ Z trigger: Pause Menu
 - Theme: Repair
 - We are going for a fully fleshed out boss battle. Similar to a dark souls or Majoras Mask battle. Weaving in the theme of repair into the boss. 
 
-Features:
+## Features:
 - Souls-Like Boss AI with many different attacks and animations.
 - A character controller with many different animation states, with lock-on mechanism.
 - A weapon collision system that can use a mix of different types of colliders.
