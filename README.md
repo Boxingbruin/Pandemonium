@@ -29,7 +29,7 @@ Z trigger: Pause Menu
 - Weapon streaks & a few different feedback systems.
 - Dialog system.
 - Almost entirely 64x64 textures with vertex colors for higher res.
-- Assets & Music from scratch for the jam.
+- Assets & Music from scratch for the jam. (or heavily modified)
 - Scrolling textures on a skinned mesh.
 
 ## Jam Gam Requirements (simplified version)
