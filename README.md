@@ -18,6 +18,20 @@ Z trigger: Pause Menu
 - Theme: Repair
 - We are going for a fully fleshed out boss battle. Similar to a dark souls or Majoras Mask battle. Weaving in the theme of repair into the boss. 
 
+Features:
+- Souls-Like Boss AI with many different attacks and animations.
+- A character controller with many different animation states, with lock-on mechanism.
+- A weapon collision system that can use a mix of different types of colliders.
+- A real-time cinematic cutscene.
+- Another cutscene that plays as a video.
+- Uses 32 bit framebuffer for cleaner graphics.
+- A distance-based SFX system.
+- Weapon streaks & a few different feedback systems.
+- Dialog system.
+- Almost entirely 64x64 textures with vertex colors for higher res.
+- Assets & Music from scratch for the jam.
+- Scrolling textures on a skinned mesh.
+
 ## Jam Gam Requirements (simplified version)
 - 1 project submission only
 - Must work on PAL/NTSC system. Optionally tested on emulator
