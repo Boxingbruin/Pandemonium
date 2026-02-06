@@ -52,7 +52,17 @@ Z trigger: Pause Menu
 - Install Tiny3D (main)
 - run make file
 
-### Team Members 
+## Creating a release (GitHub)
+- **Bump version**: update `VERSION`, commit, and push.
+- **Build the versioned ROM**:
+  - `make clean && make versioned`
+  - Produces: `Pandemonium-$(cat VERSION).z64`
+- **Tag the release**:
+  - `git tag -a "v$(cat VERSION)" -m "v$(cat VERSION)"`
+  - `git push && git push --tags`
+- **Publish on GitHub**: GitHub → *Releases* → *Draft a new release* → select tag `vX.Y.Z` → attach `Pandemonium-X.Y.Z.z64` → *Publish release*.
+
+## Team Members 
 BoxingBruin:
 - Github: BoxingBruin
 - Discord: BoxingBruin
