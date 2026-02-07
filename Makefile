@@ -142,6 +142,7 @@ $(BUILD_DIR)/$(TARGET).dfs: $(ASSETSCONV)
 $(BUILD_DIR)/$(TARGET).elf: $(CODEOBJECTS)
 
 pandemonium.z64: N64_ROM_TITLE="Pandemonium"
+pandemonium.z64: N64_ROM_SAVETYPE=eeprom4k
 pandemonium.z64: $(BUILD_DIR)/$(TARGET).dfs $(BUILD_DIR)/$(TARGET).elf
 pandemonium.z64: N64_ROM_METADATA=metadata/metadata.ini
 

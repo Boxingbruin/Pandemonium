@@ -52,5 +52,5 @@ assets/**/*.zip
 *.map
 # Stores various build artifacts(game code, graphics, audio, other assets)
 *.bs1
-# Memory card that stores game save data in battery-buffered SRAM
-*.pak
+# Save data
+*.eeprom

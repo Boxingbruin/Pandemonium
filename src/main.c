@@ -90,6 +90,8 @@ int main(void)
         // Update time + input first
         game_time_update();
         joypad_update();
+        // Debounced EEPROM save flush (eg: audio sliders)
+        save_controller_update();
 
         // ------------------------------------------------------------
         // VIDEO PUMP (MUST be BEFORE any rdpq_attach() in the frame)

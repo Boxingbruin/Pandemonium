@@ -32,6 +32,7 @@
 #include "dialog_controller.h"
 #include "display_utility.h"
 #include "menu_controller.h"
+#include "save_controller.h"
 //#include "collision_mesh.h"
 #include "collision_system.h"
 #include "letterbox_utility.h"

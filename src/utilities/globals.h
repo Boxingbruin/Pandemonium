@@ -11,7 +11,7 @@
 #define FRAME_BUFFER_COUNT 3
 
 #define DEBUG_DRAW false
-#define DEV_MODE false
+#define DEV_MODE true
 #define SHOW_FPS false
 #define HARDWARE_MODE false
 #define PAL_MODE false
