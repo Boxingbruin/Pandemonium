@@ -43,6 +43,10 @@ void scene_fixed_update(void);
 void scene_draw(T3DViewport *viewport);
 void scene_cleanup(void);
 
+// Simple world-space dust burst (screen-space rendered).
+// Intended for impacts/landings. `strength` is a loose scalar (1.0 = normal).
+void scene_spawn_dust_burst(float x, float y, float z, float strength);
+
 // Boot helpers
 // Runs startup logos (skipped in DEV_MODE) and restores display/rdpq state.
 // Must be called after audio initialization and before first scene draws.

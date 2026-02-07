@@ -46,6 +46,11 @@
 #include "video_player_utility.h"
 #include "logo.h"
 
+// Dust (implemented later near lock-on indicator)
+static void dust_reset(void);
+static void dust_update(float dt);
+static void dust_draw(T3DViewport *viewport);
+
 static void boot_reinit_display_rdpq(void)
 {
     // The logo routines call display_close(), so we must restore a valid display + RDPQ
@@ -72,10 +77,6 @@ void scene_boot_logos(void)
     logo_t3d();
     boot_reinit_display_rdpq(); // restore for the main game
 }
-
-// Four AABB walls: left, right, back, front (Y spans from floor to a fixed height)
-static AABB g_roomWalls[4];
-static const int g_roomWallCount = 4;
 
 T3DModel* mapModel;
 rspq_block_t* mapDpl;
@@ -419,6 +420,10 @@ static bool lastCutsceneAPressed = false; // Track A button state for edge detec
 // Victory title card background ("Enemy restored")
 static sprite_t* victoryTitleBgSprite = NULL;
 static surface_t victoryTitleBgSurf = {0};
+
+// Dust particle sprite (simple puffs)
+static sprite_t* dustParticleSprite = NULL;
+static surface_t dustParticleSurf = {0};
 
 static const char *SCENE1_SFX_PATHS[SCENE1_SFX_COUNT] = {
     [SCENE1_SFX_TITLE_WALK]  = "rom:/audio/sfx/title_screen_walk_effect-22k.wav64",
@@ -925,6 +930,12 @@ void scene_init(void)
         victoryTitleBgSurf = sprite_get_pixels(victoryTitleBgSprite);
     }
 
+    // Load dust particle sprite
+    dustParticleSprite = sprite_load("rom:/dust_particle.i8.sprite");
+    if (dustParticleSprite) {
+        dustParticleSurf = sprite_get_pixels(dustParticleSprite);
+    }
+
     //scene_init_cinematic_camera();
     // Start boss music
     // TODO: Its turned off for now as it gets annoying to listen to and it crackles
@@ -940,6 +951,8 @@ void scene_init(void)
     collision_init();
 
     scene_title_init();
+
+    dust_reset();
 }
 
 // Returns a consistent point around the boss' midsection for lock-on targeting.
@@ -1053,6 +1066,8 @@ void scene_reset(void)
     // Reset run timer state (a new run will be started when we enter gameplay again)
     s_bossRunActive = false;
     s_bossRunStartS = 0.0;
+
+    dust_reset();
 }
 
 static void scene_sync_input_edge_state(void)
@@ -2194,6 +2209,253 @@ static void draw_lockon_indicator(T3DViewport *viewport)
     rdpq_fill_rectangle(px - halfSize, py - halfSize, px + halfSize + 1, py + halfSize + 1);
 }
 
+/* -----------------------------------------------------------------------------
+ * Dust particles (simple world->screen puffs)
+ * -------------------------------------------------------------------------- */
+
+typedef struct {
+    bool  active;
+    float pos[3];   // world
+    float vel[3];   // world units/sec
+    float age;      // sec
+    float life;     // sec
+    float size_px;  // base pixel size
+} DustParticle;
+
+enum { DUST_MAX = 64 };
+static DustParticle s_dust[DUST_MAX];
+
+static inline float dust_clampf(float x, float lo, float hi) {
+    if (x < lo) return lo;
+    if (x > hi) return hi;
+    return x;
+}
+
+static inline float dust_alpha01(const DustParticle *p) {
+    if (!p || p->life <= 0.0f) return 0.0f;
+    float t = dust_clampf(p->age / p->life, 0.0f, 1.0f);
+    // Nice falloff (not linear).
+    float a = 1.0f - t;
+    return a * a;
+}
+
+static void dust_reset(void) {
+    memset(s_dust, 0, sizeof(s_dust));
+}
+
+static int dust_alloc_slot(void) {
+    for (int i = 0; i < DUST_MAX; i++) {
+        if (!s_dust[i].active) return i;
+    }
+    // No free slot; evict the oldest.
+    int oldest = 0;
+    float bestAge = s_dust[0].age;
+    for (int i = 1; i < DUST_MAX; i++) {
+        if (s_dust[i].age > bestAge) {
+            bestAge = s_dust[i].age;
+            oldest = i;
+        }
+    }
+    return oldest;
+}
+
+void scene_spawn_dust_burst(float x, float y, float z, float strength) {
+    // Safe to call even before init/reset.
+    if (strength < 0.05f) return;
+    if (strength > 3.0f) strength = 3.0f;
+
+    // Prefer readable puffs, but spawn enough to feel like "dust".
+    int count = 6 + (int)(strength * 3.0f);
+    if (count < 6) count = 6;
+    if (count > 18) count = 18;
+
+    // Track spawned positions for this burst so we can avoid stacking.
+    float spawnX[18];
+    float spawnZ[18];
+    int spawned = 0;
+
+    for (int i = 0; i < count; i++) {
+        int idx = dust_alloc_slot();
+        DustParticle *p = &s_dust[idx];
+
+        // Randomized spawn around the impact point.
+        // Use polar sampling so particles don't "stack" near the center.
+        float dirX = 1.0f, dirZ = 0.0f;
+        float radius = 0.0f;
+        float px = x, pz = z;
+
+        // Ensure puffs don't overlap too tightly (helps readability).
+        // Use a small number of retries; if we fail, accept the last sample.
+        //
+        // NOTE: Use evenly spaced angles with jitter so the burst is *visibly* spread
+        // around the boss base (avoids the "only 2 visible" look when several land in
+        // similar screen-space).
+        const float minSep = 18.0f; // world units
+        for (int attempt = 0; attempt < 10; attempt++) {
+            float jitter = (rand_custom_float() - 0.5f) * 0.35f; // +/- ~0.175 of a slot
+            float t = ((float)i + 0.5f + jitter) / (float)count;
+            float ang = t * (2.0f * T3D_PI);
+
+            // Sample radius with sqrt for a more even distribution over area.
+            float r01 = sqrtf(rand_custom_float());
+
+            // Keep puffs near the boss' feet so they stay on-screen and read as "base dust".
+            float rMin = 10.0f;
+            float rMax = 42.0f + (18.0f * strength);
+            radius = rMin + r01 * (rMax - rMin);
+
+            dirX = cosf(ang);
+            dirZ = sinf(ang);
+
+            // Candidate position
+            px = x + dirX * radius;
+            pz = z + dirZ * radius;
+
+            bool ok = true;
+            for (int j = 0; j < spawned; j++) {
+                float dx = px - spawnX[j];
+                float dz = pz - spawnZ[j];
+                if ((dx*dx + dz*dz) < (minSep * minSep)) {
+                    ok = false;
+                    break;
+                }
+            }
+            if (ok) break;
+        }
+
+        p->active = true;
+        p->age = 0.0f;
+        // Last a bit longer so the burst reads.
+        p->life = 0.65f + rand_custom_float() * 0.45f;
+
+        // Large puffs: sizes are in pixels (screen-space) and later scaled from the sprite.
+        // Bias toward bigger particles on the first couple slots, with smaller "filler" puffs after.
+        float bigBias = (i < 2) ? 1.0f : 0.0f;
+        // Tiny bump so they're a touch bigger overall.
+        float base = 16.0f + (bigBias * 11.0f);     // make even the "small" ones readable
+        float var  = 12.0f + (10.0f * strength);
+        p->size_px = base + rand_custom_float() * var;
+
+        p->pos[0] = px;
+        // Use the provided impact Y so this works for any room/floor height.
+        // Slightly above the floor to avoid any numerical weirdness.
+        p->pos[1] = y + 0.5f + rand_custom_float() * 1.0f;
+        p->pos[2] = pz;
+
+        // Radial outward puff + slight upward drift.
+        p->vel[0] = dirX * (35.0f + 35.0f * strength);
+        p->vel[1] = (10.0f + 14.0f * rand_custom_float()) * strength;
+        p->vel[2] = dirZ * (35.0f + 35.0f * strength);
+
+        if (spawned < 18) {
+            spawnX[spawned] = px;
+            spawnZ[spawned] = pz;
+            spawned++;
+        }
+    }
+}
+
+static void dust_update(float dt) {
+    if (dt < 0.0f) dt = 0.0f;
+    if (dt > 0.25f) dt = 0.25f;
+
+    for (int i = 0; i < DUST_MAX; i++) {
+        DustParticle *p = &s_dust[i];
+        if (!p->active) continue;
+
+        p->age += dt;
+        if (p->age >= p->life) {
+            p->active = false;
+            continue;
+        }
+
+        // Simple damped motion: expand quickly then slow, and drift up a bit.
+        float dampXZ = expf(-5.0f * dt);
+        p->vel[0] *= dampXZ;
+        p->vel[2] *= dampXZ;
+        p->vel[1] *= expf(-2.5f * dt);
+
+        p->pos[0] += p->vel[0] * dt;
+        p->pos[1] += p->vel[1] * dt;
+        p->pos[2] += p->vel[2] * dt;
+    }
+}
+
+static void dust_draw(T3DViewport *viewport) {
+    if (!viewport) return;
+
+    const bool useSprite = (dustParticleSprite && dustParticleSurf.width > 0 && dustParticleSurf.height > 0);
+
+    // 2D render state.
+    rdpq_sync_pipe();
+    rdpq_set_mode_standard();
+    // Depth test against the 3D pass so dust doesn't always draw "on top".
+    // We don't write depth (so UI stays unaffected).
+    rdpq_mode_zbuf(true, false);
+    if (useSprite) {
+        // Standard alpha blending so prim alpha can fade particles.
+        rdpq_mode_alphacompare(1);
+        rdpq_mode_combiner(RDPQ_COMBINER_TEX_FLAT);
+        rdpq_mode_blender(RDPQ_BLENDER_MULTIPLY);
+    } else {
+        // Fallback if sprite missing.
+        rdpq_mode_combiner(RDPQ_COMBINER_FLAT);
+        rdpq_mode_blender(RDPQ_BLENDER_MULTIPLY);
+    }
+
+    for (int i = 0; i < DUST_MAX; i++) {
+        const DustParticle *p = &s_dust[i];
+        if (!p->active) continue;
+
+        T3DVec3 worldPos = {{ p->pos[0], p->pos[1], p->pos[2] }};
+        T3DVec3 screenPos;
+        t3d_viewport_calc_viewspace_pos(viewport, &screenPos, &worldPos);
+
+        if (screenPos.v[2] >= 1.0f) continue;
+
+        // Feed a per-primitive Z into RDPQ so depth testing can work for screen-space blits.
+        // Tiny3D provides screenPos.v[2] as a normalized depth (near=0 .. far=1).
+        float z01 = dust_clampf(screenPos.v[2], 0.0f, 0.9999f);
+        rdpq_mode_zoverride(true, z01, 0);
+
+        float a01 = dust_alpha01(p);
+        // Slightly stronger alpha when using the sprite so it reads.
+        uint8_t a = (uint8_t)dust_clampf(a01 * (useSprite ? 180.0f : 170.0f), 0.0f, 255.0f);
+        if (a == 0) continue;
+
+        // Light warm grey "dust".
+        rdpq_set_prim_color(RGBA32(215, 210, 200, a));
+
+        int px = (int)screenPos.v[0];
+        int py = (int)screenPos.v[1];
+
+        // Slight grow then fade.
+        float grow = 1.0f + 0.7f * (p->age / p->life);
+        int half = (int)(p->size_px * grow);
+        if (half < 4) half = 4;
+        if (half > 26) half = 26;
+
+        if (useSprite) {
+            const int src_w = dustParticleSurf.width;
+            const int src_h = dustParticleSurf.height;
+            const int w = half * 2;
+            const int h = half * 2;
+            const float sx = (src_w > 0) ? ((float)w / (float)src_w) : 1.0f;
+            const float sy = (src_h > 0) ? ((float)h / (float)src_h) : 1.0f;
+            rdpq_tex_blit(&dustParticleSurf, px - (w / 2), py - (h / 2), &(rdpq_blitparms_t){
+                .scale_x = sx,
+                .scale_y = sy,
+            });
+        } else {
+            rdpq_fill_rectangle(px - half, py - half, px + half + 1, py + half + 1);
+        }
+    }
+
+    // Restore to non-depth 2D for subsequent overlays.
+    rdpq_mode_zoverride(false, 0.0f, 0);
+    rdpq_mode_zbuf(false, false);
+}
+
 // Forward declaration
 static void draw_cutscene_skip_indicator(void);
 
@@ -2994,6 +3256,10 @@ void scene_draw(T3DViewport *viewport)
     // Screen-space ribbon trails, drawn right after 3D so they feel "in world"
     sword_trail_draw_all(viewport);
 
+    // Dust puffs (boss landings/impacts)
+    dust_update(deltaTime);
+    dust_draw(viewport);
+
     // Post-boss interaction prompt ("A") above the defeated boss when close enough to interact
     draw_post_boss_a_prompt(viewport);
 
@@ -3312,5 +3578,11 @@ void scene_cleanup(void) // Realistically we never want to call this for the jam
         sprite_free(victoryTitleBgSprite);
         victoryTitleBgSprite = NULL;
         surface_free(&victoryTitleBgSurf);
+    }
+
+    if (dustParticleSprite) {
+        sprite_free(dustParticleSprite);
+        dustParticleSprite = NULL;
+        surface_free(&dustParticleSurf);
     }
 }

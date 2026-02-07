@@ -22,6 +22,7 @@
 #include "game_time.h"
 #include "character.h"
 #include "scene_sfx.h" // TODO: make sfx entity specific
+#include "scene.h"
 
 #include "utilities/collision_mesh.h"
 #include "utilities/simple_collision_utility.h"
@@ -30,6 +31,30 @@
 
 // Access global character instance
 extern Character character;
+
+// Spawn dust near the boss base, biased toward the player (roughly where the sword/impact reads).
+static inline void boss_spawn_dust_toward_player(Boss *boss, float forwardDist, float strength)
+{
+    if (!boss) return;
+
+    float dx = character.pos[0] - boss->pos[0];
+    float dz = character.pos[2] - boss->pos[2];
+    float d  = sqrtf(dx*dx + dz*dz);
+
+    float dirX, dirZ;
+    if (d > 0.001f) {
+        dirX = dx / d;
+        dirZ = dz / d;
+    } else {
+        // Fallback: use boss yaw as a rough facing direction.
+        dirX = cosf(boss->rot[1]);
+        dirZ = sinf(boss->rot[1]);
+    }
+
+    float cx = boss->pos[0] + dirX * forwardDist;
+    float cz = boss->pos[2] + dirZ * forwardDist;
+    scene_spawn_dust_burst(cx, boss->pos[1], cz, strength);
+}
 
 static inline void boss_attacks_on_player_hit(float damage)
 {
@@ -281,6 +306,15 @@ static void boss_attacks_handle_power_jump(Boss* boss, float dt)
         // Impact window
         const float impactT0 = idleDuration + jumpDuration;
         const float impactT1 = impactT0 + IMPACT_WINDOW;
+
+        // Visual: dust burst right as we hit the ground (one-shot edge)
+        // Spawn a few frames *after* the logical impact time so it lines up with the animation contact.
+        const float DUST_LATE_S = 0.20f; // ~5 frames @ 25fps (and still close at 30fps)
+        const float dustT = impactT0 + DUST_LATE_S;
+        if (boss->stateTimer - dt < dustT && boss->stateTimer >= dustT) {
+            // Land dust should read between legs and sword/impact point.
+            boss_spawn_dust_toward_player(boss, 45.0f, 2.6f);
+        }
 
         boss->sphereAttackColliderActive = (boss->stateTimer >= impactT0 && boss->stateTimer < impactT1);
 
@@ -555,6 +589,13 @@ static void boss_attacks_handle_roar_stomp(Boss* boss, float dt) {
     // Phase 2: Stomp impact (1.0s)
     else if (boss->stateTimer >= 1.0f && boss->stateTimer < 1.1f) {
 
+        // Visual: dust at the stomp impact moment
+        const float DUST_LATE_S = 0.20f;
+        const float dustT = 1.0f + DUST_LATE_S;
+        if (boss->stateTimer - dt < dustT && boss->stateTimer >= dustT) {
+            boss_spawn_dust_toward_player(boss, 20.0f, 1.6f);
+        }
+
         //boss_play_attack_sfx(boss, SCENE1_SFX_BOSS_LAND1, 0.0f);
         
         // Roar stomp uses shockwave, so use distance check for ground-based attack
@@ -604,6 +645,13 @@ static void boss_attacks_handle_tracking_slam(Boss* boss, float dt) {
     // Stop tracking once the slam is committed / landing
     // Tune this to match the animation moment where the weapon comes down.
     const float slamLockTime = 2.8f;
+
+    // Visual: spawn dust once at the slam impact timing (tuned to SFX window)
+    const float DUST_LATE_S = 0.20f;
+    const float dustTime = slamLockTime + DUST_LATE_S;
+    if (boss->stateTimer - dt < dustTime && boss->stateTimer >= dustTime) {
+        boss_spawn_dust_toward_player(boss, 40.0f, 2.0f);
+    }
 
     bool allowTracking = (boss->stateTimer < slamLockTime) && !boss->currentAttackHasHit;
 
@@ -762,6 +810,13 @@ static void boss_attacks_handle_stomp(Boss* boss, float dt)
 
     boss_play_attack_sfx(boss, SCENE1_SFX_BOSS_LAND2, 2.0f);
 
+    // Visual: dust at stomp impact (one-shot edge)
+    const float DUST_LATE_S = 0.20f;
+    const float dustT = windupEnd + DUST_LATE_S;
+    if (boss->stateTimer - dt < dustT && boss->stateTimer >= dustT) {
+        boss_spawn_dust_toward_player(boss, 18.0f, 2.6f);
+    }
+
     // Impact hit
     if (!boss->currentAttackHasHit &&
         boss->stateTimer >= windupEnd &&
@@ -914,8 +969,16 @@ static void boss_attacks_handle_flip_attack(Boss* boss, float dt)
     const float jumpDuration    = 1.5f;
     const float recoverDuration = 0.5f;
     const float totalDuration   = idleDuration + jumpDuration + recoverDuration;
+    (void)totalDuration;
 
     boss_multi_attack_sfx(boss, bossFlipAttackSfx, 3);
+
+    // Visual: dust burst on landing moment (idle + jump)
+    const float DUST_LATE_S = 0.20f;
+    const float landT = idleDuration + jumpDuration + DUST_LATE_S;
+    if (boss->stateTimer - dt < landT && boss->stateTimer >= landT) {
+        boss_spawn_dust_toward_player(boss, 35.0f, 2.3f);
+    }
 
     // --------------------------------
     // Phase 1: Idle / windup
