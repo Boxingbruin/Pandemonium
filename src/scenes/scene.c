@@ -43,6 +43,34 @@
 #include "utilities/simple_collision_utility.h"
 
 #include "video_player_utility.h"
+#include "logo.h"
+
+static void boot_reinit_display_rdpq(void)
+{
+    // The logo routines call display_close(), so we must restore a valid display + RDPQ
+    // context before drawing anything else (including the next logo).
+    if (DITHER_ENABLED) {
+        display_init(RESOLUTION_320x240, DEPTH_16_BPP, FRAME_BUFFER_COUNT, GAMMA_NONE, FILTERS_RESAMPLE_ANTIALIAS);
+    } else {
+        if (ARES_AA_ENABLED) {
+            display_init(RESOLUTION_320x240, DEPTH_32_BPP, FRAME_BUFFER_COUNT, GAMMA_NONE, FILTERS_RESAMPLE_ANTIALIAS);
+        } else {
+            display_init(RESOLUTION_320x240, DEPTH_32_BPP, FRAME_BUFFER_COUNT, GAMMA_NONE, FILTERS_DISABLED);
+        }
+    }
+
+    rdpq_init();
+}
+
+void scene_boot_logos(void)
+{
+    if (DEV_MODE) return;
+
+    logo_libdragon();
+    boot_reinit_display_rdpq(); // needed before the next logo draws
+    logo_t3d();
+    boot_reinit_display_rdpq(); // restore for the main game
+}
 
 // Four AABB walls: left, right, back, front (Y spans from floor to a fixed height)
 static AABB g_roomWalls[4];
@@ -295,6 +323,10 @@ bool cutsceneDialogActive = false;
 static bool bossPostDefeatTalkDone = false;
 static int bossPostDefeatDialogStep = 0; // 0 -> first line pending/shown, 1 -> second line pending/shown
 static bool bossWasDead = false; // Tracks death transition for one-time post-death cleanup
+
+// Per-slot save stats: track one "run" (boss attempt) start time, and record clear time at death transition.
+static bool s_bossRunActive = false;
+static double s_bossRunStartS = 0.0;
 
 // Post-boss interaction distances (XZ)
 static const float POST_BOSS_PROMPT_DIST  = 140.0f;   // show A prompt and allow talk when inside this range
@@ -1025,6 +1057,10 @@ void scene_reset(void)
 
     // Reset letterbox to show state for intro
     letterbox_show(false);
+
+    // Reset run timer state (a new run will be started when we enter gameplay again)
+    s_bossRunActive = false;
+    s_bossRunStartS = 0.0;
 }
 
 static void scene_sync_input_edge_state(void)
@@ -1276,6 +1312,12 @@ void scene_init_playing(bool skippedCutscene)
     cutsceneState = CUTSCENE_NONE;
     cutsceneCameraTimer = 0.0f;
     bossActivated = true;
+
+    // Starting a new run (boss attempt).
+    // Default save slot is 0 ("Save 1") until we have a UI to pick slots.
+    (void)save_controller_increment_run_count();
+    s_bossRunActive = true;
+    s_bossRunStartS = nowS;
 
     // ---- Music handoff behavior ----
     // If the cutscene was skipped, slam immediately into looping music.
@@ -2070,6 +2112,16 @@ void scene_update(void)
     if (bossActivated && g_boss) {
         bool bossDeadNow = (g_boss->state == BOSS_STATE_DEAD);
         if (bossDeadNow && !bossWasDead) {
+            // Record fastest clear time per save slot (once, on death edge).
+            if (s_bossRunActive && s_bossRunStartS > 0.0) {
+                double dt = nowS - s_bossRunStartS;
+                if (dt > 0.0) {
+                    uint32_t ms = (uint32_t)(dt * 1000.0);
+                    (void)save_controller_record_boss_clear_time_ms(ms);
+                }
+            }
+            s_bossRunActive = false;
+
             cameraLockOnActive = false;
             cameraLockBlend = 0.0f;
             // Sync edge detectors so we don't immediately re-toggle due to a held button

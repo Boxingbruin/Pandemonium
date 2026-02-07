@@ -43,6 +43,11 @@ void scene_fixed_update(void);
 void scene_draw(T3DViewport *viewport);
 void scene_cleanup(void);
 
+// Boot helpers
+// Runs startup logos (skipped in DEV_MODE) and restores display/rdpq state.
+// Must be called after audio initialization and before first scene draws.
+void scene_boot_logos(void);
+
 // Cutscene state functions
 bool scene_is_cutscene_active(void);
 bool scene_is_boss_active(void);
