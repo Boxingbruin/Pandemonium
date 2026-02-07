@@ -38,6 +38,9 @@ typedef struct {
 void save_controller_init(void);
 void save_controller_update(void);
 
+// Save availability / status
+bool save_controller_is_enabled(void); // true if EEPROM + EEPROMFS initialized
+
 // Save slot selection (default is 0 / "Save 1")
 bool save_controller_set_active_slot(int slot);
 int  save_controller_get_active_slot(void);
@@ -49,6 +52,8 @@ bool save_controller_save_settings(void);
 // Run + boss stats
 bool save_controller_increment_run_count(void);
 bool save_controller_record_boss_clear_time_ms(uint32_t clear_time_ms);
+uint32_t save_controller_get_run_count(void);
+uint32_t save_controller_get_best_boss_time_ms(void);
 
 void save_controller_free(void);
 

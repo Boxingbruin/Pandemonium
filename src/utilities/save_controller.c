@@ -222,6 +222,10 @@ void save_controller_update(void) {
     (void)blob_write_now();
 }
 
+bool save_controller_is_enabled(void) {
+    return s_initialized;
+}
+
 int save_controller_get_active_slot(void) {
     return s_active_slot;
 }
@@ -285,7 +289,10 @@ bool save_controller_save_settings(void) {
 }
 
 bool save_controller_increment_run_count(void) {
-    if (!s_initialized) return false;
+    if (!s_initialized) {
+        debugf("Run count increment skipped (saves disabled)\n");
+        return false;
+    }
 
     SaveData *d = &s_blob.slots[s_active_slot];
     d->run_count += 1;
@@ -304,6 +311,16 @@ bool save_controller_record_boss_clear_time_ms(uint32_t clear_time_ms) {
         return blob_write_now();
     }
     return true;
+}
+
+uint32_t save_controller_get_run_count(void) {
+    if (!s_initialized) return 0;
+    return s_blob.slots[s_active_slot].run_count;
+}
+
+uint32_t save_controller_get_best_boss_time_ms(void) {
+    if (!s_initialized) return 0;
+    return s_blob.slots[s_active_slot].best_boss_time_ms;
 }
 
 void save_controller_free(void) {
