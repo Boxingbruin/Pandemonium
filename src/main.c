@@ -141,6 +141,8 @@ int main(void)
             scene_draw(&viewport);
         }
 
+        t3d_tri_sync();
+        rdpq_sync_pipe();
         menu_controller_draw();
         
         if (DEV_MODE)

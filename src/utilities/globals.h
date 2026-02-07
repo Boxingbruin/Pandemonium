@@ -17,6 +17,11 @@
 #define PAL_MODE false
 #define DRAW_CRT_SAFE_AREA false
 
+#define DITHER_ENABLED false
+#define ARES_AA_ENABLED false
+
+extern bool hdAspect;
+
 // Safe-area margins
 // Action safe: 90% area => 5% margin per side
 #define ACTION_SAFE_MARGIN_X ((SCREEN_WIDTH * 50) / 1000)
@@ -25,8 +30,6 @@
 #define TITLE_SAFE_MARGIN_X ((SCREEN_WIDTH * 75) / 1000)
 #define TITLE_SAFE_MARGIN_Y ((SCREEN_HEIGHT * 75) / 1000)
 
-#define DITHER_ENABLED false
-#define ARES_AA_ENABLED false
 enum {
     FONT_UNBALANCED = 2,
 };

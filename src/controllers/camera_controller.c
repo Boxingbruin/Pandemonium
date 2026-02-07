@@ -9,6 +9,8 @@
 #include "game_math.h"
 #include "utilities/animation_utility.h"
 
+#include "globals.h"
+
 CameraState cameraState = CAMERA_NONE;
 CameraState lastCameraState = CAMERA_NONE;
 
@@ -237,6 +239,25 @@ void camera_breath_update(float dt)
     customCamTarget.v[1] = breathBaseTarget[1] + breathY * 0.95f;
     customCamTarget.v[2] = breathBaseTarget[2];
 }
+
+void camera_set_projection(T3DViewport *viewport)
+{
+    if(!hdAspect)
+    {
+        t3d_viewport_set_projection(viewport, T3D_DEG_TO_RAD(FOV), CAMERA_NEAR_CLIP, CAMERA_FAR_CLIP);
+    }
+    else
+    {
+        t3d_viewport_set_perspective(
+            viewport,
+            T3D_DEG_TO_RAD(FOV),
+            1.7777778f,
+            CAMERA_NEAR_CLIP,
+            CAMERA_FAR_CLIP
+        );
+    }
+}
+
 void camera_update(T3DViewport *viewport)
 {
 	animation_utility_screen_shake_update();
@@ -261,7 +282,8 @@ void camera_update(T3DViewport *viewport)
 		camDir.v[2] = camTarget.v[2] - camPos.v[2];
 		t3d_vec3_norm(&camDir);
 
-		t3d_viewport_set_projection(viewport, T3D_DEG_TO_RAD(FOV), CAMERA_NEAR_CLIP, CAMERA_FAR_CLIP);
+        camera_set_projection(viewport);
+
 		camera_apply_screen_shake(&camPos, &camTarget, &up);
 		t3d_viewport_look_at(viewport, &camPos, &camTarget, &up);
 
@@ -321,7 +343,8 @@ void camera_update(T3DViewport *viewport)
         camDir.v[2] = camTarget.v[2] - camPos.v[2];  // Z component
         t3d_vec3_norm(&camDir);
 
-        t3d_viewport_set_projection(viewport, T3D_DEG_TO_RAD(FOV), CAMERA_NEAR_CLIP, CAMERA_FAR_CLIP);
+        camera_set_projection(viewport);
+
         camera_apply_screen_shake(&camPos, &camTarget, &up);
         t3d_viewport_look_at(viewport, &camPos, &camTarget, &up);
     }
@@ -380,8 +403,8 @@ void camera_update(T3DViewport *viewport)
         camTarget.v[1] = camPos.v[1] + camDir.v[1] * distanceInFrontOfCamera;
         camTarget.v[2] = camPos.v[2] + camDir.v[2] * distanceInFrontOfCamera;
 
-        //t3d_viewport_set_projection(viewport, T3D_DEG_TO_RAD(FOV), CAMERA_NEAR_CLIP, CAMERA_FAR_CLIP);
-        t3d_viewport_set_projection(viewport, T3D_DEG_TO_RAD(FOV), CAMERA_NEAR_CLIP, CAMERA_FAR_CLIP);
+        camera_set_projection(viewport);
+
         camera_apply_screen_shake(&camPos, &camTarget, &up);
         t3d_viewport_look_at(viewport, &camPos, &camTarget, &up);
 
@@ -414,7 +437,8 @@ void camera_update(T3DViewport *viewport)
         }
         
         // Pass the rolled-up vector to the camera look-at function
-        t3d_viewport_set_projection(viewport, T3D_DEG_TO_RAD(FOV), CAMERA_NEAR_CLIP, CAMERA_FAR_CLIP);
+        camera_set_projection(viewport);
+        
         camera_apply_screen_shake(&customCamPos, &customCamTarget, &rolledUp);
         t3d_viewport_look_at(viewport, &customCamPos, &customCamTarget, &rolledUp);
     }
@@ -446,7 +470,7 @@ void camera_update(T3DViewport *viewport)
         }
         
         // Pass the rolled-up vector to the camera look-at function
-        t3d_viewport_set_projection(viewport, T3D_DEG_TO_RAD(FOV), CAMERA_NEAR_CLIP, CAMERA_FAR_CLIP);
+        camera_set_projection(viewport);
         camera_apply_screen_shake(&camPos, &camTarget, &rolledUp);
         t3d_viewport_look_at(viewport, &camPos, &camTarget, &rolledUp);
     }
@@ -478,7 +502,7 @@ void camera_update(T3DViewport *viewport)
         }
         
         // Pass the rolled-up vector to the camera look-at function
-        t3d_viewport_set_projection(viewport, T3D_DEG_TO_RAD(FOV), CAMERA_NEAR_CLIP, CAMERA_FAR_CLIP);
+        camera_set_projection(viewport);
         camera_apply_screen_shake(&customCamPos, &customCamTarget, &rolledUp);
         t3d_viewport_look_at(viewport, &customCamPos, &customCamTarget, &rolledUp);
     }

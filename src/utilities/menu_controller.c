@@ -5,6 +5,7 @@
 #include "joypad_utility.h"
 #include "audio_controller.h"
 #include "scene.h"
+
 #include "globals.h"
 
 // Menu state
@@ -44,13 +45,13 @@ static bool lastStickDown = false;
 static const char* mainMenuOptions[MENU_MAIN_COUNT] = {
     "Resume",
     "Restart",
-    "Audio Settings",
+    "Settings",
     "Controls",
 };
 
 static const char* titleMenuOptions[MENU_TITLE_COUNT] = {
     "Play",
-    "Audio Settings",
+    "Settings",
     "Controls",
     "Credits",
 };
@@ -61,6 +62,7 @@ static const char* audioMenuOptions[MENU_AUDIO_COUNT] = {
     "SFX Volume: %d",
     "Mute All: %s",
     "Audio Mode: %s",
+    "Aspect: %s",
     "Back",
 };
 
@@ -293,6 +295,13 @@ void menu_controller_update(void) {
                         audio_toggle_stereo_mode();
                     }
                     break;
+                case MENU_AUDIO_ASPECT:
+                    {
+                        if (leftJustPressed || rightJustPressed) {
+                            hdAspect = !hdAspect;
+                        }
+                    }
+                    break;
             }
         }
         
@@ -303,6 +312,11 @@ void menu_controller_update(void) {
                     break;
                 case MENU_AUDIO_STEREO_MODE:
                     audio_toggle_stereo_mode();
+                    break;
+                case MENU_AUDIO_ASPECT:
+                    {
+                        hdAspect = !hdAspect;
+                    }
                     break;
                 case MENU_AUDIO_BACK:
                     currentMenu = parentMenu;
@@ -652,7 +666,7 @@ void menu_controller_draw(void) {
             .width = contentW,
             .height = contentH,
             .wrap = WRAP_WORD,
-        }, FONT_UNBALANCED, x, y + titleYOffset, "AUDIO SETTINGS");
+        }, FONT_UNBALANCED, x, y + titleYOffset, "SETTINGS");
         
         y += (lineHeight * 3) + titleYOffset;
         
@@ -671,6 +685,8 @@ void menu_controller_draw(void) {
                 snprintf(optionText, sizeof(optionText), fmt, audio_is_muted() ? "ON" : "OFF");
             } else if (i == MENU_AUDIO_STEREO_MODE) {
                 snprintf(optionText, sizeof(optionText), fmt, audio_get_stereo_mode() ? "Stereo" : "Mono");
+            }else if (i == MENU_AUDIO_ASPECT) {
+                snprintf(optionText, sizeof(optionText), fmt, hdAspect ? "16:9" : "4:3");
             } else {
                 snprintf(optionText, sizeof(optionText), "%s", fmt);
             }
