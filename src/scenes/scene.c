@@ -77,15 +77,6 @@ void scene_boot_logos(void)
 static AABB g_roomWalls[4];
 static const int g_roomWallCount = 4;
 
-// Diagonal corner walls (octagon feel) using box/AABB colliders at corners
-// Diagonal corner boxes approximating angled walls
-static AABB g_diagBoxes[16];           // up to 4 corners * several steps
-static int  g_diagBoxCount = 0;        // filled at init
-static int  g_diagSteps = 5;           // number of small boxes per diagonal
-static float g_diagBoxHalf = 8.0f;     // half-size of each small diagonal box
-static float g_diagOffset = 80.0f;     // how deep the corner cut is from each axis
-
-
 T3DModel* mapModel;
 rspq_block_t* mapDpl;
 T3DMat4FP* mapMatrix;
@@ -2244,21 +2235,64 @@ void scene_draw_title(T3DViewport *viewport)
         rdpq_set_mode_standard();
         rdpq_mode_blender(RDPQ_BLENDER_MULTIPLY);
 
-        // Restart counter (local-only). Don't show if there's 0 restarts.
-        if (restartCounter > 0) {
-            // Keep inside title-safe area for CRT overscan.
-            const int margin = TITLE_SAFE_MARGIN_X;
-            const int panelW = 60;
-            const int panelH = 18;
-            const int panelX0 = margin;
-            const int panelY0 = SCREEN_HEIGHT - TITLE_SAFE_MARGIN_Y - panelH;
+        // Run counters:
+        // - "Runs" is persisted via EEPROM (per save slot).
+        // - "Restarts" is local-only for this boot/session.
+        {
+            const bool savesOn = save_controller_is_enabled();
+            const uint32_t savedRuns = save_controller_get_run_count();
+            const uint32_t bestMs = save_controller_get_best_boss_time_ms();
 
-            rdpq_set_prim_color(RGBA32(0, 0, 0, 120));
-            rdpq_mode_combiner(RDPQ_COMBINER_FLAT);
-            rdpq_fill_rectangle(panelX0, panelY0, panelX0 + panelW, panelY0 + panelH);
+            // Draw the panel if:
+            // - saves are disabled (so it's obvious why "Runs" won't persist), or
+            // - we have any counter value to show.
+            if (!savesOn || savedRuns > 0 || bestMs > 0 || restartCounter > 0) {
+                // Keep inside title-safe area for CRT overscan.
+                const int margin = TITLE_SAFE_MARGIN_X;
+                const int panelW = 120;
+                const bool showBest = (savesOn && bestMs > 0);
+                const bool showRestarts = (restartCounter > 0);
+                const int lineCount = 1 + (showBest ? 1 : 0) + (showRestarts ? 1 : 0);
+                const int panelH = 6 + (lineCount * 13); // 13px per line + small padding
+                const int panelX0 = margin;
+                const int panelY0 = SCREEN_HEIGHT - TITLE_SAFE_MARGIN_Y - panelH;
 
-            rdpq_set_prim_color(RGBA32(255, 255, 255, 255));
-            rdpq_text_printf(NULL, FONT_UNBALANCED, panelX0 + 6, panelY0 + 13, "Runs: %lu", (unsigned long)restartCounter);
+                rdpq_set_prim_color(RGBA32(0, 0, 0, 120));
+                rdpq_mode_combiner(RDPQ_COMBINER_FLAT);
+                rdpq_fill_rectangle(panelX0, panelY0, panelX0 + panelW, panelY0 + panelH);
+
+                rdpq_set_prim_color(RGBA32(255, 255, 255, 255));
+                int lineY = panelY0 + 13;
+
+                // Line 1: Runs (persisted)
+                if (savesOn) {
+                    rdpq_text_printf(NULL, FONT_UNBALANCED, panelX0 + 6, lineY,
+                                     "Runs: %lu", (unsigned long)savedRuns);
+                } else {
+                    rdpq_text_printf(NULL, FONT_UNBALANCED, panelX0 + 6, lineY,
+                                     "Runs: --");
+                }
+                lineY += 13;
+
+                // Line 2 (optional): Best time
+                if (showBest) {
+                    const uint32_t minutes = bestMs / 60000u;
+                    const uint32_t seconds = (bestMs / 1000u) % 60u;
+                    const uint32_t millis  = bestMs % 1000u;
+                    rdpq_text_printf(NULL, FONT_UNBALANCED, panelX0 + 6, lineY,
+                                     "Best: %lu:%02lu.%03lu",
+                                     (unsigned long)minutes,
+                                     (unsigned long)seconds,
+                                     (unsigned long)millis);
+                    lineY += 13;
+                }
+
+                // Line 3 (optional): Restarts (session-only)
+                if (showRestarts) {
+                    rdpq_text_printf(NULL, FONT_UNBALANCED, panelX0 + 6, lineY,
+                                     "Restarts: %lu", (unsigned long)restartCounter);
+                }
+            }
         }
 
         if(titleTextActivationTimer >= titleTextActivationTime && !menu_controller_is_title_submenu_active())
