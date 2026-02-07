@@ -39,34 +39,6 @@ static inline void boss_attacks_on_player_hit(float damage)
     animation_utility_set_screen_shake_mag(20.0f);
 }
 
-// For some attacks (notably tracking slam), aiming from the boss origin causes
-// the weapon to "land" on the player because the sword/hand is offset forward.
-// Use the weapon tip position (world XZ) as the aim origin when available.
-// We can figure out a better system later.
-static inline bool boss_attacks_weapon_tip_world_xz(const Boss *boss, float *outX, float *outZ)
-{
-    if (!boss || !outX || !outZ) return false;
-    if (!boss->skeleton || !boss->modelMat) return false;
-    if (boss->handRightBoneIndex < 0) return false;
-
-    T3DSkeleton *sk = (T3DSkeleton*)boss->skeleton;
-    const T3DMat4FP *B = &sk->boneMatricesFP[boss->handRightBoneIndex]; // bone in MODEL space
-    const T3DMat4FP *M = (const T3DMat4FP*)boss->modelMat;             // model in WORLD space
-
-    // Match collision_system.c: bone-local segment points.
-    const float len = 640.0f;
-    const float p_tip_local[3] = { -len, 0.0f, 0.0f };
-
-    float p_tip_model[3];
-    float p_tip_world[3];
-    mat4fp_mul_point_f32_row3_colbasis(B, p_tip_local, p_tip_model);
-    mat4fp_mul_point_f32_row3_colbasis(M, p_tip_model, p_tip_world);
-
-    *outX = p_tip_world[0];
-    *outZ = p_tip_world[2];
-    return true;
-}
-
 // static inline void boss_shake_on_window_end(bool windowActiveNow,
 //                                             bool *prevWindowActive,
 //                                             float damageForThisWindow)
@@ -640,13 +612,8 @@ static void boss_attacks_handle_tracking_slam(Boss* boss, float dt) {
         float targetX = character.pos[0] + boss->lastPlayerVel[0] * leadTime;
         float targetZ = character.pos[2] + boss->lastPlayerVel[1] * leadTime;
 
-        // Aim from the weapon tip (when available) instead of boss midpoint.
-        float originX = boss->pos[0];
-        float originZ = boss->pos[2];
-        (void)boss_attacks_weapon_tip_world_xz(boss, &originX, &originZ);
-
-        float dx = targetX - originX;
-        float dz = targetZ - originZ;
+        float dx = targetX - boss->pos[0];
+        float dz = targetZ - boss->pos[2];
 
         if (dx != 0.0f || dz != 0.0f) {
             float targetAngle = -atan2f(-dz, dx) + T3D_PI;
