@@ -45,6 +45,26 @@ static const float BOSS_SHADOW_SHRINK_AMOUNT = 0.35f;  // shrink as boss goes up
 static const float BOSS_JUMP_REF_HEIGHT = 120.0f;      // reference height for full shrink
 static const float BOSS_SHADOW_SIZE_MULT = 3.6f;       // 2x larger than previous
 
+void boss_turn_towards_yaw(Boss *boss, float targetYaw, float maxTurn) {
+    float cur = boss->rot[1];
+    float d = wrap_pi(targetYaw - cur);
+
+    if (d >  maxTurn) d =  maxTurn;
+    if (d < -maxTurn) d = -maxTurn;
+
+    boss->rot[1] = cur + d;
+}
+
+void boss_turn_towards_player(Boss *boss, float dt, float turnScalar) {
+    float dx = character.pos[0] - boss->pos[0];
+    float dz = character.pos[2] - boss->pos[2];
+    if (dx == 0.0f && dz == 0.0f) return;
+
+    float targetYaw = -atan2f(-dz, dx) + T3D_PI;
+    float maxTurn = boss->turnRate * turnScalar * dt;
+    boss_turn_towards_yaw(boss, targetYaw, maxTurn);
+}
+
 // Sword trail sampling for boss: use the same bone-local segment as the weapon collider.
 static inline bool boss_weapon_world_segment(const Boss* boss, float outBase[3], float outTip[3]) {
     if (!boss) return false;
@@ -654,6 +674,9 @@ void boss_init(Boss* boss) {
     boss->flipAttackTravelYaw = boss->rot[1];
     boss->flipAttackPastDist  = 0.0f;
 
+    boss->postTurnTimer    = 0.0f;
+    boss->postTurnDuration = 0.35f; // tune per-attack?
+    boss->postTurnDir      = 0;
 
     boss->visible = true;
     boss->pendingRequests = 0;

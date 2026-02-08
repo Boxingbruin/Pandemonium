@@ -210,6 +210,10 @@ typedef struct Boss {
     const char* currentAttackName;
     float hitMessageTimer;
     float animationTransitionTimer;
+
+    float postTurnTimer;
+    float postTurnDuration;
+    int   postTurnDir;  
     
     // Pending requests (set by external triggers, read by AI)
     unsigned int pendingRequests;
@@ -234,6 +238,8 @@ Boss* boss_spawn(void);
 void boss_update(Boss* boss);
 void boss_draw(Boss* boss);
 void boss_draw_ui(Boss* boss, void* viewport);  // T3DViewport* but avoiding header dependency
+void boss_turn_towards_yaw(Boss *boss, float targetYaw, float maxTurn);
+void boss_turn_towards_player(Boss *boss, float dt, float turnScalar);
 
 // Basic getters
 float boss_get_hp(const Boss* boss);

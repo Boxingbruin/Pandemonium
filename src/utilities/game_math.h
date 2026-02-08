@@ -20,6 +20,8 @@ typedef struct {
     int32_t v[3];
 } FixedVec3;
 
+float wrap_pi(float a);
+
 int32_t clamp_fixed(int32_t val, int32_t minVal, int32_t maxVal);
 int64_t clamp_fixed64(int64_t val, int64_t minVal, int64_t maxVal);
 float clampf(float v, float lo, float hi);

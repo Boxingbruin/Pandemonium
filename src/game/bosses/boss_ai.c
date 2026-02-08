@@ -77,6 +77,13 @@ static bool boss_ai_state_is_attack(BossState state) {
         || state == BOSS_STATE_ATTACK1;
 }
 
+static inline float desired_yaw_to_player(const Boss* boss) {
+    float dx = character.pos[0] - boss->pos[0];
+    float dz = character.pos[2] - boss->pos[2];
+    if (dx == 0.0f && dz == 0.0f) return boss->rot[1];
+    return -atan2f(-dz, dx) + T3D_PI;
+}
+
 static void predict_character_position(float *predictedPos, float predictionTime) {
     predictedPos[0] = character.pos[0];
     predictedPos[1] = character.pos[1];
@@ -225,8 +232,8 @@ static void boss_ai_setup_combo_lunge(Boss* boss, float dist, float dx, float dz
             boss->comboLungeLockedYaw = boss->rot[1];
         }
 
-        // Snap yaw at start (optional)
-        boss->rot[1] = boss->comboLungeLockedYaw;
+        // Snap yaw at start
+        //boss->rot[1] = boss->comboLungeLockedYaw;
     }
 
     boss->targetingLocked = true;

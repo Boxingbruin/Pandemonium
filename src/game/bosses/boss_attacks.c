@@ -193,7 +193,7 @@ static void boss_attacks_handle_power_jump(Boss* boss, float dt)
         float dx = boss->powerJumpTargetPos[0] - boss->pos[0];
         float dz = boss->powerJumpTargetPos[2] - boss->pos[2];
         if (dx != 0.0f || dz != 0.0f) {
-            boss->rot[1] = -atan2f(-dz, dx) + T3D_PI;
+            boss_turn_towards_player(boss, dt, 0.5f); 
         }
     }
     // Phase 2: Jump arc
@@ -289,7 +289,7 @@ static void boss_attacks_handle_power_jump(Boss* boss, float dt)
             float dx = boss->powerJumpTargetPos[0] - boss->powerJumpStartPos[0];
             float dz = boss->powerJumpTargetPos[2] - boss->powerJumpStartPos[2];
             if (dx != 0.0f || dz != 0.0f) {
-                boss->rot[1] = -atan2f(-dz, dx) + T3D_PI;
+                boss_turn_towards_player(boss, dt, 0.5f); 
             }
         }
     }
@@ -452,7 +452,7 @@ static void boss_attacks_handle_combo(Boss* boss, float dt)
     if (boss->stateTimer < MOVE_END_TIME) {
         float dx = boss->lockedTargetingPos[0] - boss->pos[0];
         float dz = boss->lockedTargetingPos[2] - boss->pos[2];
-        boss->rot[1] = -atan2f(-dz, dx) + T3D_PI;
+        boss_turn_towards_player(boss, dt, 0.5f); 
     }
 
     boss_multi_attack_sfx(boss, bossComboAttack1Sfx, 3);
@@ -464,7 +464,7 @@ static void boss_attacks_handle_throw(Boss* boss, float dt) // TODO: add after t
     float dx = boss->comboStarterTargetPos[0] - boss->pos[0];
     float dz = boss->comboStarterTargetPos[2] - boss->pos[2];
     // Use same rotation formula as strafe/chase for consistency
-    boss->rot[1] = -atan2f(-dz, dx) + T3D_PI;
+    boss_turn_towards_player(boss, dt, 0.5f); 
     
     // Phase 1: Throw sword (0.0 - 0.5s)
     if (!boss->swordThrown && boss->stateTimer < 0.5f) {
@@ -548,7 +548,7 @@ static void boss_attacks_handle_combo_starter(Boss* boss, float dt) {
     float dx = character.pos[0] - boss->pos[0];
     float dz = character.pos[2] - boss->pos[2];
     if (dx != 0.0f || dz != 0.0f) {
-        boss->rot[1] = -atan2f(-dz, dx) + T3D_PI;
+        boss_turn_towards_player(boss, dt, 0.5f); 
     }
 
     // Keep boss stationary during combo starter
@@ -572,7 +572,7 @@ static void boss_attacks_handle_lunge_starter(Boss* boss, float dt) {
     float dx = character.pos[0] - boss->pos[0];
     float dz = character.pos[2] - boss->pos[2];
     if (dx != 0.0f || dz != 0.0f) {
-        boss->rot[1] = -atan2f(-dz, dx) + T3D_PI;
+        boss_turn_towards_player(boss, dt, 0.5f); 
     }
 }
 
@@ -582,7 +582,7 @@ static void boss_attacks_handle_roar_stomp(Boss* boss, float dt) {
         // Face player - use consistent rotation formula
         float dx = character.pos[0] - boss->pos[0];
         float dz = character.pos[2] - boss->pos[2];
-        boss->rot[1] = -atan2f(-dz, dx) + T3D_PI;
+        boss_turn_towards_player(boss, dt, 0.5f); 
         
         // Animation trigger would be handled by animation system at 0.8-0.9s
     }
@@ -803,7 +803,7 @@ static void boss_attacks_handle_stomp(Boss* boss, float dt)
     float dx = character.pos[0] - boss->pos[0];
     float dz = character.pos[2] - boss->pos[2];
     if (dx != 0.0f || dz != 0.0f) {
-        boss->rot[1] = -atan2f(-dz, dx) + T3D_PI;
+        boss_turn_towards_player(boss, dt, 0.5f); 
     }
 
     boss->isAttacking = true;
@@ -870,7 +870,7 @@ static void boss_attacks_handle_attack1(Boss* boss, float dt)
     float dx = aimX - boss->pos[0];
     float dz = aimZ - boss->pos[2];
     if (dx != 0.0f || dz != 0.0f) {
-        boss->rot[1] = -atan2f(-dz, dx) + T3D_PI;
+        boss_turn_towards_player(boss, dt, 0.5f); 
     }
 
     boss_play_attack_sfx(boss, SCENE1_SFX_BOSS_SWING4, 1.0f);

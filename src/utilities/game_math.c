@@ -2,6 +2,12 @@
 #include "game_math.h"
 #include "globals.h"
 
+float wrap_pi(float a) {
+    while (a >  T3D_PI) a -= 2.0f * T3D_PI;
+    while (a < -T3D_PI) a += 2.0f * T3D_PI;
+    return a;
+}
+
 int safe_float_to_int(float x)
 {
     if (x != x) return 0;
