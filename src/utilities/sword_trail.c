@@ -19,7 +19,7 @@ typedef struct {
 } SwordTrailSample;
 
 // Tuning
-enum { TRAIL_MAX_SAMPLES = 16 };
+enum { TRAIL_MAX_SAMPLES = 24 };
 
 struct SwordTrail {
     SwordTrailSample samples[TRAIL_MAX_SAMPLES];
@@ -29,7 +29,9 @@ struct SwordTrail {
 };
 
 static const float TRAIL_LIFETIME_SEC = 0.20f;
-static const float TRAIL_MIN_SAMPLE_DIST = 6.0f;  // world units
+static const float TRAIL_MIN_SAMPLE_DIST = 2.5f;  // world units
+static const float TRAIL_SUBDIV_DIST = 4.0f;      // world units (approx); smaller => smoother
+static const int   TRAIL_SUBDIV_MAX  = 4;
 // Additive blending helps overlapping trails "mix" instead of reading as separate layers.
 // NOTE: libdragon documents additive as overflow-prone on real RDP, so we keep alpha modest.
 static const uint8_t TRAIL_MAX_ALPHA = 96;
@@ -51,6 +53,21 @@ static inline float clampf(float x, float lo, float hi) {
     if (x < lo) return lo;
     if (x > hi) return hi;
     return x;
+}
+
+static inline float lerpf(float a, float b, float t) { return a + (b - a) * t; }
+
+static inline void v3_catmull_rom(const float p0[3], const float p1[3], const float p2[3], const float p3[3], float t, float out[3]) {
+    // Standard Catmull-Rom spline (uniform), produces smooth curve through p1->p2.
+    float t2 = t * t;
+    float t3 = t2 * t;
+    for (int k = 0; k < 3; k++) {
+        float a0 = -0.5f*p0[k] + 1.5f*p1[k] - 1.5f*p2[k] + 0.5f*p3[k];
+        float a1 =  1.0f*p0[k] - 2.5f*p1[k] + 2.0f*p2[k] - 0.5f*p3[k];
+        float a2 = -0.5f*p0[k] + 0.5f*p2[k];
+        float a3 =  1.0f*p1[k];
+        out[k] = ((a0 * t3) + (a1 * t2) + (a2 * t) + a3);
+    }
 }
 
 static inline float age_to_alpha01(float age) {
@@ -150,49 +167,85 @@ void sword_trail_instance_draw(SwordTrail *t, void *viewport) {
     if (!viewport) return;
     if (t->count < 2) return;
 
-    // 2D render state for filled triangles.
+    // 2D render state for shaded triangles (per-vertex alpha for smooth fade between samples).
     rdpq_sync_pipe();
     rdpq_set_mode_standard();
-    rdpq_mode_combiner(RDPQ_COMBINER_FLAT);
+    rdpq_mode_combiner(RDPQ_COMBINER_SHADE);
     rdpq_mode_blender(RDPQ_BLENDER_ADDITIVE);
+    rdpq_mode_dithering(DITHER_NOISE_NOISE);
 
-    // Build and draw as a series of quads between consecutive samples (oldest->newest).
+    const float cr = (float)TRAIL_COLOR_R / 255.0f;
+    const float cg = (float)TRAIL_COLOR_G / 255.0f;
+    const float cb = (float)TRAIL_COLOR_B / 255.0f;
+    const float a_scale = (float)TRAIL_MAX_ALPHA / 255.0f;
+
+    // Build and draw as a series of quads between consecutive samples (oldest->newest),
+    // with optional subdivision + spline interpolation to reduce visible "chunking".
     for (int i = 0; i < t->count - 1; i++) {
-        int ia = sample_index_oldest_plus(t, i);
-        int ib = sample_index_oldest_plus(t, i + 1);
-        const SwordTrailSample *a = &t->samples[ia];
-        const SwordTrailSample *b = &t->samples[ib];
-        if (!a->valid || !b->valid) continue;
+        int i0 = sample_index_oldest_plus(t, i - 1 < 0 ? 0 : i - 1);
+        int i1 = sample_index_oldest_plus(t, i);
+        int i2 = sample_index_oldest_plus(t, i + 1);
+        int i3 = sample_index_oldest_plus(t, (i + 2) >= t->count ? (t->count - 1) : (i + 2));
 
-        // Project 4 points to screen space.
-        T3DVec3 baseA_scr, tipA_scr, baseB_scr, tipB_scr;
-        t3d_viewport_calc_viewspace_pos(viewport, &baseA_scr, (const T3DVec3*)a->base);
-        t3d_viewport_calc_viewspace_pos(viewport, &tipA_scr,  (const T3DVec3*)a->tip);
-        t3d_viewport_calc_viewspace_pos(viewport, &baseB_scr, (const T3DVec3*)b->base);
-        t3d_viewport_calc_viewspace_pos(viewport, &tipB_scr,  (const T3DVec3*)b->tip);
+        const SwordTrailSample *s0 = &t->samples[i0];
+        const SwordTrailSample *s1 = &t->samples[i1];
+        const SwordTrailSample *s2 = &t->samples[i2];
+        const SwordTrailSample *s3 = &t->samples[i3];
+        if (!s1->valid || !s2->valid) continue;
 
-        // Skip segments behind the camera.
-        if (baseA_scr.v[2] >= 1.0f || tipA_scr.v[2] >= 1.0f ||
-            baseB_scr.v[2] >= 1.0f || tipB_scr.v[2] >= 1.0f) {
-            continue;
+        float d0 = v3_dist(s1->base, s2->base);
+        float d1 = v3_dist(s1->tip,  s2->tip);
+        float d = fmaxf(d0, d1);
+        int subdiv = (int)ceilf(d / TRAIL_SUBDIV_DIST);
+        if (subdiv < 1) subdiv = 1;
+        if (subdiv > TRAIL_SUBDIV_MAX) subdiv = TRAIL_SUBDIV_MAX;
+
+        // Previous interpolated point at t=0 (== s1).
+        float prev_base_w[3], prev_tip_w[3];
+        v3_catmull_rom(s0->base, s1->base, s2->base, s3->base, 0.0f, prev_base_w);
+        v3_catmull_rom(s0->tip,  s1->tip,  s2->tip,  s3->tip,  0.0f, prev_tip_w);
+        float prev_age = s1->age;
+
+        T3DVec3 prev_base_scr, prev_tip_scr;
+        t3d_viewport_calc_viewspace_pos(viewport, &prev_base_scr, (const T3DVec3*)prev_base_w);
+        t3d_viewport_calc_viewspace_pos(viewport, &prev_tip_scr,  (const T3DVec3*)prev_tip_w);
+        if (prev_base_scr.v[2] >= 1.0f || prev_tip_scr.v[2] >= 1.0f) continue;
+
+        float prev_alpha = clampf(age_to_alpha01(prev_age) * a_scale, 0.0f, 1.0f);
+
+        for (int s = 1; s <= subdiv; s++) {
+            float tt = (float)s / (float)subdiv;
+
+            float base_w[3], tip_w[3];
+            v3_catmull_rom(s0->base, s1->base, s2->base, s3->base, tt, base_w);
+            v3_catmull_rom(s0->tip,  s1->tip,  s2->tip,  s3->tip,  tt, tip_w);
+            float age = lerpf(s1->age, s2->age, tt);
+
+            T3DVec3 base_scr, tip_scr;
+            t3d_viewport_calc_viewspace_pos(viewport, &base_scr, (const T3DVec3*)base_w);
+            t3d_viewport_calc_viewspace_pos(viewport, &tip_scr,  (const T3DVec3*)tip_w);
+            if (base_scr.v[2] >= 1.0f || tip_scr.v[2] >= 1.0f) break;
+
+            float alpha = clampf(age_to_alpha01(age) * a_scale, 0.0f, 1.0f);
+            if (prev_alpha <= 0.0f && alpha <= 0.0f) {
+                prev_base_scr = base_scr;
+                prev_tip_scr = tip_scr;
+                prev_alpha = alpha;
+                continue;
+            }
+
+            float v0[6] = { prev_base_scr.v[0], prev_base_scr.v[1], cr, cg, cb, prev_alpha };
+            float v1[6] = { prev_tip_scr.v[0],  prev_tip_scr.v[1],  cr, cg, cb, prev_alpha };
+            float v2[6] = { base_scr.v[0],      base_scr.v[1],      cr, cg, cb, alpha };
+            float v3[6] = { tip_scr.v[0],       tip_scr.v[1],       cr, cg, cb, alpha };
+
+            rdpq_triangle(&TRIFMT_SHADE, v0, v1, v2);
+            rdpq_triangle(&TRIFMT_SHADE, v1, v3, v2);
+
+            prev_base_scr = base_scr;
+            prev_tip_scr = tip_scr;
+            prev_alpha = alpha;
         }
-
-        float a0 = age_to_alpha01(a->age);
-        float a1 = age_to_alpha01(b->age);
-        float alpha01 = 0.5f * (a0 + a1);
-        uint8_t alpha = (uint8_t)clampf(alpha01 * (float)TRAIL_MAX_ALPHA, 0.0f, 255.0f);
-        if (alpha == 0) continue;
-
-        rdpq_set_prim_color(RGBA32(TRAIL_COLOR_R, TRAIL_COLOR_G, TRAIL_COLOR_B, alpha));
-
-        float p0[2] = { baseA_scr.v[0], baseA_scr.v[1] };
-        float p1[2] = { tipA_scr.v[0],  tipA_scr.v[1]  };
-        float p2[2] = { baseB_scr.v[0], baseB_scr.v[1] };
-        float p3[2] = { tipB_scr.v[0],  tipB_scr.v[1]  };
-
-        // Two triangles forming the quad strip segment.
-        rdpq_triangle(&TRIFMT_FILL, p0, p1, p2);
-        rdpq_triangle(&TRIFMT_FILL, p1, p3, p2);
     }
 }
 
