@@ -980,59 +980,67 @@ void scene_init(void)
     scene_title_init();
 
     dust_reset();
+static bool scene_get_boss_bone_world_pos(int boneIndex, T3DVec3 *outWorld);
+
+static inline int scene_lockon_bone_index_for_target(LockTargetId target)
+{
+    if (!g_boss) return -1;
+    switch (target) {
+        case LOCK_TARGET_LOWERLEG_LEFT:  return g_boss->lowerLegLeftBoneIndex;
+        case LOCK_TARGET_LOWERLEG_RIGHT: return g_boss->lowerLegRightBoneIndex;
+        case LOCK_TARGET_HEAD:           return g_boss->headBoneIndex;
+        case LOCK_TARGET_SPINE:          return g_boss->spine1BoneIndex;
+        default:                         return -1;
+    }
 }
 
-// Returns a consistent point around the boss' midsection for lock-on targeting.
-// Uses the Spine1 bone position if available; otherwise falls back to capsule estimate.
+static inline bool scene_lockon_target_available(LockTargetId target)
+{
+    return scene_lockon_bone_index_for_target(target) >= 0;
+}
+
+static void scene_cycle_lock_target(int dir)
+{
+    if (LOCK_TARGET_COUNT <= 0) return;
+    if (dir == 0) return;
+
+    // Try to skip unavailable bones, but always terminate (max LOCK_TARGET_COUNT iterations).
+    int idx = s_lockTargetIndex;
+    for (int i = 0; i < LOCK_TARGET_COUNT; i++) {
+        idx = (idx + dir) % LOCK_TARGET_COUNT;
+        if (idx < 0) idx += LOCK_TARGET_COUNT;
+        if (scene_lockon_target_available((LockTargetId)idx)) {
+            s_lockTargetIndex = idx;
+            return;
+        }
+    }
+    // If nothing is available, keep current selection.
+}
+
+// Lock-on focus point for targeting.
 static T3DVec3 get_boss_lock_focus_point(void)
 {
     if (!g_boss) {
         return (T3DVec3){{0.0f, 0.0f, 0.0f}};
     }
-    
-    // Try to use Spine1 bone position if available
-    if (g_boss->spine1BoneIndex >= 0 && g_boss->skeleton && g_boss->modelMat) {
-        T3DSkeleton* skel = (T3DSkeleton*)g_boss->skeleton;
-        if (skel && skel->skeletonRef) {
-            // Get bone's transform matrix (in model space, updated by animation system)
-            const T3DMat4FP* boneMat = &skel->boneMatricesFP[g_boss->spine1BoneIndex];
-            const T3DMat4FP* modelMat = (const T3DMat4FP*)g_boss->modelMat;
-            
-            // Bone-local point (origin of the bone)
-            const float boneLocal[3] = { 0.0f, 0.0f, 0.0f };
-            
-            // 1) Transform from bone-local space to model space (apply bone matrix)
-            float boneModel[3];
-            mat4fp_mul_point_f32_row3_colbasis(boneMat, boneLocal, boneModel);
-            
-            // 2) Transform from model space to world space (apply boss model matrix)
-            float boneWorld[3];
-            mat4fp_mul_point_f32_row3_colbasis(modelMat, boneModel, boneWorld);
-            
-            return (T3DVec3){{
-                boneWorld[0],
-                boneWorld[1],
-                boneWorld[2]
-            }};
-        }
-    }
-    
-    // Fallback to capsule-based estimate if bone is not available
-    float focusOffset = g_boss->orbitRadius * 0.6f; // roughly chest height for current tuning
 
-    float capA = g_boss->capsuleCollider.localCapA.v[1];
-    float capB = g_boss->capsuleCollider.localCapB.v[1];
-
-    // Use point halfway between midpoint and capB (i.e. 75% from A -> B)
-    if (capA != 0.0f || capB != 0.0f) {
-        focusOffset = (capA + capB + capB + capB) * 0.25f;
+    // 1) Selected target (if available)
+    T3DVec3 worldPos;
+    int bone = scene_lockon_bone_index_for_target((LockTargetId)s_lockTargetIndex);
+    if (scene_get_boss_bone_world_pos(bone, &worldPos)) {
+        return worldPos;
     }
 
-    return (T3DVec3){{
-        g_boss->pos[0],
-        g_boss->pos[1] + focusOffset,
-        g_boss->pos[2]
-    }};
+    // 2) Fallback order: Head -> Spine -> boss origin
+    if (scene_get_boss_bone_world_pos(g_boss->headBoneIndex, &worldPos)) {
+        return worldPos;
+    }
+    if (scene_get_boss_bone_world_pos(g_boss->spine1BoneIndex, &worldPos)) {
+        return worldPos;
+    }
+
+    // 3) Ultimate fallback: boss position with a small lift so the marker isn't at the feet.
+    return (T3DVec3){{ g_boss->pos[0], g_boss->pos[1] + 40.0f, g_boss->pos[2] }};
 }
 
 void scene_reset(void)
