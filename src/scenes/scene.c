@@ -980,6 +980,8 @@ void scene_init(void)
     scene_title_init();
 
     dust_reset();
+}
+
 static bool scene_get_boss_bone_world_pos(int boneIndex, T3DVec3 *outWorld);
 
 static inline int scene_lockon_bone_index_for_target(LockTargetId target)
