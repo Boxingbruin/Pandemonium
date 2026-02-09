@@ -50,8 +50,8 @@ void draw_boss_health_bar(const char *name, float ratio, float flash)
 	rdpq_mode_blender(RDPQ_BLENDER_MULTIPLY);
 	
 	// Background bar (darker so the red fill is clearly visible as it shrinks)
-	// Keep inside title-safe area and reduce width a bit vs the old full-width bar.
-	const int marginX = ui_safe_margin_x() + 10;
+	// Span the full title-safe / overscan area edge to edge.
+	const int marginX = ui_safe_margin_x();
 	int left = marginX;
 	int right = SCREEN_WIDTH - marginX;
 	int top = ui_safe_margin_y();       // move down into UI-safe
