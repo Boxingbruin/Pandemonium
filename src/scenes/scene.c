@@ -3236,6 +3236,21 @@ void scene_draw(T3DViewport *viewport)
     // rdpq_sync_pipe();
     // rdpq_mode_zbuf(false, false);
 
+    // Fog door (transparent): depth test ON, depth write OFF so it can be drawn late.
+    rdpq_sync_pipe();
+    rdpq_mode_zbuf(true, false);
+    t3d_matrix_push_pos(1);
+        if (fogDoorMatrix && fogDoorModel) {
+            t3d_matrix_set(fogDoorMatrix, true);
+            t3d_model_draw_custom(fogDoorModel, (T3DModelDrawConf){
+                .userData = &fogScrollParams,
+                .tileCb = tile_scroll,
+            });
+        }
+    t3d_matrix_pop(1);
+    rdpq_sync_pipe();
+    rdpq_mode_zbuf(true, true);
+
     t3d_matrix_push_pos(1);   
         if (cinematicChainsVisible) {
             t3d_matrix_set(cinematicChainsMatrix, true);
