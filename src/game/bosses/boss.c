@@ -617,6 +617,7 @@ void boss_init(Boss* boss) {
     boss->attackNameDisplayTimer = 0.0f;
     boss->hitMessageTimer = 0.0f;
     boss->animationTransitionTimer = 0.0f;
+    boss->dustImpactDelayS = 0.0f;
     
     // Initialize attack state
     boss->isAttacking = false;
@@ -730,6 +731,7 @@ void boss_reset(Boss* boss) {
     boss->attackNameDisplayTimer = 0.0f;
     boss->hitMessageTimer = 0.0f;
     boss->animationTransitionTimer = 0.0f;
+    boss->dustImpactDelayS = 0.0f;
     
     // Initialize attack state
     boss->isAttacking = false;

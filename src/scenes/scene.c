@@ -929,7 +929,7 @@ void scene_init(void)
     }
 
     // Load dust particle sprite
-    dustParticleSprite = sprite_load("rom:/dust_particle.i8.sprite");
+    dustParticleSprite = sprite_load("rom:/dustParticle.ia8.sprite");
     if (dustParticleSprite) {
         dustParticleSurf = sprite_get_pixels(dustParticleSprite);
     }

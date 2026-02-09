@@ -26,6 +26,7 @@ static void boss_ai_update_cooldowns(Boss* boss, float dt);
 static void boss_ai_select_attack(Boss* boss, float dist);
 static bool boss_ai_state_is_attack(BossState state);
 static void predict_character_position(float *predictedPos, float predictionTime);
+static float boss_ai_attack_dust_delay_s(BossAttackId id);
 
 // Static state for AI (telegraph, activation tracking, etc.)
 static bool bossWasActive = false;
@@ -82,6 +83,26 @@ static inline float desired_yaw_to_player(const Boss* boss) {
     float dz = character.pos[2] - boss->pos[2];
     if (dx == 0.0f && dz == 0.0f) return boss->rot[1];
     return -atan2f(-dz, dx) + T3D_PI;
+}
+
+// Per-attack dust timing offset (seconds) from the logical impact moment.
+// Default matches previous hardcoded behavior (0.20f) but can be tuned per attack.
+static float boss_ai_attack_dust_delay_s(BossAttackId id)
+{
+    switch (id) {
+        case BOSS_ATTACK_POWER_JUMP:      return 0.20f;
+        case BOSS_ATTACK_TRACKING_SLAM:   return 0.20f;
+        case BOSS_ATTACK_STOMP:           return 0.20f;
+        case BOSS_ATTACK_FLIP_ATTACK:     return 0.20f;
+        case BOSS_ATTACK_COMBO:           return 0.20f;
+        case BOSS_ATTACK_COMBO_STARTER:   return 0.20f;
+        case BOSS_ATTACK_COMBO_LUNGE:     return 0.20f;
+        case BOSS_ATTACK_LUNGE_STARTER:   return 0.20f;
+        case BOSS_ATTACK_ATTACK1:         return 0.20f;
+        case BOSS_ATTACK_COUNT:
+        default:
+            return 0.20f;
+    }
 }
 
 static void predict_character_position(float *predictedPos, float predictionTime) {
@@ -1268,6 +1289,7 @@ void boss_ai_update(Boss* boss, BossIntent* out_intent) {
     
     // Output attack request if starting a new attack
     if (boss_ai_state_is_attack(boss->state) && prevState != boss->state) {
+        boss->dustImpactDelayS = boss_ai_attack_dust_delay_s(boss->currentAttackId);
         out_intent->attack_req = true;
         out_intent->attack = boss->currentAttackId;
     }

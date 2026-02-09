@@ -214,6 +214,8 @@ typedef struct Boss {
     float postTurnTimer;
     float postTurnDuration;
     int   postTurnDir;  
+
+    float dustImpactDelayS;
     
     // Pending requests (set by external triggers, read by AI)
     unsigned int pendingRequests;
