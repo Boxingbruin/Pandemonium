@@ -9,7 +9,9 @@ typedef enum {
     // Title menu root (title screen)
     MENU_TITLE,
     // Shared submenus / screens
+    MENU_SETTINGS,
     MENU_AUDIO,
+    MENU_VIDEO,
     MENU_CONTROLS,
     MENU_CREDITS,
 } MenuState;
@@ -24,11 +26,18 @@ typedef enum {
 
 typedef enum {
     MENU_TITLE_PLAY,
-    MENU_TITLE_AUDIO_SETTINGS,
+    MENU_TITLE_SETTINGS,
     MENU_TITLE_CONTROLS,
     MENU_TITLE_CREDITS,
     MENU_TITLE_COUNT
 } TitleMenuOption;
+
+typedef enum {
+    MENU_SETTINGS_AUDIO,
+    MENU_SETTINGS_VIDEO,
+    MENU_SETTINGS_BACK,
+    MENU_SETTINGS_COUNT
+} SettingsMenuOption;
 
 typedef enum {
     MENU_AUDIO_MASTER_VOLUME,
@@ -36,10 +45,16 @@ typedef enum {
     MENU_AUDIO_SFX_VOLUME,
     MENU_AUDIO_MUTE_TOGGLE,
     MENU_AUDIO_STEREO_MODE,
-    MENU_AUDIO_ASPECT,
     MENU_AUDIO_BACK,
     MENU_AUDIO_COUNT
 } AudioMenuOption;
+
+typedef enum {
+    MENU_VIDEO_ASPECT,
+    MENU_VIDEO_UI_OVERSCAN_CALIBRATE,
+    MENU_VIDEO_BACK,
+    MENU_VIDEO_COUNT
+} VideoMenuOption;
 
 void menu_controller_init(void);
 void menu_controller_update(void);

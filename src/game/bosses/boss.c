@@ -548,6 +548,8 @@ void boss_init(Boss* boss) {
     boss->handRightBoneIndex = t3d_skeleton_find_bone(skeleton, "Hand-Right");
     boss->spine1BoneIndex = t3d_skeleton_find_bone(skeleton, "Spine1");
     boss->headBoneIndex = t3d_skeleton_find_bone(skeleton, "Head");
+    boss->lowerLegLeftBoneIndex = t3d_skeleton_find_bone(skeleton, "LowerLeg-Left");
+    boss->lowerLegRightBoneIndex = t3d_skeleton_find_bone(skeleton, "LowerLeg-Right");
     
     // Initialize hand attack collider (local space, will be updated during attacks)
     boss->handAttackCollider.localCapA.v[0] = 0.0f;

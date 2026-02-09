@@ -24,6 +24,7 @@
 #include "game_math.h"
 
 #include "globals.h"
+#include "video_layout.h"
 
 #include "character.h"
 #include "game/bosses/boss.h"
@@ -396,9 +397,6 @@ static T3DVec3 cutsceneCamPosEnd;    // Final camera position (closer to boss)
 // Game state management
 static GameState gameState = GAME_STATE_TITLE;
 static bool lastMenuActive = false;
-
-// Local-only restart counter (persists in RAM for the lifetime of the program)
-static uint32_t restartCounter = 0;
 
 // Death screen restart lockout (prevents rapid A-mash from instantly restarting)
 static float deathRestartLockoutTimer = 0.0f;
@@ -1269,10 +1267,6 @@ void scene_begin_title_transition(void)
 void scene_restart(void)
 {
     debugf("RESTART: Starting restart sequence\n");
-
-    // Count restarts (win/lose/manual restart all funnel through this soft reset).
-    // Note: we intentionally do not persist this to any save file.
-    restartCounter++;
 
     // 1) Stop running systems first (prevents update-on-freed state)
     audio_stop_all_sfx();
@@ -2499,25 +2493,25 @@ void scene_draw_title(T3DViewport *viewport)
 
         // Run counters:
         // - "Runs" is persisted via EEPROM (per save slot).
-        // - "Restarts" is local-only for this boot/session.
         {
             const bool savesOn = save_controller_is_enabled();
             const uint32_t savedRuns = save_controller_get_run_count();
             const uint32_t bestMs = save_controller_get_best_boss_time_ms();
 
+            // Hide counters when entering title submenus (Settings/Controls/Credits).
             // Draw the panel if:
             // - saves are disabled (so it's obvious why "Runs" won't persist), or
             // - we have any counter value to show.
-            if (!savesOn || savedRuns > 0 || bestMs > 0 || restartCounter > 0) {
-                // Keep inside title-safe area for CRT overscan.
-                const int margin = TITLE_SAFE_MARGIN_X;
+            if (!menu_controller_is_title_submenu_active() &&
+                (!savesOn || savedRuns > 0 || bestMs > 0)) {
+                // Keep inside user-adjusted UI safe area for CRT overscan.
+                const int margin = ui_safe_margin_x();
                 const int panelW = 120;
                 const bool showBest = (savesOn && bestMs > 0);
-                const bool showRestarts = (restartCounter > 0);
-                const int lineCount = 1 + (showBest ? 1 : 0) + (showRestarts ? 1 : 0);
+                const int lineCount = 1 + (showBest ? 1 : 0);
                 const int panelH = 6 + (lineCount * 13); // 13px per line + small padding
                 const int panelX0 = margin;
-                const int panelY0 = SCREEN_HEIGHT - TITLE_SAFE_MARGIN_Y - panelH;
+                const int panelY0 = SCREEN_HEIGHT - ui_safe_margin_y() - panelH;
 
                 rdpq_set_prim_color(RGBA32(0, 0, 0, 120));
                 rdpq_mode_combiner(RDPQ_COMBINER_FLAT);
@@ -2548,18 +2542,17 @@ void scene_draw_title(T3DViewport *viewport)
                                      (unsigned long)millis);
                     lineY += 13;
                 }
-
-                // Line 3 (optional): Restarts (session-only)
-                if (showRestarts) {
-                    rdpq_text_printf(NULL, FONT_UNBALANCED, panelX0 + 6, lineY,
-                                     "Restarts: %lu", (unsigned long)restartCounter);
-                }
             }
         }
 
         if(titleTextActivationTimer >= titleTextActivationTime && !menu_controller_is_title_submenu_active())
         {
-            dialog_controller_draw(true, 190, 20, 120, 180);
+            // Keep the title dialog inside the user-adjusted UI safe area (CRT overscan).
+            const int dlgW = 120;
+            const int dlgH = 180;
+            const int dlgX = SCREEN_WIDTH - ui_safe_margin_x() - dlgW;
+            const int dlgY = ui_safe_margin_y();
+            dialog_controller_draw(true, dlgX, dlgY, dlgW, dlgH);
         }
 
         display_utility_solid_black_transition(true, 200.0f);
@@ -2600,10 +2593,10 @@ static void draw_cutscene_skip_indicator(void)
     int buttonWidth = aButtonSurf.width;
     int buttonHeight = aButtonSurf.height;
     
-    // Position at bottom right of screen, inside title-safe area.
+    // Position at bottom right of screen, inside user-adjusted UI safe area.
     // (Helps avoid CRT overscan clipping.)
-    const int marginX = TITLE_SAFE_MARGIN_X;
-    const int marginY = TITLE_SAFE_MARGIN_Y;
+    const int marginX = ui_safe_margin_x();
+    const int marginY = ui_safe_margin_y();
     int buttonX = SCREEN_WIDTH - buttonWidth - marginX;
     int buttonY = SCREEN_HEIGHT - buttonHeight - marginY;
     

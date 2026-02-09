@@ -10,6 +10,7 @@
 #include "utilities/animation_utility.h"
 
 #include "globals.h"
+#include "video_controller.h"
 
 CameraState cameraState = CAMERA_NONE;
 CameraState lastCameraState = CAMERA_NONE;
@@ -302,11 +303,12 @@ void camera_update(T3DViewport *viewport)
         float rotateX = 0.0f;
         float rotateY = 0.0f;
         
-        if(joypad.btn.c_left)
+        // When Z is held (lock-on / lock target cycling), don't rotate the free camera orbit with C-left/C-right.
+        if(joypad.btn.c_left && !joypad.btn.z)
         {
             rotateX = 1.0f;
         }
-        else if(joypad.btn.c_right)
+        else if(joypad.btn.c_right && !joypad.btn.z)
         {
             rotateX = -1.0f;
         }

@@ -5,8 +5,10 @@
 #include "joypad_utility.h"
 #include "audio_controller.h"
 #include "scene.h"
+#include "save_controller.h"
 
 #include "globals.h"
+#include "video_layout.h"
 
 // Menu state
 static MenuState currentMenu = MENU_MAIN;
@@ -17,6 +19,10 @@ static bool menuActive = false;
 static bool musicWasPaused = false;
 static bool menuIsTitleMenu = false;
 static GameState menuReturnState = GAME_STATE_PLAYING;
+
+// Settings hub "return to" target (since parentMenu is reused for submenus).
+static MenuState settingsHubReturnMenu = MENU_MAIN;
+static int       settingsHubReturnSelectedOption = 0;
 
 // Pause menu background
 static sprite_t *pauseMenuBg = NULL;
@@ -41,6 +47,11 @@ static bool lastBPressed = false;
 static bool lastStickUp = false;
 static bool lastStickDown = false;
 
+// Overscan calibration overlay (inside Video settings)
+static bool overscanCalibrating = false;
+static int8_t overscanPrevX = 0;
+static int8_t overscanPrevY = 0;
+
 // Menu text
 static const char* mainMenuOptions[MENU_MAIN_COUNT] = {
     "Resume",
@@ -56,15 +67,107 @@ static const char* titleMenuOptions[MENU_TITLE_COUNT] = {
     "Credits",
 };
 
+static const char* settingsMenuOptions[MENU_SETTINGS_COUNT] = {
+    "Audio",
+    "Video",
+    "Back",
+};
+
 static const char* audioMenuOptions[MENU_AUDIO_COUNT] = {
     "Master Volume: %d",
     "Music Volume: %d", 
     "SFX Volume: %d",
     "Mute All: %s",
     "Audio Mode: %s",
-    "Aspect: %s",
     "Back",
 };
+
+static const char* videoMenuOptions[MENU_VIDEO_COUNT] = {
+    "Aspect: %s",
+    "Calibrate Overscan",
+    "Back",
+};
+
+static int8_t clamp_overscan_x(int v)
+{
+    if (v < 0) v = 0;
+    int maxX = (SCREEN_WIDTH / 2) - 2;
+    if (v > maxX) v = maxX;
+    return (int8_t)v;
+}
+
+static int8_t clamp_overscan_y(int v)
+{
+    if (v < 0) v = 0;
+    int maxY = (SCREEN_HEIGHT / 2) - 2;
+    if (v > maxY) v = maxY;
+    return (int8_t)v;
+}
+
+static void overscan_apply_and_save(void)
+{
+    uiOverscanX = clamp_overscan_x((int)uiOverscanX);
+    uiOverscanY = clamp_overscan_y((int)uiOverscanY);
+    (void)save_controller_save_settings(); // debounced write
+}
+
+static void draw_overscan_corner_markers(void)
+{
+    // Safe rectangle based on current overscan settings.
+    const int left   = ui_safe_margin_x();
+    const int right  = SCREEN_WIDTH - ui_safe_margin_x();
+    const int top    = ui_safe_margin_y();
+    const int bottom = SCREEN_HEIGHT - ui_safe_margin_y();
+
+    const int len = 14;
+    const int t = 2;
+
+    rdpq_sync_pipe();
+    rdpq_set_mode_standard();
+    rdpq_mode_blender(RDPQ_BLENDER_MULTIPLY);
+    rdpq_mode_combiner(RDPQ_COMBINER_FLAT);
+
+    // Dim the background slightly so the markers are readable.
+    rdpq_set_prim_color(RGBA32(0, 0, 0, 120));
+    rdpq_fill_rectangle(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT);
+
+    // Bright green markers (CRT-friendly).
+    rdpq_set_prim_color(RGBA32(80, 255, 80, 255));
+
+    // Top-left
+    rdpq_fill_rectangle(left, top, left + len, top + t);
+    rdpq_fill_rectangle(left, top, left + t, top + len);
+    // Top-right
+    rdpq_fill_rectangle(right - len, top, right, top + t);
+    rdpq_fill_rectangle(right - t, top, right, top + len);
+    // Bottom-left
+    rdpq_fill_rectangle(left, bottom - t, left + len, bottom);
+    rdpq_fill_rectangle(left, bottom - len, left + t, bottom);
+    // Bottom-right
+    rdpq_fill_rectangle(right - len, bottom - t, right, bottom);
+    rdpq_fill_rectangle(right - t, bottom - len, right, bottom);
+
+    // Instructions + current values (kept inside the safe rect).
+    rdpq_set_prim_color(RGBA32(255, 255, 255, 255));
+    const int textY = top + 18;
+    rdpq_text_printf(&(rdpq_textparms_t){
+        .align = ALIGN_CENTER,
+        .width = SCREEN_WIDTH,
+        .wrap = WRAP_WORD,
+    }, FONT_UNBALANCED, 0, textY, "Overscan Calibration");
+
+    rdpq_text_printf(&(rdpq_textparms_t){
+        .align = ALIGN_CENTER,
+        .width = SCREEN_WIDTH,
+        .wrap = WRAP_WORD,
+    }, FONT_UNBALANCED, 0, textY + 16, "D-PAD: adjust   A: save   B: cancel");
+
+    rdpq_text_printf(&(rdpq_textparms_t){
+        .align = ALIGN_CENTER,
+        .width = SCREEN_WIDTH,
+        .wrap = WRAP_WORD,
+    }, FONT_UNBALANCED, 0, textY + 34, "X: %d   Y: %d", (int)uiOverscanX, (int)uiOverscanY);
+}
 
 void menu_controller_init(void) {
     currentMenu = MENU_MAIN;
@@ -73,6 +176,7 @@ void menu_controller_init(void) {
     parentSelectedOption = 0;
     menuActive = false;
     menuIsTitleMenu = false;
+    overscanCalibrating = false;
     
     // Use the vertical dialog sprite as the pause menu background
     pauseMenuBg = sprite_load("rom:/dialog_vertical.ia8.sprite");
@@ -182,29 +286,36 @@ void menu_controller_update(void) {
     }
     
     // Navigation between options
-    if (upJustPressed || stickUpJustPressed) {
-        selectedOption--;
-        int maxOptions = 0;
-        if (currentMenu == MENU_MAIN) maxOptions = MENU_MAIN_COUNT;
-        else if (currentMenu == MENU_TITLE) maxOptions = MENU_TITLE_COUNT;
-        else if (currentMenu == MENU_AUDIO) maxOptions = MENU_AUDIO_COUNT;
-        else if (currentMenu == MENU_CONTROLS) maxOptions = 1;
-        else if (currentMenu == MENU_CREDITS) maxOptions = 1;
-        if (selectedOption < 0) {
-            selectedOption = maxOptions - 1; // Wrap to bottom
+    // (Disable list navigation during overscan calibration since D-pad is used to adjust values.)
+    if (!(currentMenu == MENU_VIDEO && overscanCalibrating)) {
+        if (upJustPressed || stickUpJustPressed) {
+            selectedOption--;
+            int maxOptions = 0;
+            if (currentMenu == MENU_MAIN) maxOptions = MENU_MAIN_COUNT;
+            else if (currentMenu == MENU_TITLE) maxOptions = MENU_TITLE_COUNT;
+            else if (currentMenu == MENU_SETTINGS) maxOptions = MENU_SETTINGS_COUNT;
+            else if (currentMenu == MENU_AUDIO) maxOptions = MENU_AUDIO_COUNT;
+            else if (currentMenu == MENU_VIDEO) maxOptions = MENU_VIDEO_COUNT;
+            else if (currentMenu == MENU_CONTROLS) maxOptions = 1;
+            else if (currentMenu == MENU_CREDITS) maxOptions = 1;
+            if (selectedOption < 0) {
+                selectedOption = maxOptions - 1; // Wrap to bottom
+            }
         }
-    }
-    
-    if (downJustPressed || stickDownJustPressed) {
-        selectedOption++;
-        int maxOptions = 0;
-        if (currentMenu == MENU_MAIN) maxOptions = MENU_MAIN_COUNT;
-        else if (currentMenu == MENU_TITLE) maxOptions = MENU_TITLE_COUNT;
-        else if (currentMenu == MENU_AUDIO) maxOptions = MENU_AUDIO_COUNT;
-        else if (currentMenu == MENU_CONTROLS) maxOptions = 1;
-        else if (currentMenu == MENU_CREDITS) maxOptions = 1;
-        if (selectedOption >= maxOptions) {
-            selectedOption = 0; // Wrap to top
+        
+        if (downJustPressed || stickDownJustPressed) {
+            selectedOption++;
+            int maxOptions = 0;
+            if (currentMenu == MENU_MAIN) maxOptions = MENU_MAIN_COUNT;
+            else if (currentMenu == MENU_TITLE) maxOptions = MENU_TITLE_COUNT;
+            else if (currentMenu == MENU_SETTINGS) maxOptions = MENU_SETTINGS_COUNT;
+            else if (currentMenu == MENU_AUDIO) maxOptions = MENU_AUDIO_COUNT;
+            else if (currentMenu == MENU_VIDEO) maxOptions = MENU_VIDEO_COUNT;
+            else if (currentMenu == MENU_CONTROLS) maxOptions = 1;
+            else if (currentMenu == MENU_CREDITS) maxOptions = 1;
+            if (selectedOption >= maxOptions) {
+                selectedOption = 0; // Wrap to top
+            }
         }
     }
     
@@ -229,7 +340,9 @@ void menu_controller_update(void) {
                 case MENU_MAIN_SETTINGS:
                     parentMenu = MENU_MAIN;
                     parentSelectedOption = MENU_MAIN_SETTINGS;
-                    currentMenu = MENU_AUDIO;
+                    settingsHubReturnMenu = parentMenu;
+                    settingsHubReturnSelectedOption = parentSelectedOption;
+                    currentMenu = MENU_SETTINGS;
                     selectedOption = 0;
                     break;
                 case MENU_MAIN_CONTROLS:
@@ -250,10 +363,12 @@ void menu_controller_update(void) {
                     menu_controller_close();
                     scene_begin_title_transition();
                     break;
-                case MENU_TITLE_AUDIO_SETTINGS:
+                case MENU_TITLE_SETTINGS:
                     parentMenu = MENU_TITLE;
-                    parentSelectedOption = MENU_TITLE_AUDIO_SETTINGS;
-                    currentMenu = MENU_AUDIO;
+                    parentSelectedOption = MENU_TITLE_SETTINGS;
+                    settingsHubReturnMenu = parentMenu;
+                    settingsHubReturnSelectedOption = parentSelectedOption;
+                    currentMenu = MENU_SETTINGS;
                     selectedOption = 0;
                     break;
                 case MENU_TITLE_CONTROLS:
@@ -269,6 +384,32 @@ void menu_controller_update(void) {
                     selectedOption = 0;
                     break;
             }
+        }
+    } else if (currentMenu == MENU_SETTINGS) {
+        if (aJustPressed) {
+            switch (selectedOption) {
+                case MENU_SETTINGS_AUDIO:
+                    parentMenu = MENU_SETTINGS;
+                    parentSelectedOption = MENU_SETTINGS_AUDIO;
+                    currentMenu = MENU_AUDIO;
+                    selectedOption = 0;
+                    break;
+                case MENU_SETTINGS_VIDEO:
+                    parentMenu = MENU_SETTINGS;
+                    parentSelectedOption = MENU_SETTINGS_VIDEO;
+                    currentMenu = MENU_VIDEO;
+                    selectedOption = 0;
+                    break;
+                case MENU_SETTINGS_BACK:
+                    currentMenu = settingsHubReturnMenu;
+                    selectedOption = settingsHubReturnSelectedOption;
+                    break;
+            }
+        }
+
+        if (bJustPressed) {
+            currentMenu = settingsHubReturnMenu;
+            selectedOption = settingsHubReturnSelectedOption;
         }
     } else if (currentMenu == MENU_AUDIO) {
         // Handle audio menu input
@@ -295,13 +436,6 @@ void menu_controller_update(void) {
                         audio_toggle_stereo_mode();
                     }
                     break;
-                case MENU_AUDIO_ASPECT:
-                    {
-                        if (leftJustPressed || rightJustPressed) {
-                            hdAspect = !hdAspect;
-                        }
-                    }
-                    break;
             }
         }
         
@@ -313,11 +447,6 @@ void menu_controller_update(void) {
                 case MENU_AUDIO_STEREO_MODE:
                     audio_toggle_stereo_mode();
                     break;
-                case MENU_AUDIO_ASPECT:
-                    {
-                        hdAspect = !hdAspect;
-                    }
-                    break;
                 case MENU_AUDIO_BACK:
                     currentMenu = parentMenu;
                     selectedOption = parentSelectedOption;
@@ -326,6 +455,58 @@ void menu_controller_update(void) {
         }
         
         // B button to go back to main menu (not close the entire menu)
+        if (bJustPressed) {
+            currentMenu = parentMenu;
+            selectedOption = parentSelectedOption;
+        }
+    } else if (currentMenu == MENU_VIDEO) {
+        // Overscan calibration mode: full-screen overlay + live adjustments
+        if (overscanCalibrating) {
+            if (leftJustPressed)  { uiOverscanX = clamp_overscan_x((int)uiOverscanX - 1); overscan_apply_and_save(); }
+            if (rightJustPressed) { uiOverscanX = clamp_overscan_x((int)uiOverscanX + 1); overscan_apply_and_save(); }
+            // Up/down increase/decrease vertical padding symmetrically (top + bottom)
+            if (upJustPressed)    { uiOverscanY = clamp_overscan_y((int)uiOverscanY + 1); overscan_apply_and_save(); }
+            if (downJustPressed)  { uiOverscanY = clamp_overscan_y((int)uiOverscanY - 1); overscan_apply_and_save(); }
+
+            if (aJustPressed) {
+                // Confirm (already saved live)
+                overscanCalibrating = false;
+            } else if (bJustPressed) {
+                // Cancel -> restore previous values
+                uiOverscanX = overscanPrevX;
+                uiOverscanY = overscanPrevY;
+                overscan_apply_and_save();
+                overscanCalibrating = false;
+            }
+            return;
+        }
+
+        // Handle video menu input
+        if (leftJustPressed || rightJustPressed) {
+            switch (selectedOption) {
+                case MENU_VIDEO_ASPECT:
+                    hdAspect = !hdAspect;
+                    break;
+            }
+        }
+
+        if (aJustPressed) {
+            switch (selectedOption) {
+                case MENU_VIDEO_ASPECT:
+                    hdAspect = !hdAspect;
+                    break;
+                case MENU_VIDEO_UI_OVERSCAN_CALIBRATE:
+                    overscanPrevX = uiOverscanX;
+                    overscanPrevY = uiOverscanY;
+                    overscanCalibrating = true;
+                    break;
+                case MENU_VIDEO_BACK:
+                    currentMenu = parentMenu;
+                    selectedOption = parentSelectedOption;
+                    break;
+            }
+        }
+
         if (bJustPressed) {
             currentMenu = parentMenu;
             selectedOption = parentSelectedOption;
@@ -493,8 +674,8 @@ void menu_controller_draw(void) {
         rdpq_mode_blender(RDPQ_BLENDER_MULTIPLY);
         rdpq_mode_combiner(RDPQ_COMBINER_FLAT);
 
-        // Nudge right so the title menu sits inside title-safe on CRTs.
-        const int menuX = TITLE_SAFE_MARGIN_X + 4; // ~+10px vs previous
+        // Keep inside user-adjusted UI safe area (CRT overscan).
+        const int menuX = ui_safe_margin_x() + 4;
         int y = 40;
         const int menuW = 140;
         const int lineHeight = 16;
@@ -529,12 +710,18 @@ void menu_controller_draw(void) {
         return;
     }
     
+    // Overscan calibration overlay (full-screen)
+    if (currentMenu == MENU_VIDEO && overscanCalibrating) {
+        draw_overscan_corner_markers();
+        return;
+    }
+
     // Use different dialog sizes based on current menu
     // Make the pause menu panel as large as possible within the 320x240 screen.
     const int dialogMarginX = 0; // pixels of margin on each side
     int dialogWidth = SCREEN_WIDTH - (dialogMarginX * 2);
     int dialogHeight = 200;
-    if (currentMenu == MENU_AUDIO) {
+    if (currentMenu == MENU_SETTINGS || currentMenu == MENU_AUDIO || currentMenu == MENU_VIDEO) {
         dialogHeight = 230;
     } else if (currentMenu == MENU_CONTROLS || currentMenu == MENU_CREDITS) {
         dialogHeight = 230;
@@ -544,7 +731,7 @@ void menu_controller_draw(void) {
     if (currentMenu == MENU_CONTROLS) {
         // Controls screen needs more horizontal room (icons + text)
         dialogWidth = 320; // ~2x the narrow submenu panel
-    } else if (currentMenu == MENU_AUDIO || currentMenu == MENU_CREDITS) {
+    } else if (currentMenu == MENU_SETTINGS || currentMenu == MENU_AUDIO || currentMenu == MENU_VIDEO || currentMenu == MENU_CREDITS) {
         dialogWidth = 260;
     }
     
@@ -659,6 +846,37 @@ void menu_controller_draw(void) {
             y += lineHeight + 4;
         }
         rdpq_set_prim_color(RGBA32(255, 255, 255, 255));
+    } else if (currentMenu == MENU_SETTINGS) {
+        // Draw settings hub menu with centered text
+        rdpq_text_printf(&(rdpq_textparms_t){
+            .align = ALIGN_CENTER,
+            .width = contentW,
+            .height = contentH,
+            .wrap = WRAP_WORD,
+        }, FONT_UNBALANCED, x, y + titleYOffset, "SETTINGS");
+
+        y += (lineHeight * 3) + titleYOffset;
+
+        for (int i = 0; i < MENU_SETTINGS_COUNT; i++) {
+            const char *optionText = settingsMenuOptions[i] ? settingsMenuOptions[i] : "";
+
+            if (i == selectedOption) {
+                draw_menu_selection_highlight_centered(x, y, contentW, lineHeight, contentW / 2);
+                rdpq_set_prim_color(RGBA32(255, 255, 255, 255));
+            } else {
+                rdpq_set_prim_color(RGBA32(220, 220, 220, 255));
+            }
+
+            rdpq_text_printf(&(rdpq_textparms_t){
+                .align = ALIGN_CENTER,
+                .width = contentW,
+                .height = contentH,
+                .wrap = WRAP_WORD,
+            }, FONT_UNBALANCED, x, y, "%s", optionText);
+
+            y += lineHeight + 2;
+        }
+        rdpq_set_prim_color(RGBA32(255, 255, 255, 255));
     } else if (currentMenu == MENU_AUDIO) {
         // Draw audio menu with centered text
         rdpq_text_printf(&(rdpq_textparms_t){
@@ -666,7 +884,7 @@ void menu_controller_draw(void) {
             .width = contentW,
             .height = contentH,
             .wrap = WRAP_WORD,
-        }, FONT_UNBALANCED, x, y + titleYOffset, "SETTINGS");
+        }, FONT_UNBALANCED, x, y + titleYOffset, "AUDIO");
         
         y += (lineHeight * 3) + titleYOffset;
         
@@ -685,8 +903,6 @@ void menu_controller_draw(void) {
                 snprintf(optionText, sizeof(optionText), fmt, audio_is_muted() ? "ON" : "OFF");
             } else if (i == MENU_AUDIO_STEREO_MODE) {
                 snprintf(optionText, sizeof(optionText), fmt, audio_get_stereo_mode() ? "Stereo" : "Mono");
-            }else if (i == MENU_AUDIO_ASPECT) {
-                snprintf(optionText, sizeof(optionText), fmt, hdAspect ? "16:9" : "4:3");
             } else {
                 snprintf(optionText, sizeof(optionText), "%s", fmt);
             }
@@ -712,6 +928,47 @@ void menu_controller_draw(void) {
             }
             y += lineHeight + 2;
         }
+        rdpq_set_prim_color(RGBA32(255, 255, 255, 255));
+    } else if (currentMenu == MENU_VIDEO) {
+        // Draw video menu with centered text
+        rdpq_text_printf(&(rdpq_textparms_t){
+            .align = ALIGN_CENTER,
+            .width = contentW,
+            .height = contentH,
+            .wrap = WRAP_WORD,
+        }, FONT_UNBALANCED, x, y + titleYOffset, "VIDEO");
+
+        y += (lineHeight * 3) + titleYOffset;
+
+        for (int i = 0; i < MENU_VIDEO_COUNT; i++) {
+            char optionText[64];
+            const char *fmt = videoMenuOptions[i] ? videoMenuOptions[i] : "";
+
+            if (i == MENU_VIDEO_ASPECT) {
+                snprintf(optionText, sizeof(optionText), fmt, hdAspect ? "16:9" : "4:3");
+            } else if (i == MENU_VIDEO_UI_OVERSCAN_CALIBRATE) {
+                snprintf(optionText, sizeof(optionText), "%s", "Calibrate Overscan");
+            } else {
+                snprintf(optionText, sizeof(optionText), "%s", fmt);
+            }
+
+            if (i == selectedOption) {
+                draw_menu_selection_highlight_centered(x, y, contentW, lineHeight, contentW / 2);
+                rdpq_set_prim_color(RGBA32(255, 255, 255, 255));
+            } else {
+                rdpq_set_prim_color(RGBA32(220, 220, 220, 255));
+            }
+
+            rdpq_text_printf(&(rdpq_textparms_t){
+                .align = ALIGN_CENTER,
+                .width = contentW,
+                .height = contentH,
+                .wrap = WRAP_WORD,
+            }, FONT_UNBALANCED, x, y, "%s", optionText);
+
+            y += lineHeight + 2;
+        }
+
         rdpq_set_prim_color(RGBA32(255, 255, 255, 255));
     } else if (currentMenu == MENU_CONTROLS) {
         rdpq_text_printf(&(rdpq_textparms_t){
@@ -825,6 +1082,8 @@ void menu_controller_toggle(void) {
             }
         }
     } else {
+        // Ensure we don't get stuck in calibration overlay when reopening.
+        overscanCalibrating = false;
         if (!menuIsTitleMenu) {
             scene_set_game_state(menuReturnState);
 
@@ -838,6 +1097,7 @@ void menu_controller_toggle(void) {
 
 void menu_controller_close(void) {
     menuActive = false;
+    overscanCalibrating = false;
 
     if (!menuIsTitleMenu) {
         scene_set_game_state(menuReturnState);

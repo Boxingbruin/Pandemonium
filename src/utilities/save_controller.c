@@ -6,6 +6,8 @@
 
 #include "save_controller.h"
 #include "audio_controller.h"
+#include "globals.h"
+#include "video_controller.h"
 
 /*
  * EEPROMFS notes:
@@ -74,6 +76,44 @@ static uint32_t compute_slot_checksum(const SaveData *d) {
     return fnv1a32(d, len);
 }
 
+static int clampi(int v, int lo, int hi)
+{
+    if (v < lo) return lo;
+    if (v > hi) return hi;
+    return v;
+}
+
+static int8_t saved_overscan_x(const SaveData *d)
+{
+    if (!d) return 0;
+    // Stored in padding to keep save size stable across versions.
+    int8_t v = (int8_t)d->_pad[0];
+    // Clamp to a conservative range (pixels). Keep within half-screen too.
+    int maxX = (SCREEN_WIDTH / 2) - 2;
+    return (int8_t)clampi((int)v, 0, maxX);
+}
+
+static int8_t saved_overscan_y(const SaveData *d)
+{
+    if (!d) return 0;
+    int8_t v = (int8_t)d->_pad[1];
+    int maxY = (SCREEN_HEIGHT / 2) - 2;
+    return (int8_t)clampi((int)v, 0, maxY);
+}
+
+static void save_set_overscan(SaveData *d, int8_t x, int8_t y)
+{
+    if (!d) return;
+    // Clamp before storing.
+    int maxX = (SCREEN_WIDTH / 2) - 2;
+    int maxY = (SCREEN_HEIGHT / 2) - 2;
+    x = (int8_t)clampi((int)x, 0, maxX);
+    y = (int8_t)clampi((int)y, 0, maxY);
+
+    d->_pad[0] = (uint8_t)x;
+    d->_pad[1] = (uint8_t)y;
+}
+
 static void save_defaults_for_slot(SaveData *d, int slot) {
     memset(d, 0, sizeof(*d));
 
@@ -87,6 +127,9 @@ static void save_defaults_for_slot(SaveData *d, int slot) {
     d->sfxVolume    = (int8_t)audio_get_sfx_volume();
     d->globalMute   = (uint8_t)(audio_is_muted() ? 1 : 0);
     d->stereoMode   = (uint8_t)(audio_get_stereo_mode() ? 1 : 0);
+
+    // UI overscan defaults (extra padding beyond TITLE_SAFE)
+    save_set_overscan(d, 0, 0);
 
     d->checksum = compute_slot_checksum(d);
 }
@@ -267,6 +310,10 @@ bool save_controller_load_settings(void) {
     audio_set_mute(d->globalMute != 0);
     audio_set_stereo_mode(d->stereoMode != 0);
     audio_set_loading_mode(false);
+
+    // UI overscan (applied to edge-anchored UI via globals.h helpers)
+    uiOverscanX = saved_overscan_x(d);
+    uiOverscanY = saved_overscan_y(d);
     return true;
 }
 
@@ -279,6 +326,10 @@ bool save_controller_save_settings(void) {
     d->sfxVolume    = (int8_t)audio_get_sfx_volume();
     d->globalMute   = (uint8_t)(audio_is_muted() ? 1 : 0);
     d->stereoMode   = (uint8_t)(audio_get_stereo_mode() ? 1 : 0);
+
+    // Persist current UI overscan values
+    save_set_overscan(d, uiOverscanX, uiOverscanY);
+
     d->checksum     = compute_slot_checksum(d);
 
     // Debounced flush

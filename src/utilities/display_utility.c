@@ -6,6 +6,7 @@
 
 #include "globals.h"
 #include "game_time.h"
+#include "video_layout.h"
 
 surface_t offscreenBuffer;
 static int fadeBlackAlpha = 255; // Default alpha value for the rectangle
@@ -50,10 +51,10 @@ void draw_boss_health_bar(const char *name, float ratio, float flash)
 	
 	// Background bar (darker so the red fill is clearly visible as it shrinks)
 	// Keep inside title-safe area and reduce width a bit vs the old full-width bar.
-	const int marginX = TITLE_SAFE_MARGIN_X + 10;
+	const int marginX = ui_safe_margin_x() + 10;
 	int left = marginX;
 	int right = SCREEN_WIDTH - marginX;
-	int top = TITLE_SAFE_MARGIN_Y;       // move down into title-safe
+	int top = ui_safe_margin_y();       // move down into UI-safe
 	int bottom = top + 12;
 
 	// center-out growth only (no vertical slide)
@@ -131,9 +132,9 @@ void draw_player_health_bar(const char *name, float ratio, float flash)
 	// Smaller background bar positioned near bottom-left (inside title-safe).
 	float barWidth = 120.0f;  // Smaller than boss bar
 	float barHeight = 8.0f;   // Smaller height
-	float left = (float)TITLE_SAFE_MARGIN_X; // move right into title-safe
+	float left = (float)ui_safe_margin_x(); // move right into UI-safe
 	float right = left + barWidth;
-	float bottom = (float)(SCREEN_HEIGHT - TITLE_SAFE_MARGIN_Y); // move up into title-safe
+	float bottom = (float)(SCREEN_HEIGHT - ui_safe_margin_y()); // move up into UI-safe
 	float top = bottom - barHeight;
 
 	// Slide from bottom (no alpha fade); full-width bar (no center reveal)

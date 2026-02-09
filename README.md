@@ -7,10 +7,18 @@ A century of darkness smothers the land beneath the Demon King’s throne of gol
 
 ## Controls
 Stick: Move
+
 A button: Dodge
+
 B button: Attack
+
 C-Pad: Look
-Z trigger: Pause Menu
+
+Start button: Pause Menu
+
+Z trigger: Toggle z targetting
+
+Hold Z trigger + left/right on Cpad: Change z target
 
 ## 2025 N64brew Game Jam - Pandemonium
 - December 1st - Feburary 1st
