@@ -11,7 +11,7 @@
 #define ANIM_SPEED 1.0f
 #define FRAME_BUFFER_COUNT 3
 
-#define DEBUG_DRAW false
+#define DEBUG_DRAW true
 #define DEV_MODE true
 #define SHOW_FPS false
 #define HARDWARE_MODE false

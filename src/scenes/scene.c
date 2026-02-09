@@ -47,6 +47,8 @@
 #include "video_player_utility.h"
 #include "logo.h"
 
+#include "multi_sword_attacks.h" // TODO: call only from boss
+
 // Dust (implemented later near lock-on indicator)
 static void dust_reset(void);
 static void dust_update(float dt);
@@ -1032,6 +1034,8 @@ void scene_init(void)
 
     dust_reset();
     ground_crush_reset();
+
+    msa_init(); // multi sword attack
 }
 
 static bool scene_get_boss_bone_world_pos(int boneIndex, T3DVec3 *outWorld);
@@ -2627,6 +2631,8 @@ void scene_update(void)
         }
     }
 
+    msa_update(deltaTime); // multi sword attack
+
     lastZPressed = zHeld;
     lastCLeftHeld = cLeftHeld;
     lastCRightHeld = cRightHeld;
@@ -3974,8 +3980,11 @@ void scene_draw(T3DViewport *viewport)
         if (g_boss) {
             boss_draw(g_boss);
         }
+        
 
     t3d_matrix_pop(1);
+
+    msa_draw(viewport); // multi sword attack
 
     //Draw transparencies last
     // t3d_matrix_push_pos(1);    
