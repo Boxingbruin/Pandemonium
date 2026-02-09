@@ -2,16 +2,30 @@
 #define SWORD_TRAIL_H
 
 #include <stdbool.h>
+#include <stdint.h>
 
 /**
  * Screen-space sword trail ribbon.
  *
- * Implementation detail: this is rendered as projected 2D triangles (RDP),
- * using world-space base/tip samples. This keeps it lightweight and avoids
- * needing dynamic Tiny3D geometry support.
+ * Rendered as projected 2D triangles (RDP), using world-space base/tip samples.
+ * Lightweight: no dynamic Tiny3D mesh needed.
  */
 
-typedef struct SwordTrail SwordTrail;
+enum { TRAIL_MAX_SAMPLES = 24 };
+
+typedef struct {
+    float base[3];
+    float tip[3];
+    float age;
+    bool  valid;
+} SwordTrailSample;
+
+typedef struct SwordTrail {
+    SwordTrailSample samples[TRAIL_MAX_SAMPLES];
+    int count;
+    int head;      // newest element index when count>0
+    bool inited;
+} SwordTrail;
 
 // Global instances (player + boss)
 SwordTrail* sword_trail_get_player(void);
@@ -20,24 +34,20 @@ SwordTrail* sword_trail_get_boss(void);
 // Instance API (use for boss / future trails)
 void sword_trail_instance_init(SwordTrail *t);
 void sword_trail_instance_reset(SwordTrail *t);
-void sword_trail_instance_update(SwordTrail *t, float dt, bool emitting, const float base_world[3], const float tip_world[3]);
+void sword_trail_instance_update(
+    SwordTrail *t,
+    float dt,
+    bool emitting,
+    const float base_world[3],
+    const float tip_world[3]
+);
 void sword_trail_instance_draw(SwordTrail *t, void *viewport);
 
+// Back-compat wrappers (player trail)
 void sword_trail_init(void);
 void sword_trail_reset(void);
-
-/**
- * Update trail aging + optionally emit a new sample this frame.
- *
- * - dt: seconds
- * - emitting: if false, no new samples are added (existing samples still age out)
- * - base_world/tip_world: required only when emitting==true
- */
 void sword_trail_update(float dt, bool emitting, const float base_world[3], const float tip_world[3]);
-
-/** Draw the trail (call after 3D render, before UI). */
 void sword_trail_draw(void *viewport);
 void sword_trail_draw_all(void *viewport);
 
 #endif
-

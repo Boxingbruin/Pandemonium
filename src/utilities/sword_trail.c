@@ -1,43 +1,24 @@
 #include "sword_trail.h"
 
+#include <t3d/t3d.h>
 #include <libdragon.h>
 #include <rdpq.h>
 #include <stdint.h>
 #include <math.h>
 #include <string.h>
 
-// Minimal Tiny3D types/prototypes needed for projection.
-// Keeps this module lightweight and avoids relying on editor compile flags.
-typedef struct { float v[3]; } T3DVec3;
-void t3d_viewport_calc_viewspace_pos(void *vp, T3DVec3 *out, const T3DVec3 *pos);
-
-typedef struct {
-    float base[3];
-    float tip[3];
-    float age;
-    bool  valid;
-} SwordTrailSample;
-
 // Tuning
-enum { TRAIL_MAX_SAMPLES = 24 };
-
-struct SwordTrail {
-    SwordTrailSample samples[TRAIL_MAX_SAMPLES];
-    int count;
-    int head;      // newest element index when count>0
-    bool inited;
-};
-
-static const float TRAIL_LIFETIME_SEC = 0.20f;
+static const float TRAIL_LIFETIME_SEC   = 0.20f;
 static const float TRAIL_MIN_SAMPLE_DIST = 2.5f;  // world units
-static const float TRAIL_SUBDIV_DIST = 4.0f;      // world units (approx); smaller => smoother
-static const int   TRAIL_SUBDIV_MAX  = 4;
+static const float TRAIL_SUBDIV_DIST     = 4.0f;  // world units (approx); smaller => smoother
+static const int   TRAIL_SUBDIV_MAX      = 4;
+
 // Additive blending helps overlapping trails "mix" instead of reading as separate layers.
 // NOTE: libdragon documents additive as overflow-prone on real RDP, so we keep alpha modest.
 static const uint8_t TRAIL_MAX_ALPHA = 96;
-static const uint8_t TRAIL_COLOR_R = 200;
-static const uint8_t TRAIL_COLOR_G = 220;
-static const uint8_t TRAIL_COLOR_B = 255;
+static const uint8_t TRAIL_COLOR_R   = 200;
+static const uint8_t TRAIL_COLOR_G   = 220;
+static const uint8_t TRAIL_COLOR_B   = 255;
 
 static SwordTrail s_player;
 static SwordTrail s_boss;
@@ -72,7 +53,6 @@ static inline void v3_catmull_rom(const float p0[3], const float p1[3], const fl
 
 static inline float age_to_alpha01(float age) {
     float t = clampf(age / TRAIL_LIFETIME_SEC, 0.0f, 1.0f);
-    // nicer falloff than linear
     float a = 1.0f - t;
     return a * a;
 }
@@ -109,7 +89,7 @@ static void push_sample(SwordTrail *t, const float base_world[3], const float ti
 }
 
 SwordTrail* sword_trail_get_player(void) { return &s_player; }
-SwordTrail* sword_trail_get_boss(void) { return &s_boss; }
+SwordTrail* sword_trail_get_boss(void)   { return &s_boss; }
 
 void sword_trail_instance_init(SwordTrail *t) {
     if (!t) return;
@@ -121,7 +101,7 @@ void sword_trail_instance_reset(SwordTrail *t) {
     if (!t) return;
     memset(t->samples, 0, sizeof(t->samples));
     t->count = 0;
-    t->head = 0;
+    t->head  = 0;
 }
 
 void sword_trail_instance_update(SwordTrail *t, float dt, bool emitting, const float base_world[3], const float tip_world[3]) {
@@ -143,7 +123,6 @@ void sword_trail_instance_update(SwordTrail *t, float dt, bool emitting, const f
         if (!t->samples[oldest].valid || t->samples[oldest].age > TRAIL_LIFETIME_SEC) {
             t->samples[oldest].valid = false;
             t->count--;
-            // head stays the same; count shrinks which effectively advances the oldest
         } else {
             break;
         }
@@ -179,10 +158,12 @@ void sword_trail_instance_draw(SwordTrail *t, void *viewport) {
     const float cb = (float)TRAIL_COLOR_B / 255.0f;
     const float a_scale = (float)TRAIL_MAX_ALPHA / 255.0f;
 
+    T3DViewport *vp = (T3DViewport*)viewport;
+
     // Build and draw as a series of quads between consecutive samples (oldest->newest),
     // with optional subdivision + spline interpolation to reduce visible "chunking".
     for (int i = 0; i < t->count - 1; i++) {
-        int i0 = sample_index_oldest_plus(t, i - 1 < 0 ? 0 : i - 1);
+        int i0 = sample_index_oldest_plus(t, (i - 1) < 0 ? 0 : (i - 1));
         int i1 = sample_index_oldest_plus(t, i);
         int i2 = sample_index_oldest_plus(t, i + 1);
         int i3 = sample_index_oldest_plus(t, (i + 2) >= t->count ? (t->count - 1) : (i + 2));
@@ -195,7 +176,8 @@ void sword_trail_instance_draw(SwordTrail *t, void *viewport) {
 
         float d0 = v3_dist(s1->base, s2->base);
         float d1 = v3_dist(s1->tip,  s2->tip);
-        float d = fmaxf(d0, d1);
+        float d  = fmaxf(d0, d1);
+
         int subdiv = (int)ceilf(d / TRAIL_SUBDIV_DIST);
         if (subdiv < 1) subdiv = 1;
         if (subdiv > TRAIL_SUBDIV_MAX) subdiv = TRAIL_SUBDIV_MAX;
@@ -207,8 +189,8 @@ void sword_trail_instance_draw(SwordTrail *t, void *viewport) {
         float prev_age = s1->age;
 
         T3DVec3 prev_base_scr, prev_tip_scr;
-        t3d_viewport_calc_viewspace_pos(viewport, &prev_base_scr, (const T3DVec3*)prev_base_w);
-        t3d_viewport_calc_viewspace_pos(viewport, &prev_tip_scr,  (const T3DVec3*)prev_tip_w);
+        t3d_viewport_calc_viewspace_pos(vp, &prev_base_scr, (const T3DVec3*)prev_base_w);
+        t3d_viewport_calc_viewspace_pos(vp, &prev_tip_scr,  (const T3DVec3*)prev_tip_w);
         if (prev_base_scr.v[2] >= 1.0f || prev_tip_scr.v[2] >= 1.0f) continue;
 
         float prev_alpha = clampf(age_to_alpha01(prev_age) * a_scale, 0.0f, 1.0f);
@@ -222,15 +204,16 @@ void sword_trail_instance_draw(SwordTrail *t, void *viewport) {
             float age = lerpf(s1->age, s2->age, tt);
 
             T3DVec3 base_scr, tip_scr;
-            t3d_viewport_calc_viewspace_pos(viewport, &base_scr, (const T3DVec3*)base_w);
-            t3d_viewport_calc_viewspace_pos(viewport, &tip_scr,  (const T3DVec3*)tip_w);
+            t3d_viewport_calc_viewspace_pos(vp, &base_scr, (const T3DVec3*)base_w);
+            t3d_viewport_calc_viewspace_pos(vp, &tip_scr,  (const T3DVec3*)tip_w);
             if (base_scr.v[2] >= 1.0f || tip_scr.v[2] >= 1.0f) break;
 
             float alpha = clampf(age_to_alpha01(age) * a_scale, 0.0f, 1.0f);
+
             if (prev_alpha <= 0.0f && alpha <= 0.0f) {
                 prev_base_scr = base_scr;
-                prev_tip_scr = tip_scr;
-                prev_alpha = alpha;
+                prev_tip_scr  = tip_scr;
+                prev_alpha    = alpha;
                 continue;
             }
 
@@ -243,8 +226,8 @@ void sword_trail_instance_draw(SwordTrail *t, void *viewport) {
             rdpq_triangle(&TRIFMT_SHADE, v1, v3, v2);
 
             prev_base_scr = base_scr;
-            prev_tip_scr = tip_scr;
-            prev_alpha = alpha;
+            prev_tip_scr  = tip_scr;
+            prev_alpha    = alpha;
         }
     }
 }
@@ -262,4 +245,3 @@ void sword_trail_draw_all(void *viewport) {
     sword_trail_instance_draw(&s_player, viewport);
     sword_trail_instance_draw(&s_boss, viewport);
 }
-

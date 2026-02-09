@@ -84,15 +84,6 @@ static float g_hit_cd = 0.0f;
 // center used to keep system in view while always-on
 static float g_center[3] = {0};
 
-// ------------------------------------------------------------
-// SMALL HELPERS
-// ------------------------------------------------------------
-static inline float clampf(float x, float lo, float hi) {
-    if (x < lo) return lo;
-    if (x > hi) return hi;
-    return x;
-}
-
 static inline uint32_t xorshift32(uint32_t *s) {
     uint32_t x = *s;
     x ^= x << 13;
