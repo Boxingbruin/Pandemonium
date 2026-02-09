@@ -2510,16 +2510,47 @@ void character_update_camera(void)
     }};
 
     if (cameraLockOnActive) {
-        T3DVec3 toTarget = {{
-            cameraLockOnTarget.v[0] - character.pos[0],
-            cameraLockOnTarget.v[1] - character.pos[1],
-            cameraLockOnTarget.v[2] - character.pos[2]
-        }};
-        t3d_vec3_norm(&toTarget);
+        // Lock-on camera:
+        // - Keep the same general zoomed-out "character camera" feel
+        // - Center view on the lock point
+        // - Pull back as the character->target distance grows so the whole character stays visible
+        float dx = cameraLockOnTarget.v[0] - character.pos[0];
+        float dz = cameraLockOnTarget.v[2] - character.pos[2];
+        float distXZ = sqrtf(dx*dx + dz*dz);
 
-        desiredCamPos.v[0] = character.pos[0] - toTarget.v[0] * scaledDistance;
-        desiredCamPos.v[1] = character.pos[1] + (scaledHeight/2);
-        desiredCamPos.v[2] = character.pos[2] - toTarget.v[2] * scaledDistance;
+        // Prefer horizontal direction to avoid extreme pitch changes when targeting low bones.
+        float dirX = 0.0f, dirZ = 1.0f;
+        if (distXZ > 0.001f) {
+            dirX = dx / distXZ;
+            dirZ = dz / distXZ;
+        } else {
+            // Fallback to character forward if we're right on top of the target.
+            float yaw = character.rot[1];
+            dirX = -fm_sinf(yaw);
+            dirZ =  fm_cosf(yaw);
+        }
+
+        // Dynamic pullback based on separation (tuned: keep closer by default).
+        // Only start pulling back once we're a bit away from the target, and cap the amount.
+        const float pullStart = 120.0f;              // world units (XZ)
+        float pull = distXZ - pullStart;
+        if (pull < 0.0f) pull = 0.0f;
+
+        float extra = pull * 0.25f;
+        if (extra > scaledDistance * 0.60f) extra = scaledDistance * 0.60f;
+
+        float desiredDist = (scaledDistance * 0.90f) + extra;
+
+        desiredCamPos.v[0] = character.pos[0] - dirX * desiredDist;
+        // Lower the lock-on camera so the character stays visible while aiming at the lock point.
+        // Add a small amount of vertical response to the target height, but keep it subtle.
+        float dy = cameraLockOnTarget.v[1] - character.pos[1];
+        float yResponse = dy * 0.15f;
+        if (yResponse < -6.0f) yResponse = -6.0f;
+        if (yResponse >  12.0f) yResponse =  12.0f;
+        // Keep the lock-on camera lower than follow mode so the character reads better.
+        desiredCamPos.v[1] = character.pos[1] + (scaledHeight * 0.35f) + yResponse;
+        desiredCamPos.v[2] = character.pos[2] - dirZ * desiredDist;
     }
 
     if (deltaTime > 0.0f) {
@@ -2556,9 +2587,10 @@ void character_update_camera(void)
 
     T3DVec3 desiredTarget;
     if (cameraLockOnActive) {
-        const float lockBias = 0.35f;
-        vec3_lerp(&desiredTarget, &forwardTarget, &cameraLockOnTarget, lockBias);
+        // When locked-on, the camera should be centered on the selected lock point.
+        desiredTarget = cameraLockOnTarget;
     } else {
+        (void)forwardTarget; // currently unused in follow mode; kept for future tuning
         vec3_lerp(&desiredTarget, &followTarget, &cameraLockOnTarget, cameraLockBlend);
     }
 

@@ -408,6 +408,27 @@ static bool lastStartPressed = false;
 static bool lastZPressed = false;
 static bool lastLPressed = false;
 static bool lastInteractAHeld = false;
+static bool lastCLeftHeld = false;
+static bool lastCRightHeld = false;
+
+// Z-target cycling / tap-toggle behavior:
+// - Tap Z toggles lock-on on/off
+// - Hold Z keeps lock-on active and allows cycling targets with C-left/C-right
+static float s_zHoldTimer = 0.0f;
+static bool  s_zHoldConsumed = false;     // true if we used Z-hold for cycling this hold
+static bool  s_zActivatedOnPress = false; // true if we turned lock-on ON on Z press
+static const float Z_TAP_TOGGLE_MAX_S = 0.22f;
+
+typedef enum {
+    LOCK_TARGET_LOWERLEG_LEFT = 0,
+    LOCK_TARGET_LOWERLEG_RIGHT,
+    LOCK_TARGET_HEAD,
+    LOCK_TARGET_SPINE,
+    LOCK_TARGET_COUNT
+} LockTargetId;
+
+// Current lock target selection (cycled via held-Z + C-left/C-right)
+static int s_lockTargetIndex = LOCK_TARGET_HEAD;
 
 // Cutscene skip - toggle button visibility
 static sprite_t* aButtonSprite = NULL;
@@ -422,6 +443,9 @@ static surface_t victoryTitleBgSurf = {0};
 // Dust particle sprite (simple puffs)
 static sprite_t* dustParticleSprite = NULL;
 static surface_t dustParticleSurf = {0};
+// Z-target lock-on icon sprite
+static sprite_t* zTargetIconSprite = NULL;
+static surface_t zTargetIconSurf = {0};
 
 static const char *SCENE1_SFX_PATHS[SCENE1_SFX_COUNT] = {
     [SCENE1_SFX_TITLE_WALK]  = "rom:/audio/sfx/title_screen_walk_effect-22k.wav64",
@@ -933,6 +957,11 @@ void scene_init(void)
     if (dustParticleSprite) {
         dustParticleSurf = sprite_get_pixels(dustParticleSprite);
     }
+    // Load Z-target lock-on icon (IA8 so the alpha gradient is preserved)
+    zTargetIconSprite = sprite_load("rom:/ztargetIcon.ia8.sprite");
+    if (zTargetIconSprite) {
+        zTargetIconSurf = sprite_get_pixels(zTargetIconSprite);
+    }
 
     //scene_init_cinematic_camera();
     // Start boss music
@@ -1022,6 +1051,12 @@ void scene_reset(void)
     lastStartPressed = false;
     lastZPressed = false;
     cameraLockOnActive = false;
+    lastCLeftHeld = false;
+    lastCRightHeld = false;
+    s_zHoldTimer = 0.0f;
+    s_zHoldConsumed = false;
+    s_zActivatedOnPress = false;
+    s_lockTargetIndex = LOCK_TARGET_HEAD;
     videoTrigFired = false;
     videoPendingPlay = false;
 
@@ -1080,6 +1115,11 @@ static void scene_sync_input_edge_state(void)
     lastLPressed = joypad.btn.l;
     // Use held state for interact-A edge detection (prevents missing presses).
     lastInteractAHeld = joypad.btn.a;
+    lastCLeftHeld = joypad.btn.c_left;
+    lastCRightHeld = joypad.btn.c_right;
+    s_zHoldTimer = 0.0f;
+    s_zHoldConsumed = false;
+    s_zActivatedOnPress = false;
     lastCutsceneAPressed = btn.a;
 }
 
@@ -2128,37 +2168,81 @@ void scene_update(void)
             // Sync edge detectors so we don't immediately re-toggle due to a held button
             lastZPressed = joypad.btn.z;
             lastInteractAHeld = joypad.btn.a;
+            lastCLeftHeld = joypad.btn.c_left;
+            lastCRightHeld = joypad.btn.c_right;
+            s_zHoldTimer = 0.0f;
+            s_zHoldConsumed = false;
+            s_zActivatedOnPress = false;
         }
         bossWasDead = bossDeadNow;
     } else {
         bossWasDead = false;
     }
 
-    // Z-target toggle: press Z to toggle lock-on, target updates with boss movement when active.
-    // Use held-state edge detection so toggling works reliably.
+    // Z-target:
+    // - Tap Z toggles lock-on on/off
+    // - Hold Z keeps lock-on active and allows cycling targets with C-left/C-right
     bool lockonAllowed = scene_is_boss_active() && g_boss;
     bool zHeld = joypad.btn.z;
     bool zJustPressed = zHeld && !lastZPressed;
+    bool zJustReleased = !zHeld && lastZPressed;
+    bool cLeftHeld = joypad.btn.c_left;
+    bool cRightHeld = joypad.btn.c_right;
+    bool cLeftJustPressed = cLeftHeld && !lastCLeftHeld;
+    bool cRightJustPressed = cRightHeld && !lastCRightHeld;
+
 
     // If lock-on is not allowed, force it off.
     if (!lockonAllowed) {
         cameraLockOnActive = false;
     }
 
+    if (zJustPressed) {
+        s_zHoldTimer = 0.0f;
+        s_zHoldConsumed = false;
+        s_zActivatedOnPress = false;
+
+        // If we're currently NOT locked-on, pressing Z should immediately lock on.
+        if (lockonAllowed && !cameraLockOnActive) {
+            cameraLockOnActive = true;
+            s_zActivatedOnPress = true;
+        }
+    }
+
+    if (zHeld) {
+        s_zHoldTimer += deltaTime;
+    }
+
     if (lockonAllowed) {
-        if (zJustPressed)  // rising edge (held)
-        {
-            cameraLockOnActive = !cameraLockOnActive;
+        // While holding Z, allow cycling targets without changing lock-on active state.
+        if (zHeld) {
+            if (cLeftJustPressed) {
+                scene_cycle_lock_target(-1);
+                s_zHoldConsumed = true;
+            } else if (cRightJustPressed) {
+                scene_cycle_lock_target(1);
+                s_zHoldConsumed = true;
+            }
+        }
+
+        // Short tap-release toggles OFF when already locked-on.
+        // Holding Z (or cycling) will not untarget.
+        if (zJustReleased) {
+            if (cameraLockOnActive && !s_zActivatedOnPress && !s_zHoldConsumed && s_zHoldTimer <= Z_TAP_TOGGLE_MAX_S) {
+                cameraLockOnActive = false;
+            }
+            s_zActivatedOnPress = false;
         }
 
         // Update target position when lock-on is active
-        if (cameraLockOnActive)
-        {
+        if (cameraLockOnActive) {
             cameraLockOnTarget = get_boss_lock_focus_point();
         }
     }
 
     lastZPressed = zHeld;
+    lastCLeftHeld = cLeftHeld;
+    lastCRightHeld = cRightHeld;
 }
 
 void scene_fixed_update(void) 
@@ -2192,15 +2276,47 @@ static void draw_lockon_indicator(T3DViewport *viewport)
         return;
     }
 
-    // Simple white dot
+    // Draw lock-on icon sprite (fallback to white dot if missing)
     rdpq_sync_pipe();
     rdpq_set_mode_standard();
-    rdpq_mode_combiner(RDPQ_COMBINER_FLAT);
-    rdpq_mode_blender(RDPQ_BLENDER_MULTIPLY);
-    rdpq_set_prim_color(RGBA32(255, 255, 255, 255));
 
-    const int halfSize = 3;
-    rdpq_fill_rectangle(px - halfSize, py - halfSize, px + halfSize + 1, py + halfSize + 1);
+    if (zTargetIconSprite) {
+        // Avoid alpha-compare clipping; rely on the sprite's alpha (IA8).
+        rdpq_mode_alphacompare(0);
+        rdpq_mode_blender(RDPQ_BLENDER_MULTIPLY);
+
+        // Scale with distance so the marker behaves like a world-space attachment
+        // (close = larger, far = smaller) instead of constant screen-space UI size.
+        //
+        // Tiny3D provides screenPos.v[2] as normalized depth (near=0 .. far=1).
+        float z01 = screenPos.v[2];
+        if (z01 < 0.0f) z01 = 0.0f;
+        if (z01 > 0.9999f) z01 = 0.9999f;
+
+        // Keep these in sync with the camera projection (see camera_controller.c).
+        const float nearClip = 4.0f;
+        const float farClip  = 2000.0f;
+        float z = nearClip + z01 * (farClip - nearClip);
+        if (z < nearClip) z = nearClip;
+
+        // Reference distance where we want the icon to be ~8x8 on-screen.
+        const float zRef = 300.0f;
+        float s = 0.125f * (zRef / z);
+        // Clamp for readability (and to avoid enormous icons up close).
+        if (s < 0.05f) s = 0.05f;
+        if (s > 0.275f) s = 0.275f;
+
+        rdpq_sprite_blit(zTargetIconSprite, px, py, &(rdpq_blitparms_t){
+            .scale_x = s, .scale_y = s,
+            .cx = 32, .cy = 32, // center of the 64x64 sprite
+        });
+    } else {
+        rdpq_mode_combiner(RDPQ_COMBINER_FLAT);
+        rdpq_mode_blender(RDPQ_BLENDER_MULTIPLY);
+        rdpq_set_prim_color(RGBA32(255, 255, 255, 255));
+        const int halfSize = 3;
+        rdpq_fill_rectangle(px - halfSize, py - halfSize, px + halfSize + 1, py + halfSize + 1);
+    }
 }
 
 /* -----------------------------------------------------------------------------
@@ -3592,5 +3708,11 @@ void scene_cleanup(void) // Realistically we never want to call this for the jam
         sprite_free(dustParticleSprite);
         dustParticleSprite = NULL;
         surface_free(&dustParticleSurf);
+    }
+
+    if (zTargetIconSprite) {
+        sprite_free(zTargetIconSprite);
+        zTargetIconSprite = NULL;
+        surface_free(&zTargetIconSurf);
     }
 }

@@ -117,6 +117,10 @@ typedef struct Boss {
 
     // Head bone index (for UI prompts, etc.)
     int headBoneIndex;
+
+    // Lower leg bone indices (for Z-target cycling)
+    int lowerLegLeftBoneIndex;
+    int lowerLegRightBoneIndex;
     
     // Sword model (attached to Hand-Right bone)
     void* swordModel;  // T3DModel*
