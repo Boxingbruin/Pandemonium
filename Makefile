@@ -146,6 +146,11 @@ pandemonium.z64: N64_ROM_SAVETYPE=eeprom4k
 pandemonium.z64: $(BUILD_DIR)/$(TARGET).dfs $(BUILD_DIR)/$(TARGET).elf
 pandemonium.z64: N64_ROM_METADATA=metadata/metadata.ini
 
+rebuild:
+	rm -rf $(BUILD_DIR) *.z64
+	rm -rf $(FILESYSTEMDIR)
+	make all
+
 clean:
 	rm -rf $(BUILD_DIR) *.z64
 	rm -rf $(FILESYSTEMDIR)
