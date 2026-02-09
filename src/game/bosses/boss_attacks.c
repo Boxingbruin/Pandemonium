@@ -56,6 +56,29 @@ static inline void boss_spawn_dust_toward_player(Boss *boss, float forwardDist, 
     scene_spawn_dust_burst(cx, boss->pos[1], cz, strength);
 }
 
+// Spawn ground crushed decal at the same biased impact point as the dust burst.
+static inline void boss_spawn_ground_crushed_toward_player(Boss *boss, float forwardDist)
+{
+    if (!boss) return;
+
+    float dx = character.pos[0] - boss->pos[0];
+    float dz = character.pos[2] - boss->pos[2];
+    float d  = sqrtf(dx*dx + dz*dz);
+
+    float dirX, dirZ;
+    if (d > 0.001f) {
+        dirX = dx / d;
+        dirZ = dz / d;
+    } else {
+        dirX = cosf(boss->rot[1]);
+        dirZ = sinf(boss->rot[1]);
+    }
+
+    float cx = boss->pos[0] + dirX * forwardDist;
+    float cz = boss->pos[2] + dirZ * forwardDist;
+    scene_spawn_ground_crushed(cx, cz);
+}
+
 static inline void boss_attacks_on_player_hit(float damage)
 {
     if (damage <= 25.0f) return;
@@ -314,6 +337,7 @@ static void boss_attacks_handle_power_jump(Boss* boss, float dt)
         if (boss->stateTimer - dt < dustT && boss->stateTimer >= dustT) {
             // Land dust should read between legs and sword/impact point.
             boss_spawn_dust_toward_player(boss, 45.0f, 2.6f);
+            boss_spawn_ground_crushed_toward_player(boss, 45.0f);
         }
 
         boss->sphereAttackColliderActive = (boss->stateTimer >= impactT0 && boss->stateTimer < impactT1);
@@ -651,6 +675,7 @@ static void boss_attacks_handle_tracking_slam(Boss* boss, float dt) {
     const float dustTime = slamLockTime + DUST_LATE_S;
     if (boss->stateTimer - dt < dustTime && boss->stateTimer >= dustTime) {
         boss_spawn_dust_toward_player(boss, 40.0f, 2.0f);
+        boss_spawn_ground_crushed_toward_player(boss, 40.0f);
     }
 
     bool allowTracking = (boss->stateTimer < slamLockTime) && !boss->currentAttackHasHit;
@@ -815,6 +840,7 @@ static void boss_attacks_handle_stomp(Boss* boss, float dt)
     const float dustT = windupEnd + DUST_LATE_S;
     if (boss->stateTimer - dt < dustT && boss->stateTimer >= dustT) {
         boss_spawn_dust_toward_player(boss, 18.0f, 2.6f);
+        boss_spawn_ground_crushed_toward_player(boss, 18.0f);
     }
 
     // Impact hit
@@ -978,6 +1004,7 @@ static void boss_attacks_handle_flip_attack(Boss* boss, float dt)
     const float landT = idleDuration + jumpDuration + DUST_LATE_S;
     if (boss->stateTimer - dt < landT && boss->stateTimer >= landT) {
         boss_spawn_dust_toward_player(boss, 35.0f, 2.3f);
+        boss_spawn_ground_crushed_toward_player(boss, 35.0f);
     }
 
     // --------------------------------

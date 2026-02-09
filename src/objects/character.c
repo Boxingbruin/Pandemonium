@@ -668,12 +668,36 @@ void character_reset(void)
     footstepTimer = 0.0f;
 
     character.health = character.maxHealth;
+    character.healthPotions = 3;
     character.damageFlashTimer = 0.0f;
     character.currentAttackHasHit = false;
 
     strongAttackUpgradedFlag = false;
 
     sword_trail_reset();
+}
+
+int character_get_health_potion_count(void)
+{
+    return character.healthPotions;
+}
+
+bool character_try_use_health_potion(void)
+{
+    if (character.healthPotions <= 0) return false;
+
+    // Don't consume if already full (or extremely close to full).
+    if (character.maxHealth <= 0.0f) return false;
+    if (character.health >= character.maxHealth - 0.01f) return false;
+
+    // Each potion gives a little under half health.
+    const float heal = character.maxHealth * 0.45f;
+    character.health += heal;
+    if (character.health > character.maxHealth) character.health = character.maxHealth;
+
+    character.healthPotions--;
+    if (character.healthPotions < 0) character.healthPotions = 0;
+    return true;
 }
 
 void character_reset_button_state(void)
@@ -2119,6 +2143,7 @@ void character_init(void)
         .visible = true,
         .maxHealth = 150.0f,
         .health = 100.0f,
+        .healthPotions = 3,
         .damageFlashTimer = 0.0f,
         .currentAttackHasHit = false
     };

@@ -691,10 +691,8 @@ void boss_ai_update(Boss* boss, BossIntent* out_intent) {
     // Update targeting system
     boss_ai_update_targeting_system(boss, dt);
     
-    // Phase switch at 50% HP
-    if (boss->phaseIndex == 1 && boss->health <= boss->maxHealth * 0.5f) {
-        boss->phaseIndex = 2;
-    }
+    // Phase 2 is now triggered by the scene cutscene system at 40% HP.
+    // The cutscene sets phaseIndex = 2 when it ends.
     
     // Update cooldowns
     boss_ai_update_cooldowns(boss, dt);

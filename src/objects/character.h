@@ -92,6 +92,7 @@ typedef struct {
     // Character health and combat stats
     float maxHealth;
     float health;
+    int healthPotions;
 
     // Visual feedback
     float damageFlashTimer;
@@ -123,5 +124,9 @@ void character_set_velocity_xz(float vx, float vz);
 
 // External API to apply damage to the character
 void character_apply_damage(float amount);
+
+// Health potion API
+int  character_get_health_potion_count(void);
+bool character_try_use_health_potion(void);
 
 #endif

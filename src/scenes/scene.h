@@ -26,6 +26,10 @@ typedef enum {
     CUTSCENE_PHASE1_BREAK_CHAINS,
     CUTSCENE_PHASE1_FACE_ZOOM_OUT,
     CUTSCENE_PHASE1_INTRO_END,
+    CUTSCENE_PHASE2_KNEEL,
+    CUTSCENE_PHASE2_BLURB1,
+    CUTSCENE_PHASE2_BLURB2,
+    CUTSCENE_PHASE2_END,
     CUTSCENE_POST_BOSS_RESTORED
 } CutsceneState;
 
@@ -46,6 +50,10 @@ void scene_cleanup(void);
 // Simple world-space dust burst (screen-space rendered).
 // Intended for impacts/landings. `strength` is a loose scalar (1.0 = normal).
 void scene_spawn_dust_burst(float x, float y, float z, float strength);
+
+// Ground "crush" decal under an impact point (world-space quad, depth-tested).
+// Intended for boss slam landings. Auto-expires (~3 seconds).
+void scene_spawn_ground_crushed(float x, float z);
 
 // Boot helpers
 // Runs startup logos (skipped in DEV_MODE) and restores display/rdpq state.
