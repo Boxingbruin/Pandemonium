@@ -112,8 +112,8 @@ typedef struct Boss {
     bool handAttackColliderActive;
     bool sphereAttackColliderActive;
     
-    // Spine1 bone index (for z-targeting)
-    int spine1BoneIndex;
+    // waist bone index (for z-targeting)
+    int waistBoneIndex;
 
     // Head bone index (for UI prompts, etc.)
     int headBoneIndex;

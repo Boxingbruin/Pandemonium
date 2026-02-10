@@ -433,8 +433,7 @@ static const float Z_TAP_TOGGLE_MAX_S = 0.22f;
 typedef enum {
     LOCK_TARGET_LOWERLEG_LEFT = 0,
     LOCK_TARGET_LOWERLEG_RIGHT,
-    LOCK_TARGET_HEAD,
-    LOCK_TARGET_SPINE,
+    LOCK_TARGET_WAIST,
     LOCK_TARGET_COUNT
 } LockTargetId;
 
@@ -1043,8 +1042,7 @@ static inline int scene_lockon_bone_index_for_target(LockTargetId target)
     switch (target) {
         case LOCK_TARGET_LOWERLEG_LEFT:  return g_boss->lowerLegLeftBoneIndex;
         case LOCK_TARGET_LOWERLEG_RIGHT: return g_boss->lowerLegRightBoneIndex;
-        case LOCK_TARGET_HEAD:           return g_boss->headBoneIndex;
-        case LOCK_TARGET_SPINE:          return g_boss->spine1BoneIndex;
+        case LOCK_TARGET_WAIST:          return g_boss->waistBoneIndex;
         default:                         return -1;
     }
 }
@@ -1083,14 +1081,6 @@ static T3DVec3 get_boss_lock_focus_point(void)
     T3DVec3 worldPos;
     int bone = scene_lockon_bone_index_for_target((LockTargetId)s_lockTargetIndex);
     if (scene_get_boss_bone_world_pos(bone, &worldPos)) {
-        return worldPos;
-    }
-
-    // 2) Fallback order: Head -> Spine -> boss origin
-    if (scene_get_boss_bone_world_pos(g_boss->headBoneIndex, &worldPos)) {
-        return worldPos;
-    }
-    if (scene_get_boss_bone_world_pos(g_boss->spine1BoneIndex, &worldPos)) {
         return worldPos;
     }
 

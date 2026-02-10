@@ -546,8 +546,8 @@ void boss_init(Boss* boss) {
     
     // Find bone indices
     boss->handRightBoneIndex = t3d_skeleton_find_bone(skeleton, "Hand-Right");
-    boss->spine1BoneIndex = t3d_skeleton_find_bone(skeleton, "Spine1");
-    boss->headBoneIndex = t3d_skeleton_find_bone(skeleton, "Head");
+    boss->waistBoneIndex = t3d_skeleton_find_bone(skeleton, "Waist");
+    boss->headBoneIndex =  t3d_skeleton_find_bone(skeleton, "Head");
     boss->lowerLegLeftBoneIndex = t3d_skeleton_find_bone(skeleton, "LowerLeg-Left");
     boss->lowerLegRightBoneIndex = t3d_skeleton_find_bone(skeleton, "LowerLeg-Right");
     
