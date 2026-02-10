@@ -438,7 +438,7 @@ typedef enum {
 } LockTargetId;
 
 // Current lock target selection (cycled via held-Z + C-left/C-right)
-static int s_lockTargetIndex = LOCK_TARGET_HEAD;
+static int s_lockTargetIndex = LOCK_TARGET_WAIST;
 
 // Cutscene skip - toggle button visibility
 static sprite_t* aButtonSprite = NULL;
@@ -1110,7 +1110,7 @@ void scene_reset(void)
     s_zHoldTimer = 0.0f;
     s_zHoldConsumed = false;
     s_zActivatedOnPress = false;
-    s_lockTargetIndex = LOCK_TARGET_HEAD;
+    s_lockTargetIndex = LOCK_TARGET_WAIST;
     videoTrigFired = false;
     videoPendingPlay = false;
 
