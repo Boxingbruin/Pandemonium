@@ -1,7 +1,5 @@
 # Pandemonium
 
-<img width="1000" height="697" alt="Pandemonium box art" src="box-art.png">
-
 ## Story
 A century of darkness smothers the land beneath the Demon King’s throne of gold, guarded by knights that were reduced to hollow armor. You are one of them, cursed into a horrific form as you push through a ruined kingdom. Pandemonium is a dark-fantasy action-adventure platformer. Prevail and the restored ones whisper a final command—free the sun.
 
