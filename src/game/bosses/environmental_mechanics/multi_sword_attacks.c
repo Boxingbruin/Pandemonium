@@ -1,88 +1,274 @@
 #include "multi_sword_attacks.h"
 
+#include <libdragon.h>
 #include <t3d/t3d.h>
+#include <t3d/t3dmodel.h>
 #include <math.h>
 #include <string.h>
 #include <stdint.h>
+#include <stdbool.h>
+#include <rspq.h>
+#include <rdpq.h>
+#include <sprite.h>
+
+#include <assert.h>
 
 #include "character.h"
 #include "simple_collision_utility.h"
-#include "sword_trail.h"
 #include "debug_draw.h"
 #include "dev.h"
+#include "globals.h"
+#include "game_math.h"
 
-// ------------------------------------------------------------
-// CONFIG (tune freely)
-// ------------------------------------------------------------
-#ifndef MSA_MAX_SWORDS
+#include "path_ribbon.h"
+#include "fx/lightning_fx.h"
+
+// ============================================================
+// PERF / FEATURE TOGGLES
+// ============================================================
+#define MSA_DO_MOVEMENT 1
+#define MSA_DO_BODY_COLLISION 1
+#define MSA_DO_WALL_COLLISION 1
+#define MSA_DIR_RENORM_PERIOD 4
+#define MSA_FACE_DIR 1
+
+#define MSA_WALLS_BLOCKING 1
+
+// ============================================================
+// CONFIG
+// ============================================================
 #define MSA_MAX_SWORDS 16
-#endif
+#define MSA_COLLISION_HZ 30
 
-// default count
-static int  g_count   = 5;
-static bool g_enabled = true;
-static MsaPattern g_pattern = MSA_PATTERN_GROUND_SWEEP;
+#define MSA_PATH_MAX_POINTS 13
+#define MSA_PATH_MIN_STEP   48.0f
 
-// Ground plane used for the “stabbed into ground” effect.
-static const float GROUND_Y = 0.0f;
+// ============================================================
+// SPEED / TIMING TUNABLES
+// ============================================================
+#define MSA_FIG8_TIME_SCALE 0.1f
+#define MSA_MOVE_SPEED_MULT 0.13f
+#define MSA_DROP_FALL_TIME_SEC 1.0f
+#define MSA_DESCEND_SPEED 110.0f
 
-// Sword body capsule
-static const float SWORD_RADIUS          = 9.0f;
-static const float SWORD_BLADE_LEN       = 90.0f;
-static const float SWORD_HALF_IN_GROUND  = 25.0f;
+// ============================================================
+// ATTACK TIMING / GEOMETRY
+// ============================================================
+static float gFloorY   = 3.0f;
+static const float CEILING_Y = 595.0f;
 
-// Trail collision uses MANY capsules along the curve (polyline segments).
-static const float TRAIL_RADIUS    = 10.0f;
-static const float TRAIL_LIFE      = 1.8f;
-static const float TRAIL_MIN_STEP  = 7.0f;     // distance before adding a new trail point
+static const float CEILING_HOLD_SEC = 5.0f;
 
-// Motion (pattern A / ground sweep)
-static const float SPEED        = 220.0f;
-static const float TURN_RATE    = 2.6f;   // rad/sec scaled by noise
-static const float NOISE_FREQ   = 1.35f;
-static const float NOISE_AMPL   = 1.0f;
-static const float HOME_RADIUS  = 700.0f;
-static const float HOME_BIAS    = 1.8f;
+static const float HAZARD_HEIGHT = 20.0f;
+static const float WALL_HEIGHT = 15.0f;
 
-// Damage gating (optional)
+static float gClusterRadius = 220.0f;
+static float gMinSpacing    = 80.0f;
+
+static const float DROP_INTERVAL_SEC  = 0.36f;   // was 0.18f
+static const float LAND_PAUSE_SEC = 2.0f;
+
+// ============================================================
+// MOVEMENT STAGE (FIGURE-8)
+// ============================================================
+static const float FIG8_STAGE_SEC = 10.0f;       // was 5.0f
+static const float FIG8_FREQ_HZ   = 0.55f;
+static const float FIG8_AMP_X     = 160.0f;
+static const float FIG8_AMP_Z     = 110.0f;
+static const float FIG8_DRIFT_SPEED = 40.0f;
+
+static const float DESPAWN_Y     = -120.0f;
+
+static const float MSA_MAX_XZ_SPEED = 520.0f;
+
+static const float SWORD_RADIUS = 9.0f;
+
+static const float WALL_THICKNESS = 10.0f;
+
 static const float DMG_BODY     = 22.0f;
-static const float DMG_TRAIL    = 12.0f;
+static const float DMG_WALL     = 12.0f;
 static const float HIT_COOLDOWN = 0.25f;
 
-// ------------------------------------------------------------
+// Model forward axis is -X, so yaw needs a PI flip.
+static const float MSA_MODEL_YAW_OFFSET = (float)T3D_PI;
+
+// ============================================================
+// MODEL ASSETS (owned by MSA)
+// ============================================================
+static T3DModel*      floorGlowModel   = NULL;
+static rspq_block_t*  floorGlowDpl     = NULL;
+static void*          floorGlowMatrixBase = NULL;
+static T3DMat4FP*     floorGlowMatrix  = NULL; // [MSA_MAX_SWORDS]
+
+static ScrollParams floorGlowScrollParams = {
+    .xSpeed = 0.0f,
+    .ySpeed = 10.0f,
+    .scale  = 64
+};
+
+static T3DModel*      swordModel       = NULL;
+static rspq_block_t*  swordDpl         = NULL;
+static void*          swordMatrixBase  = NULL;
+static T3DMat4FP*     swordMatrix      = NULL; // [MSA_MAX_SWORDS]
+
+// Lightning FX instance (opaque => keep pointer)
+static LightningFX *gLightningFx = NULL;
+
+static sprite_t *sWallFogSpr = NULL;
+
+// ============================================================
 // INTERNAL TYPES
-// ------------------------------------------------------------
+// ============================================================
+typedef enum {
+    MSA_PHASE_CEILING_SETUP = 0,
+    MSA_PHASE_DROPPING      = 1,
+    MSA_PHASE_POST_LAND     = 2,
+    MSA_PHASE_SCURVE        = 3,
+    MSA_PHASE_DESCEND       = 4
+} MsaAttackPhase;
+
+typedef enum {
+    SW_INACTIVE = 0,
+    SW_CEILING  = 1,
+    SW_FALLING  = 2,
+    SW_LANDED   = 3,
+    SW_SCURVE   = 4,
+    SW_DESCEND  = 5
+} MsaSwordState;
+
 typedef struct {
-    float pos[3];    // sword anchor on ground (y fixed)
-    float dir[2];    // unit tangent in XZ
-    float t;         // time for noise
+    float pos[3];
+    float dir[2];
+    float t;
     uint32_t seed;
 
-    // Trail visuals
-    SwordTrail trail;
+    MsaSwordState state;
 
-    // Trail collision polyline
-    float last_tip[3];
+    float spawnX;
+    float spawnZ;
+
+    float fallT;     // 0..1
+    float fallTime;  // sec
+
+    float figPhase;      // 0..2pi
+    float driftDirX;     // unit-ish
+    float driftDirZ;     // unit-ish
+
+    PathRibbon ribbon;
+
+    float lastRibbonXZ[2];
+
+    uint8_t renormTick;
+
+    uint8_t glowVisible;
 } MsaSword;
 
-typedef struct {
-    float a[3];
-    float b[3];
-    float age;
-    float radius;
-    bool  active;
-} TrailSeg;
+// ============================================================
+// GLOBALS
+// ============================================================
+static int  gCount   = 5;
+static bool gEnabled = true;
+static MsaPattern gPattern = MSA_PATTERN_GROUND_SWEEP;
 
-enum { MAX_TRAIL_SEGS = 512 };
+static MsaSword gSwords[MSA_MAX_SWORDS];
 
-static MsaSword g_swords[MSA_MAX_SWORDS];
-static TrailSeg g_segs[MAX_TRAIL_SEGS];
-static int g_seg_head = 0;
+static float gHitCd = 0.0f;
+static float gCollisionAcc = 0.0f;
 
-static float g_hit_cd = 0.0f;
+static MsaAttackPhase gPhase = MSA_PHASE_CEILING_SETUP;
+static float gPhaseT = 0.0f;
 
-// center used to keep system in view while always-on
-static float g_center[3] = {0};
+static int   gDropOrder[MSA_MAX_SWORDS];
+static int   gDropNext = 0;
+static float gDropAcc  = 0.0f;
+
+static float gLoopDelay = 0.0f;
+
+static uint8_t gDidSpawnThisCycle = 0;
+
+// ============================================================
+// UN-CACHED 16-BYTE ALIGNED ALLOC
+// ============================================================
+static void* alloc_uncached_aligned16(size_t bytes, void** out_base) {
+    void* base = malloc_uncached(bytes + 15);
+    if (!base) {
+        *out_base = NULL;
+        return NULL;
+    }
+    uintptr_t p = (uintptr_t)base;
+    uintptr_t aligned = (p + 15u) & ~(uintptr_t)15u;
+    *out_base = base;
+    return (void*)aligned;
+}
+
+// ============================================================
+// FINITE + CLAMP GUARDS (RSP SAFETY)
+// ============================================================
+static inline int msa_isfinite3(float x, float y, float z) {
+    return isfinite(x) && isfinite(y) && isfinite(z);
+}
+
+static inline float msa_clampf(float v, float lo, float hi) {
+    if (v < lo) return lo;
+    if (v > hi) return hi;
+    return v;
+}
+
+// ============================================================
+// TRIG LUT
+// ============================================================
+static const float MSA_TWO_PI = 6.2831853071795864769f;
+static const float MSA_INV_TWO_PI = 1.0f / 6.2831853071795864769f;
+
+#define MSA_TRIG_LUT_BITS 10
+#define MSA_TRIG_LUT_SIZE (1 << MSA_TRIG_LUT_BITS)
+#define MSA_TRIG_LUT_MASK (MSA_TRIG_LUT_SIZE - 1)
+
+static float sSinLut[MSA_TRIG_LUT_SIZE];
+static float sCosLut[MSA_TRIG_LUT_SIZE];
+static uint8_t sTrigInited = 0;
+
+static void msa_trig_init_once(void) {
+    if (sTrigInited) return;
+    sTrigInited = 1;
+
+    for (int i = 0; i < MSA_TRIG_LUT_SIZE; i++) {
+        float a = ((float)i / (float)MSA_TRIG_LUT_SIZE) * MSA_TWO_PI;
+        float s = sinf(a);
+        float c = cosf(a);
+
+        if (s >  1.0f) s =  1.0f;
+        if (s < -1.0f) s = -1.0f;
+        if (c >  1.0f) c =  1.0f;
+        if (c < -1.0f) c = -1.0f;
+
+        sSinLut[i] = s;
+        sCosLut[i] = c;
+    }
+}
+
+static inline float wrap_angle_0_2pi_fast(float a) {
+    if (a >= MSA_TWO_PI) a -= MSA_TWO_PI;
+    if (a <  0.0f)      a += MSA_TWO_PI;
+    if (a >= MSA_TWO_PI || a < 0.0f) {
+        while (a >= MSA_TWO_PI) a -= MSA_TWO_PI;
+        while (a <  0.0f)      a += MSA_TWO_PI;
+    }
+    return a;
+}
+
+static inline int lut_index(float a) {
+    int idx = (int)(a * (MSA_INV_TWO_PI * (float)MSA_TRIG_LUT_SIZE));
+    return idx & MSA_TRIG_LUT_MASK;
+}
+
+static inline float lut_sin(float a) { return sSinLut[lut_index(a)]; }
+static inline float lut_cos(float a) { return sCosLut[lut_index(a)]; }
+
+// ============================================================
+// SMALL HELPERS
+// ============================================================
+static inline float lerpf(float a, float b, float t) { return a + (b - a) * t; }
 
 static inline uint32_t xorshift32(uint32_t *s) {
     uint32_t x = *s;
@@ -97,43 +283,73 @@ static inline float frand01(uint32_t *s) {
     return (float)(xorshift32(s) & 0x00FFFFFF) / (float)0x01000000;
 }
 
-static inline float dist_xz(const float a[3], const float b[3]) {
-    float dx = a[0] - b[0];
-    float dz = a[2] - b[2];
-    return sqrtf(dx*dx + dz*dz);
+static inline float dist2(float ax, float az, float bx, float bz) {
+    float dx = ax - bx;
+    float dz = az - bz;
+    return dx*dx + dz*dz;
 }
 
-static inline void rotate_dir(float dir[2], float ang) {
-    float c = cosf(ang);
-    float s = sinf(ang);
-    float x = dir[0], z = dir[1];
-    dir[0] = x * c - z * s;
-    dir[1] = x * s + z * c;
-
-    float d = sqrtf(dir[0]*dir[0] + dir[1]*dir[1]);
-    if (d > 1e-6f) { dir[0] /= d; dir[1] /= d; }
-    else { dir[0] = 1.0f; dir[1] = 0.0f; }
+// fast rsqrt (1 NR step)
+static inline float fast_rsqrtf(float number) {
+    if (number <= 0.0f) return 0.0f;
+    union { float f; uint32_t i; } conv;
+    conv.f = number;
+    conv.i = 0x5f3759df - (conv.i >> 1);
+    float y = conv.f;
+    const float x2 = number * 0.5f;
+    y = y * (1.5f - (x2 * y * y));
+    return y;
 }
 
-static void seg_push(const float a[3], const float b[3], float radius) {
-    TrailSeg *seg = &g_segs[g_seg_head];
-    memcpy(seg->a, a, sizeof(float) * 3);
-    memcpy(seg->b, b, sizeof(float) * 3);
-    seg->age = 0.0f;
-    seg->radius = radius;
-    seg->active = true;
-    g_seg_head = (g_seg_head + 1) % MAX_TRAIL_SEGS;
-}
+static inline void step_toward_xz(MsaSword *s, float tx, float tz, float max_step) {
+    float ox = s->pos[0];
+    float oz = s->pos[2];
+    float dx = tx - ox;
+    float dz = tz - oz;
 
-static void segs_update(float dt) {
-    for (int i = 0; i < MAX_TRAIL_SEGS; i++) {
-        if (!g_segs[i].active) continue;
-        g_segs[i].age += dt;
-        if (g_segs[i].age > TRAIL_LIFE) g_segs[i].active = false;
+    float d2 = dx*dx + dz*dz;
+    if (d2 < 0.000001f) {
+        s->pos[0] = tx;
+        s->pos[2] = tz;
+        return;
+    }
+
+    float max2 = max_step * max_step;
+    float stepX, stepZ;
+
+    if (d2 <= max2) {
+        stepX = dx;
+        stepZ = dz;
+        s->pos[0] = tx;
+        s->pos[2] = tz;
+    } else {
+        float invD = fast_rsqrtf(d2);
+        float k = max_step * invD;
+        stepX = dx * k;
+        stepZ = dz * k;
+        s->pos[0] = ox + stepX;
+        s->pos[2] = oz + stepZ;
+    }
+
+    float m2 = stepX*stepX + stepZ*stepZ;
+    if (m2 > 0.0001f) {
+        s->dir[0] = stepX;
+        s->dir[1] = stepZ;
+
+        s->renormTick++;
+        if (s->renormTick >= (uint8_t)MSA_DIR_RENORM_PERIOD) {
+            s->renormTick = 0;
+            float inv = fast_rsqrtf(m2);
+            s->dir[0] *= inv;
+            s->dir[1] *= inv;
+        }
     }
 }
 
-static void get_character_capsule_world(float outA[3], float outB[3], float *outR) {
+// ============================================================
+// CHARACTER CAPSULE HELPERS
+// ============================================================
+static void getCharacterCapsuleWorld(float outA[3], float outB[3], float *outR) {
     outA[0] = character.pos[0] + character.capsuleCollider.localCapA.v[0];
     outA[1] = character.pos[1] + character.capsuleCollider.localCapA.v[1];
     outA[2] = character.pos[2] + character.capsuleCollider.localCapA.v[2];
@@ -145,236 +361,798 @@ static void get_character_capsule_world(float outA[3], float outB[3], float *out
     *outR = character.capsuleCollider.radius;
 }
 
-// Sword body capsule: mostly vertical, slight forward tilt so “blade faces tangent”
-static void sword_body_capsule(const MsaSword *s, float outA[3], float outB[3]) {
-    float fx = s->dir[0];
-    float fz = s->dir[1];
+static void swordBodyAabb(const MsaSword *s, float outMin[3], float outMax[3]) {
+    const float r = SWORD_RADIUS;
 
-    const float tilt = 0.25f;
+    outMin[0] = s->pos[0] - r;
+    outMax[0] = s->pos[0] + r;
 
-    outA[0] = s->pos[0] - fx * 6.0f;
-    outA[1] = GROUND_Y + (SWORD_BLADE_LEN * 0.85f);
-    outA[2] = s->pos[2] - fz * 6.0f;
+    outMin[2] = s->pos[2] - r;
+    outMax[2] = s->pos[2] + r;
 
-    outB[0] = s->pos[0] + fx * (SWORD_BLADE_LEN * tilt);
-    outB[1] = GROUND_Y - SWORD_HALF_IN_GROUND;
-    outB[2] = s->pos[2] + fz * (SWORD_BLADE_LEN * tilt);
+    outMin[1] = gFloorY;
+    outMax[1] = gFloorY + HAZARD_HEIGHT;
 }
 
-// “tip” point for trail sampling: sits on ground plane
-static void sword_trail_tip(const MsaSword *s, float outTip[3]) {
-    outTip[0] = s->pos[0];
-    outTip[1] = GROUND_Y;
-    outTip[2] = s->pos[2];
+// ============================================================
+// WALL COLLISION: OBB PER RIBBON SEGMENT
+// ============================================================
+static inline void msa_build_wall_obb_from_seg(SCU_OBB *o, float x0, float z0, float x1, float z1) {
+    float mx = 0.5f * (x0 + x1);
+    float mz = 0.5f * (z0 + z1);
+
+    float dx = x1 - x0;
+    float dz = z1 - z0;
+    float len = sqrtf(dx*dx + dz*dz);
+
+    if (len < 0.001f) len = 0.001f;
+
+    o->center[0] = mx;
+    o->center[1] = gFloorY + 0.5f * WALL_HEIGHT;
+    o->center[2] = mz;
+
+    o->half[0] = 0.5f * len;
+    o->half[1] = 0.5f * WALL_HEIGHT;
+    o->half[2] = 0.5f * WALL_THICKNESS;
+
+    o->yaw = atan2f(dz, dx);
 }
 
-// Pattern A turn signal (organic S-curve-ish)
-static float noise_turn_signal(const MsaSword *s) {
-    float t = s->t;
-    float ph1 = (float)((s->seed >>  0) & 1023) * 0.006135923f;
-    float ph2 = (float)((s->seed >> 10) & 1023) * 0.006135923f;
-    float ph3 = (float)((s->seed >> 20) & 1023) * 0.006135923f;
-    float w = NOISE_FREQ;
-
-    float n =
-        0.75f * sinf(w * t + ph1) +
-        0.35f * sinf((w * 2.07f) * t + ph2) +
-        0.20f * sinf((w * 3.63f) * t + ph3);
-
-    return (n * (NOISE_AMPL / 1.3f));
-}
-
-static void apply_home_bias(MsaSword *s, float *inout_turn) {
-    float dx = s->pos[0] - g_center[0];
-    float dz = s->pos[2] - g_center[2];
-    float d = sqrtf(dx*dx + dz*dz);
-    if (d <= HOME_RADIUS) return;
-
-    float tx = -dx / d;
-    float tz = -dz / d;
-
-    float cx = s->dir[0];
-    float cz = s->dir[1];
-
-    // sign of cross to know which way to turn toward center
-    float cross = cx * tz - cz * tx;
-    float excess = clampf((d - HOME_RADIUS) / 250.0f, 0.0f, 1.0f);
-    *inout_turn += cross * (HOME_BIAS * excess);
-}
-
-static bool trail_hits_character(const float charA[3], const float charB[3], float charR) {
-    // IMPORTANT: this is NOT “one capsule for the whole trail”.
-    // It is many short capsule segments. That’s how it bends/curves.
-    for (int i = 0; i < MAX_TRAIL_SEGS; i++) {
-        const TrailSeg *s = &g_segs[i];
-        if (!s->active) continue;
-
-        if (scu_capsule_vs_capsule_f(
-                s->a, s->b, s->radius,
-                charA, charB, charR))
-            return true;
-    }
+static bool msa_wall_hit_or_block_capsule(
+    float capA[3], float capB[3], float r,
+    float *io_vx, float *io_vz)
+{
+#if !MSA_DO_WALL_COLLISION
+    (void)capA; (void)capB; (void)r; (void)io_vx; (void)io_vz;
     return false;
-}
+#else
+    float yMin = fminf(capA[1], capB[1]) - r;
+    float yMax = fmaxf(capA[1], capB[1]) + r;
+    float wallY0 = gFloorY;
+    float wallY1 = gFloorY + WALL_HEIGHT;
+    if (yMax < wallY0 || yMin > wallY1) return false;
 
-// ------------------------------------------------------------
-// PUBLIC API
-// ------------------------------------------------------------
-void msa_set_enabled(bool enabled) { g_enabled = enabled; }
+    bool anyHit = false;
 
-void msa_set_sword_count(int count) {
-    if (count < 1) count = 1;
-    if (count > MSA_MAX_SWORDS) count = MSA_MAX_SWORDS;
-    g_count = count;
-}
+    for (int si = 0; si < gCount; si++) {
+        const MsaSword *sw = &gSwords[si];
+        const PathRibbon *pr = &sw->ribbon;
 
-void msa_set_pattern(MsaPattern p) { g_pattern = p; }
+        if (pr->dead) continue;
+        int n = (int)pr->count;
+        if (n < 2) continue;
 
-void msa_init(void) {
-    memset(g_swords, 0, sizeof(g_swords));
-    memset(g_segs,   0, sizeof(g_segs));
-    g_seg_head = 0;
-    g_hit_cd = 0.0f;
+        for (int i = 0; i < n - 1; i++) {
+            float x0 = pr->pts[i][0];
+            float z0 = pr->pts[i][2];
+            float x1 = pr->pts[i+1][0];
+            float z1 = pr->pts[i+1][2];
 
-    // Keep it centered on the player for always-on testing
-    g_center[0] = character.pos[0];
-    g_center[1] = GROUND_Y;
-    g_center[2] = character.pos[2];
+            if (!isfinite(x0) || !isfinite(z0) || !isfinite(x1) || !isfinite(z1)) continue;
 
-    // Spawn swords in a ring around player
-    uint32_t seed = 0xA123BEEF;
-    for (int i = 0; i < MSA_MAX_SWORDS; i++) {
-        MsaSword *s = &g_swords[i];
-        s->seed = xorshift32(&seed) ^ (uint32_t)(i * 0x9E3779B9u);
+            SCU_OBB o;
+            msa_build_wall_obb_from_seg(&o, x0, z0, x1, z1);
 
-        float ang = ((float)i / (float)MSA_MAX_SWORDS) * (2.0f * (float)M_PI);
-        float r   = 120.0f + 80.0f * frand01(&s->seed);
+            float push[3] = {0}, nrm[3] = {0};
 
-        s->pos[0] = g_center[0] + cosf(ang) * r;
-        s->pos[1] = GROUND_Y;
-        s->pos[2] = g_center[2] + sinf(ang) * r;
+            if (scu_capsule_vs_obb_push_xz_f(capA, capB, r, &o, push, nrm)) {
+                anyHit = true;
 
-        float yaw = ang + (frand01(&s->seed) - 0.5f) * 1.2f;
-        s->dir[0] = cosf(yaw);
-        s->dir[1] = sinf(yaw);
+#if MSA_WALLS_BLOCKING
+                character.pos[0] += push[0];
+                character.pos[2] += push[2];
 
-        s->t = frand01(&s->seed) * 10.0f;
+                capA[0] += push[0]; capA[2] += push[2];
+                capB[0] += push[0]; capB[2] += push[2];
 
-        sword_trail_instance_init(&s->trail);
-        sword_trail_tip(s, s->last_tip);
-    }
-}
-
-void msa_update(float dt) {
-    if (!g_enabled) return;
-    if (dt < 0.0f) dt = 0.0f;
-    if (dt > 0.05f) dt = 0.05f;
-
-    // always-on center follows player for now
-    g_center[0] = character.pos[0];
-    g_center[2] = character.pos[2];
-
-    if (g_hit_cd > 0.0f) g_hit_cd -= dt;
-
-    segs_update(dt);
-
-    float charA[3], charB[3], charR;
-    get_character_capsule_world(charA, charB, &charR);
-
-    bool hit_body  = false;
-
-    // Pattern-specific update (only one for now)
-    if (g_pattern == MSA_PATTERN_GROUND_SWEEP) {
-        for (int i = 0; i < g_count; i++) {
-            MsaSword *s = &g_swords[i];
-            s->t += dt;
-
-            float turn = noise_turn_signal(s);
-            apply_home_bias(s, &turn);
-
-            float dYaw = turn * TURN_RATE * dt;
-            dYaw = clampf(dYaw, -0.22f, 0.22f);
-            rotate_dir(s->dir, dYaw);
-
-            s->pos[0] += s->dir[0] * SPEED * dt;
-            s->pos[2] += s->dir[1] * SPEED * dt;
-            s->pos[1] = GROUND_Y;
-
-            // ---- Trail visuals (your existing system)
-            float tip[3];
-            sword_trail_tip(s, tip);
-
-            float base[3] = {
-                tip[0] - s->dir[0] * 26.0f,
-                tip[1] + 1.0f,
-                tip[2] - s->dir[1] * 26.0f
-            };
-
-            sword_trail_instance_update(&s->trail, dt, true, base, tip);
-
-            // ---- Trail collision (polyline -> many capsules)
-            float moved = dist_xz(tip, s->last_tip);
-            if (moved >= TRAIL_MIN_STEP) {
-                float a[3] = { s->last_tip[0], GROUND_Y + 2.0f, s->last_tip[2] };
-                float b[3] = { tip[0],        GROUND_Y + 2.0f, tip[2]        };
-                seg_push(a, b, TRAIL_RADIUS);
-
-                memcpy(s->last_tip, tip, sizeof(float) * 3);
-            }
-
-            // ---- Sword body collision
-            float swordA[3], swordB[3];
-            sword_body_capsule(s, swordA, swordB);
-
-            if (scu_capsule_vs_capsule_f(
-                    swordA, swordB, SWORD_RADIUS,
-                    charA, charB, charR))
-            {
-                hit_body = true;
+                if (io_vx && io_vz) {
+                    float vx = *io_vx;
+                    float vz = *io_vz;
+                    float vn = vx * nrm[0] + vz * nrm[2];
+                    if (vn < 0.0f) {
+                        vx -= vn * nrm[0];
+                        vz -= vn * nrm[2];
+                        *io_vx = vx;
+                        *io_vz = vz;
+                    }
+                }
+#else
+                (void)push; (void)nrm;
+#endif
             }
         }
     }
 
-    bool hit_trail = trail_hits_character(charA, charB, charR);
+    return anyHit;
+#endif
+}
 
-    if (g_hit_cd <= 0.0f) {
-        if (hit_body) {
+// ============================================================
+// T3D MATRIX BUILD
+// ============================================================
+static inline void msa_build_srt_scaled(T3DMat4FP *out, float scale1, float x, float y, float z, float yaw) {
+    const float scale[3] = { scale1, scale1, scale1 };
+    const float rot[3]   = { 0.0f,   yaw,    0.0f   };
+    const float trans[3] = { x,      y,      z      };
+    t3d_mat4fp_from_srt_euler(out, scale, rot, trans);
+}
+
+// ============================================================
+// ASSET INIT/SHUTDOWN
+// ============================================================
+static void msa_assets_init(void) {
+    // Create lightning first
+    if (!gLightningFx) {
+        gLightningFx = lightning_fx_create("rom:/boss/boss_back_sword_lightning.t3dm");
+        assert(gLightningFx && "lightning_fx_create failed");
+    }
+
+    if (swordModel && swordDpl && swordMatrix &&
+        floorGlowModel && floorGlowDpl && floorGlowMatrix) {
+        return;
+    }
+
+    swordModel     = t3d_model_load("rom:/boss/boss_back_sword.t3dm");
+    floorGlowModel = t3d_model_load("rom:/boss/boss_back_sword_glow.t3dm");
+
+    rspq_block_begin();
+    t3d_model_draw(swordModel);
+    swordDpl = rspq_block_end();
+
+    rspq_block_begin();
+    t3d_model_draw(floorGlowModel);
+    floorGlowDpl = rspq_block_end();
+
+    if (!swordMatrix) {
+        void* aligned = alloc_uncached_aligned16(sizeof(T3DMat4FP) * MSA_MAX_SWORDS, &swordMatrixBase);
+        swordMatrix = (T3DMat4FP*)aligned;
+    }
+    if (!floorGlowMatrix) {
+        void* aligned = alloc_uncached_aligned16(sizeof(T3DMat4FP) * MSA_MAX_SWORDS, &floorGlowMatrixBase);
+        floorGlowMatrix = (T3DMat4FP*)aligned;
+    }
+
+    for (int i = 0; i < MSA_MAX_SWORDS; i++) {
+        msa_build_srt_scaled(&swordMatrix[i],     MODEL_SCALE, 0, -9999, 0, 0);
+        msa_build_srt_scaled(&floorGlowMatrix[i], MODEL_SCALE, 0, -9999, 0, 0);
+    }
+}
+
+static void msa_assets_shutdown(void) {
+    if (swordMatrixBase) {
+        free_uncached(swordMatrixBase);
+        swordMatrixBase = NULL;
+        swordMatrix = NULL;
+    }
+    if (floorGlowMatrixBase) {
+        free_uncached(floorGlowMatrixBase);
+        floorGlowMatrixBase = NULL;
+        floorGlowMatrix = NULL;
+    }
+
+#ifdef RSPQ_BLOCK_FREE_SUPPORTED
+    if (swordDpl) rspq_block_free(swordDpl);
+    if (floorGlowDpl) rspq_block_free(floorGlowDpl);
+#endif
+    swordDpl = NULL;
+    floorGlowDpl = NULL;
+
+    if (swordModel) {
+        t3d_model_free(swordModel);
+        swordModel = NULL;
+    }
+    if (floorGlowModel) {
+        t3d_model_free(floorGlowModel);
+        floorGlowModel = NULL;
+    }
+
+    if (gLightningFx) {
+        lightning_fx_destroy(gLightningFx);
+        gLightningFx = NULL;
+    }
+}
+
+// ============================================================
+// WALL TEXTURE INIT (ONCE)
+// ============================================================
+static void msa_wall_tex_init_once(void) {
+    if (sWallFogSpr) {
+        path_ribbon_set_wall_texture(sWallFogSpr);
+        return;
+    }
+
+    sWallFogSpr = sprite_load("rom:/boss_room/dust.ia8.sprite");
+
+    path_ribbon_set_wall_texture(sWallFogSpr);
+}
+
+// ============================================================
+// ATTACK LOGIC HELPERS
+// ============================================================
+static void reset_sword_runtime(MsaSword *s) {
+    s->t = 0.0f;
+    s->fallT = 0.0f;
+    s->fallTime = MSA_DROP_FALL_TIME_SEC;
+
+    s->renormTick = 0;
+
+    path_ribbon_clear(&s->ribbon);
+    path_ribbon_set_floor(&s->ribbon, gFloorY);
+    path_ribbon_set_seed(&s->ribbon, s->seed);
+
+    s->glowVisible = 1;
+
+    s->lastRibbonXZ[0] = s->pos[0];
+    s->lastRibbonXZ[1] = s->pos[2];
+}
+
+static void make_drop_order(uint32_t *seed) {
+    for (int i = 0; i < gCount; i++) gDropOrder[i] = i;
+
+    for (int i = gCount - 1; i > 0; i--) {
+        uint32_t r = xorshift32(seed);
+        int j = (int)(r % (uint32_t)(i + 1));
+        int tmp = gDropOrder[i];
+        gDropOrder[i] = gDropOrder[j];
+        gDropOrder[j] = tmp;
+    }
+
+    gDropNext = 0;
+    gDropAcc  = 0.0f;
+}
+
+static void spawn_cluster_above_player(uint32_t *seed) {
+    const float px = character.pos[0];
+    const float pz = character.pos[2];
+    const float minSp2 = gMinSpacing * gMinSpacing;
+
+    for (int i = 0; i < gCount; i++) {
+        MsaSword *s = &gSwords[i];
+
+        float sx = px;
+        float sz = pz;
+
+        const int MAX_TRIES = 64;
+        for (int attempt = 0; attempt < MAX_TRIES; attempt++) {
+            float a = frand01(seed) * MSA_TWO_PI;
+            float r = frand01(seed);
+            r = sqrtf(r) * gClusterRadius;
+
+            float cx = px + lut_cos(a) * r;
+            float cz = pz + lut_sin(a) * r;
+
+            int ok = 1;
+            for (int j = 0; j < i; j++) {
+                float d2 = dist2(cx, cz, gSwords[j].spawnX, gSwords[j].spawnZ);
+                if (d2 < minSp2) { ok = 0; break; }
+            }
+            if (ok) { sx = cx; sz = cz; break; }
+            if (attempt == MAX_TRIES - 1) { sx = cx; sz = cz; }
+        }
+
+        s->spawnX = sx;
+        s->spawnZ = sz;
+
+        s->pos[0] = sx;
+        s->pos[1] = CEILING_Y;
+        s->pos[2] = sz;
+
+        float da = frand01(seed) * MSA_TWO_PI;
+        s->dir[0] = lut_cos(da);
+        s->dir[1] = lut_sin(da);
+
+        float ph = frand01(seed) * MSA_TWO_PI;
+        s->figPhase  = ph;
+        s->driftDirX = lut_cos(ph);
+        s->driftDirZ = lut_sin(ph);
+
+        s->state = SW_CEILING;
+        reset_sword_runtime(s);
+    }
+}
+
+static int all_swords_in_state(MsaSwordState st) {
+    for (int i = 0; i < gCount; i++) {
+        if (gSwords[i].state != st) return 0;
+    }
+    return 1;
+}
+
+static int any_swords_active(void) {
+    for (int i = 0; i < gCount; i++) {
+        if (gSwords[i].state != SW_INACTIVE) return 1;
+    }
+    return 0;
+}
+
+// ============================================================
+// PUBLIC API
+// ============================================================
+void msa_set_enabled(bool enabled) { gEnabled = enabled; }
+void msa_set_floor_y(float y) { gFloorY = y; }
+
+void msa_set_sword_count(int count) {
+    if (count < 1) count = 1;
+    if (count > MSA_MAX_SWORDS) count = MSA_MAX_SWORDS;
+    gCount = count;
+}
+
+void msa_set_cluster_spacing(float minSpacing, float radius) {
+    if (minSpacing < 10.0f) minSpacing = 10.0f;
+    if (radius < minSpacing) radius = minSpacing;
+    gMinSpacing = minSpacing;
+    gClusterRadius = radius;
+}
+
+void msa_set_pattern(MsaPattern p) { gPattern = p; (void)gPattern; }
+
+// ============================================================
+// INIT / SHUTDOWN
+// ============================================================
+void msa_init(void) {
+    msa_trig_init_once();
+    msa_assets_init();
+    msa_wall_tex_init_once();
+
+    memset(gSwords, 0, sizeof(gSwords));
+
+    gHitCd = 0.0f;
+    gCollisionAcc = 0.0f;
+
+    gPhase = MSA_PHASE_CEILING_SETUP;
+    gPhaseT = 0.0f;
+
+    gDropNext = 0;
+    gDropAcc  = 0.0f;
+
+    gLoopDelay = 0.0f;
+
+    gDidSpawnThisCycle = 0;
+
+    uint32_t seed = 0xA123BEEF;
+
+    for (int i = 0; i < MSA_MAX_SWORDS; i++) {
+        MsaSword *s = &gSwords[i];
+        s->seed = xorshift32(&seed) ^ (uint32_t)(i * 0x9E3779B9u);
+        s->state = SW_INACTIVE;
+        s->glowVisible = 0;
+
+        path_ribbon_init(&s->ribbon, (uint8_t)MSA_PATH_MAX_POINTS, (float)MSA_PATH_MIN_STEP);
+        path_ribbon_set_floor(&s->ribbon, gFloorY);
+        path_ribbon_set_seed(&s->ribbon, s->seed);
+
+        s->ribbon.wall_height = WALL_HEIGHT;
+        s->ribbon.wall_color_bot = (PRColor){ 255, 210, 0, 155 };
+        s->ribbon.wall_color_top = (PRColor){ 255, 210, 0, 0 };
+
+        s->ribbon.crack_color = (PRColor){ 57, 38, 25, 255 };
+
+        s->ribbon.crack_w_start   = 1.5f;
+        s->ribbon.crack_w_end     = 3.5f;
+        s->ribbon.crack_w_noise   = 0.22f;
+        s->ribbon.crack_tip_taper = 0.22f;
+    }
+}
+
+void msa_shutdown(void) {
+    if (sWallFogSpr) {
+        sprite_free(sWallFogSpr);
+        sWallFogSpr = NULL;
+        path_ribbon_set_wall_texture(NULL);
+    }
+
+    msa_assets_shutdown();
+}
+
+// ============================================================
+// UPDATE
+// ============================================================
+void msa_update(float dt) {
+    if (!gEnabled) return;
+
+    if (dt < 0.0f) dt = 0.0f;
+    if (dt > 0.05f) dt = 0.05f;
+
+    for (int i = 0; i < MSA_MAX_SWORDS; i++) {
+        path_ribbon_update(&gSwords[i].ribbon, dt);
+    }
+
+    if (gHitCd > 0.0f) gHitCd -= dt;
+
+    if (gLightningFx) lightning_fx_update(gLightningFx, dt);
+
+    float charA[3], charB[3], charR;
+    getCharacterCapsuleWorld(charA, charB, &charR);
+
+    gPhaseT += dt;
+
+    if (gLoopDelay > 0.0f) {
+        gLoopDelay -= dt;
+        if (gLoopDelay > 0.0f) return;
+    }
+
+    if (gPhase == MSA_PHASE_CEILING_SETUP) {
+        if (!gDidSpawnThisCycle) {
+            gDidSpawnThisCycle = 1;
+
+            uint32_t seed2 = 0xD00DFEEDu
+                ^ (uint32_t)((int)character.pos[0] * 17)
+                ^ (uint32_t)((int)character.pos[2] * 31);
+
+            spawn_cluster_above_player(&seed2);
+            make_drop_order(&seed2);
+
+            gDropNext = 0;
+            gDropAcc  = 0.0f;
+        }
+
+        if (gPhaseT >= CEILING_HOLD_SEC) {
+            gPhase  = MSA_PHASE_DROPPING;
+            gPhaseT = 0.0f;
+        }
+    }
+
+    if (gPhase == MSA_PHASE_DROPPING) {
+        gDropAcc += dt;
+
+        while (gDropNext < gCount && gDropAcc >= DROP_INTERVAL_SEC) {
+            gDropAcc -= DROP_INTERVAL_SEC;
+
+            int idx = gDropOrder[gDropNext++];
+            MsaSword *s = &gSwords[idx];
+
+            if (s->state == SW_CEILING) {
+                s->state = SW_FALLING;
+                s->fallT = 0.0f;
+                s->fallTime = MSA_DROP_FALL_TIME_SEC;
+            }
+        }
+
+        for (int i = 0; i < gCount; i++) {
+            MsaSword *s = &gSwords[i];
+            if (s->state != SW_FALLING) continue;
+
+            float t = s->fallT;
+            t += (s->fallTime > 0.0001f) ? (dt / s->fallTime) : 1.0f;
+            if (t > 1.0f) t = 1.0f;
+
+            float e = t * t;
+            s->pos[0] = s->spawnX;
+            s->pos[2] = s->spawnZ;
+            s->pos[1] = lerpf(CEILING_Y, gFloorY, e);
+
+            s->fallT = t;
+
+            if (t >= 1.0f) {
+                s->state = SW_LANDED;
+                s->pos[1] = gFloorY;
+
+                s->glowVisible = 0;
+
+                path_ribbon_set_floor(&s->ribbon, gFloorY);
+
+                float dx = character.pos[0] - s->spawnX;
+                float dz = character.pos[2] - s->spawnZ;
+                float lightningYaw = atan2f(dz, dx) + MSA_MODEL_YAW_OFFSET;
+
+                if (gLightningFx) {
+                    lightning_fx_strike(gLightningFx, s->spawnX, gFloorY, s->spawnZ, lightningYaw);
+                }
+            }
+        }
+
+        if (gDropNext >= gCount && all_swords_in_state(SW_LANDED)) {
+            gPhase = MSA_PHASE_POST_LAND;
+            gPhaseT = 0.0f;
+        }
+    }
+
+    if (gPhase == MSA_PHASE_POST_LAND) {
+        if (gPhaseT >= LAND_PAUSE_SEC) {
+            for (int i = 0; i < gCount; i++) {
+                MsaSword *s = &gSwords[i];
+                s->state = SW_SCURVE;
+
+                path_ribbon_clear(&s->ribbon);
+                path_ribbon_set_floor(&s->ribbon, gFloorY);
+                path_ribbon_set_seed(&s->ribbon, s->seed);
+
+                s->lastRibbonXZ[0] = s->pos[0];
+                s->lastRibbonXZ[1] = s->pos[2];
+                path_ribbon_try_add(&s->ribbon, s->pos[0], s->pos[2]);
+                path_ribbon_try_add(&s->ribbon, s->pos[0], s->pos[2]);
+
+                s->glowVisible = 0;
+
+                float ph = frand01(&s->seed) * MSA_TWO_PI;
+                s->figPhase  = ph;
+                s->driftDirX = lut_cos(ph);
+                s->driftDirZ = lut_sin(ph);
+            }
+
+            gPhase = MSA_PHASE_SCURVE;
+            gPhaseT = 0.0f;
+        }
+    }
+
+    if (gPhase == MSA_PHASE_SCURVE) {
+        int done = (gPhaseT >= FIG8_STAGE_SEC);
+
+        const float cx = character.pos[0];
+        const float cz = character.pos[2];
+
+        const float tStage = gPhaseT;
+        const float tMove  = tStage * (float)MSA_FIG8_TIME_SCALE;
+
+        const float omega = MSA_TWO_PI * FIG8_FREQ_HZ;
+
+        for (int i = 0; i < gCount; i++) {
+            MsaSword *s = &gSwords[i];
+            if (s->state != SW_SCURVE) continue;
+
+#if MSA_DO_MOVEMENT
+            float a  = wrap_angle_0_2pi_fast(s->figPhase + omega * tMove);
+            float a2 = wrap_angle_0_2pi_fast(a + a);
+
+            float offX = lut_sin(a)  * FIG8_AMP_X;
+            float offZ = lut_sin(a2) * FIG8_AMP_Z;
+
+            float drift = FIG8_DRIFT_SPEED * tMove;
+
+            float tx = cx + offX + s->driftDirX * drift;
+            float tz = cz + offZ + s->driftDirZ * drift;
+
+            tx = msa_clampf(tx, -4096.0f, 4096.0f);
+            tz = msa_clampf(tz, -4096.0f, 4096.0f);
+
+            const float maxStep = (MSA_MAX_XZ_SPEED * (float)MSA_MOVE_SPEED_MULT) * dt;
+            step_toward_xz(s, tx, tz, maxStep);
+#endif
+
+            s->pos[1] = gFloorY;
+            s->glowVisible = 0;
+
+            if (!msa_isfinite3(s->pos[0], s->pos[1], s->pos[2])) {
+                s->state = SW_INACTIVE;
+                s->glowVisible = 0;
+                path_ribbon_clear(&s->ribbon);
+                continue;
+            }
+
+            (void)path_ribbon_try_add(&s->ribbon, s->pos[0], s->pos[2]);
+
+            if (done) {
+                s->state = SW_DESCEND;
+
+                float descend_sec = (gFloorY - DESPAWN_Y) / (float)MSA_DESCEND_SPEED;
+                if (descend_sec < 0.10f) descend_sec = 0.10f;
+                path_ribbon_start_fade(&s->ribbon, descend_sec);
+            }
+        }
+
+        if (done) {
+            gPhase = MSA_PHASE_DESCEND;
+            gPhaseT = 0.0f;
+        }
+    }
+
+    if (gPhase == MSA_PHASE_DESCEND) {
+        for (int i = 0; i < gCount; i++) {
+            MsaSword *s = &gSwords[i];
+            if (s->state != SW_DESCEND) continue;
+
+            s->pos[1] -= (float)MSA_DESCEND_SPEED * dt;
+            s->glowVisible = 0;
+
+            if (s->pos[1] <= DESPAWN_Y) {
+                s->state = SW_INACTIVE;
+                s->glowVisible = 0;
+
+                if (s->ribbon.dead) {
+                    path_ribbon_clear(&s->ribbon);
+                }
+            }
+        }
+
+        if (!any_swords_active()) {
+            gPhase = MSA_PHASE_CEILING_SETUP;
+            gPhaseT = 0.0f;
+            gLoopDelay = 0.25f;
+            gDidSpawnThisCycle = 0;
+        }
+    }
+
+    // ========================================================
+    // COLLISION
+    // ========================================================
+    bool hitBody = false;
+
+#if MSA_DO_BODY_COLLISION
+    for (int i = 0; i < gCount; i++) {
+        MsaSword *s = &gSwords[i];
+        if (s->state != SW_LANDED && s->state != SW_SCURVE) continue;
+
+        float swordMin[3], swordMax[3];
+        swordBodyAabb(s, swordMin, swordMax);
+        if (scu_capsule_vs_rect_f(charA, charB, charR, swordMin, swordMax)) {
+            hitBody = true;
+            break;
+        }
+    }
+#endif
+
+    bool hitWall = false;
+
+#if MSA_DO_WALL_COLLISION
+    gCollisionAcc += dt;
+    const float tick = 1.0f / (float)MSA_COLLISION_HZ;
+
+    if (gCollisionAcc >= tick) {
+        gCollisionAcc -= tick;
+
+        float vx = 0.0f, vz = 0.0f;
+#if MSA_WALLS_BLOCKING
+        character_get_velocity(&vx, &vz);
+#endif
+
+        float capA[3] = { charA[0], charA[1], charA[2] };
+        float capB[3] = { charB[0], charB[1], charB[2] };
+        float r = charR;
+
+        hitWall = msa_wall_hit_or_block_capsule(capA, capB, r,
+#if MSA_WALLS_BLOCKING
+            &vx, &vz
+#else
+            NULL, NULL
+#endif
+        );
+
+#if MSA_WALLS_BLOCKING
+        character_set_velocity_xz(vx, vz);
+#endif
+    }
+#endif
+
+    if (gHitCd <= 0.0f) {
+        if (hitBody) {
             character_apply_damage(DMG_BODY);
-            g_hit_cd = HIT_COOLDOWN;
-        } else if (hit_trail) {
-            character_apply_damage(DMG_TRAIL);
-            g_hit_cd = HIT_COOLDOWN;
+            gHitCd = HIT_COOLDOWN;
+        } else if (hitWall) {
+            character_apply_damage(DMG_WALL);
+            gHitCd = HIT_COOLDOWN;
+        }
+    }
+}
+
+// ============================================================
+// DRAW
+// ============================================================
+void msa_draw_visuals(T3DViewport *viewport) {
+    (void)viewport;
+
+    if (!gEnabled) return;
+    if (!swordDpl || !swordMatrix || !floorGlowModel || !floorGlowMatrix) return;
+
+    // 1) Swords (zbuf ON)
+    t3d_matrix_push_pos(1);
+    for (int i = 0; i < gCount; i++) {
+        const MsaSword *s = &gSwords[i];
+        if (s->state == SW_INACTIVE) continue;
+        if (!msa_isfinite3(s->pos[0], s->pos[1], s->pos[2])) continue;
+
+        float yaw = 0.0f;
+#if MSA_FACE_DIR
+        yaw = atan2f(s->dir[1], s->dir[0]) + MSA_MODEL_YAW_OFFSET;
+#endif
+        msa_build_srt_scaled(&swordMatrix[i], MODEL_SCALE*2.0f, s->pos[0], s->pos[1], s->pos[2], yaw);
+
+        t3d_matrix_set(&swordMatrix[i], true);
+        rspq_block_run(swordDpl);
+    }
+    t3d_matrix_pop(1);
+
+    // Lightning FX
+    if (gLightningFx) lightning_fx_draw(gLightningFx);
+
+    // Glows
+    t3d_matrix_push_pos(1);
+    for (int i = 0; i < gCount; i++) {
+        const MsaSword *s = &gSwords[i];
+        if (s->state == SW_INACTIVE) continue;
+        if (!s->glowVisible) continue;
+
+        if (!isfinite(s->spawnX) || !isfinite(s->spawnZ) || !isfinite(gFloorY)) continue;
+
+        float dx = character.pos[0] - s->spawnX;
+        float dz = character.pos[2] - s->spawnZ;
+        float glowYaw = atan2f(dz, dx) + MSA_MODEL_YAW_OFFSET;
+
+        msa_build_srt_scaled(&floorGlowMatrix[i], MODEL_SCALE,
+            s->spawnX, gFloorY + 0.5f, s->spawnZ,
+            glowYaw
+        );
+
+        t3d_matrix_set(&floorGlowMatrix[i], true);
+        t3d_model_draw_custom(floorGlowModel, (T3DModelDrawConf){
+            .userData = &floorGlowScrollParams,
+            .tileCb   = tile_scroll,
+        });
+    }
+    t3d_matrix_pop(1);
+
+    // Crack + Wall
+    for (int i = 0; i < MSA_MAX_SWORDS; i++) {
+        const MsaSword *s = &gSwords[i];
+        if (s->ribbon.count < 2) continue;
+        if (s->ribbon.dead) continue;
+
+        path_ribbon_draw_crack(&s->ribbon);
+        path_ribbon_draw_wall(&s->ribbon);
+    }
+}
+
+// ============================================================
+// DEBUG DRAW
+// ============================================================
+static void msa_debug_draw_obb_xz(T3DViewport *vp, const SCU_OBB *o, float y, uint16_t color) {
+    float c = cosf(o->yaw);
+    float s = sinf(o->yaw);
+
+    float hx = o->half[0];
+    float hz = o->half[2];
+
+    float lx[4] = { -hx,  hx,  hx, -hx };
+    float lz[4] = { -hz, -hz,  hz,  hz };
+
+    T3DVec3 p[4];
+
+    for (int i = 0; i < 4; i++) {
+        float wx = o->center[0] + (c * lx[i] - s * lz[i]);
+        float wz = o->center[2] + (s * lx[i] + c * lz[i]);
+        p[i] = (T3DVec3){{ wx, y, wz }};
+    }
+
+    debug_draw_tri_wire(vp, &p[0], &p[1], &p[2], color);
+    debug_draw_tri_wire(vp, &p[0], &p[2], &p[3], color);
+}
+
+void msa_draw_debug(T3DViewport *viewport) {
+    if (!gEnabled) return;
+    if (!DEBUG_DRAW_ENVIRONMENTAL_HAZARDS) return;
+
+    const uint16_t colSword = DEBUG_COLORS[0];
+    const uint16_t colWall  = DEBUG_COLORS[2];
+
+    for (int i = 0; i < gCount; i++) {
+        if (gSwords[i].state == SW_INACTIVE) continue;
+        T3DVec3 p = {{ gSwords[i].pos[0], gSwords[i].pos[1], gSwords[i].pos[2] }};
+        debug_draw_cross(viewport, &p, 12.0f, colSword);
+    }
+
+    for (int si = 0; si < gCount; si++) {
+        const MsaSword *s = &gSwords[si];
+        const PathRibbon *pr = &s->ribbon;
+
+        if (pr->dead) continue;
+        int n = (int)pr->count;
+        if (n < 2) continue;
+
+        for (int i = 0; i < n - 1; i++) {
+            float x0 = pr->pts[i][0];
+            float z0 = pr->pts[i][2];
+            float x1 = pr->pts[i+1][0];
+            float z1 = pr->pts[i+1][2];
+
+            if (!isfinite(x0) || !isfinite(z0) || !isfinite(x1) || !isfinite(z1)) continue;
+
+            SCU_OBB o;
+            msa_build_wall_obb_from_seg(&o, x0, z0, x1, z1);
+
+            msa_debug_draw_obb_xz(viewport, &o, gFloorY, colWall);
         }
     }
 }
 
 void msa_draw(T3DViewport *viewport) {
-    if (!g_enabled) return;
-
-    // Draw visuals
-    for (int i = 0; i < g_count; i++) {
-        sword_trail_instance_draw(&g_swords[i].trail, viewport);
-    }
-
-    if (!debugDraw) return;
-
-    // Debug: sword body capsules + trail segment capsules
-    for (int i = 0; i < g_count; i++) {
-        float A[3], B[3];
-        sword_body_capsule(&g_swords[i], A, B);
-
-        T3DVec3 a = {{ A[0], A[1], A[2] }};
-        T3DVec3 b = {{ B[0], B[1], B[2] }};
-        debug_draw_capsule(viewport, &a, &b, SWORD_RADIUS, DEBUG_COLORS[5]);
-
-        T3DVec3 tip = {{ g_swords[i].pos[0], GROUND_Y, g_swords[i].pos[2] }};
-        debug_draw_cross(viewport, &tip, 10.0f, DEBUG_COLORS[0]);
-    }
-
-    for (int i = 0; i < MAX_TRAIL_SEGS; i++) {
-        if (!g_segs[i].active) continue;
-        T3DVec3 a = {{ g_segs[i].a[0], g_segs[i].a[1], g_segs[i].a[2] }};
-        T3DVec3 b = {{ g_segs[i].b[0], g_segs[i].b[1], g_segs[i].b[2] }};
-        debug_draw_capsule(viewport, &a, &b, g_segs[i].radius, DEBUG_COLORS[1]);
-    }
+    msa_draw_visuals(viewport);
 }

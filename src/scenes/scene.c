@@ -1035,7 +1035,16 @@ void scene_init(void)
     dust_reset();
     ground_crush_reset();
 
-    msa_init(); // multi sword attack
+    msa_init();
+
+    // Optional: tweak the “cluster” layout (defaults are fine if you don’t call this)
+    //msa_set_cluster_spacing(80.0f, 220.0f);
+
+    // Optional: if you exposed msa_set_render_assets and you have these pointers here
+    // msa_set_render_assets(swordModel, swordDpl, swordMatrixArray, glowModel,  glowDpl,  glowMatrixArray);
+
+    msa_set_enabled(true);
+    msa_set_pattern(MSA_PATTERN_GROUND_SWEEP);
 }
 
 static bool scene_get_boss_bone_world_pos(int boneIndex, T3DVec3 *outWorld);
@@ -3898,8 +3907,8 @@ void scene_draw(T3DViewport *viewport)
     t3d_matrix_pop(1);
     
 
-    if(g_boss->isAttacking || g_boss->health <= 0 || g_boss->state == BOSS_STATE_COMBO_ATTACK || g_boss->state == BOSS_STATE_STOMP) // TODO: Hacky fix but something weird is going on with comnbo1 and we dont have time
-    {
+    // if(g_boss->isAttacking || g_boss->health <= 0 || g_boss->state == BOSS_STATE_COMBO_ATTACK || g_boss->state == BOSS_STATE_STOMP) // TODO: Hacky fix but something weird is going on with comnbo1 and we dont have time
+    // {
         //Draw depth environment
         rdpq_sync_pipe();
         rdpq_mode_zbuf(true, true);
@@ -3908,18 +3917,18 @@ void scene_draw(T3DViewport *viewport)
             t3d_matrix_set(roomFloorMatrix, true);
             rspq_block_run(roomFloorDpl);
         t3d_matrix_pop(1); 
-    }
-    else
-    {
-        //Draw depth environment
-        rdpq_sync_pipe();
-        rdpq_mode_zbuf(false, false);
+    // }
+    // else
+    // {
+    //     //Draw depth environment
+    //     rdpq_sync_pipe();
+    //     rdpq_mode_zbuf(false, false);
 
-        t3d_matrix_push_pos(1);   
-            t3d_matrix_set(roomFloorMatrix, true);
-            rspq_block_run(roomFloorDpl);
-        t3d_matrix_pop(1); 
-    }
+    //     t3d_matrix_push_pos(1);   
+    //         t3d_matrix_set(roomFloorMatrix, true);
+    //         rspq_block_run(roomFloorDpl);
+    //     t3d_matrix_pop(1); 
+    // }
 
     rdpq_sync_pipe();
     rdpq_mode_zbuf(false, false);
@@ -3984,7 +3993,7 @@ void scene_draw(T3DViewport *viewport)
 
     t3d_matrix_pop(1);
 
-    msa_draw(viewport); // multi sword attack
+    msa_draw_visuals(viewport); // multi sword attack
 
     //Draw transparencies last
     // t3d_matrix_push_pos(1);    
@@ -4248,6 +4257,9 @@ void scene_draw(T3DViewport *viewport)
     if (videoPreroll != VIDEO_PREROLL_NONE) {
         display_utility_solid_black_transition(false, VIDEO_FADE_SPEED);
     }
+
+
+    msa_draw_debug(viewport);
 
 }
 
