@@ -25,6 +25,8 @@ typedef enum {
     BOSS_STATE_LUNGE_STARTER, // used for distance lunges as anticipation
     BOSS_STATE_STOMP,
     BOSS_STATE_ATTACK1,
+    BOSS_STATE_AERIAL_SWORD_BARRAGE,
+    BOSS_STATE_GROUND_SWEEP,
 } BossState;
 
 typedef enum {
@@ -57,6 +59,8 @@ typedef enum {
     BOSS_ATTACK_LUNGE_STARTER,
     BOSS_ATTACK_STOMP,
     BOSS_ATTACK_ATTACK1,
+    BOSS_ATTACK_AERIAL_SWORD_BARRAGE,
+    BOSS_ATTACK_GROUND_SWEEP,
     BOSS_ATTACK_COUNT
 } BossAttackId;
 
@@ -157,6 +161,11 @@ typedef struct Boss {
     float stompCooldown;
     // fast close range attack
     float attack1Cooldown;
+    // aerial sword barrage attack
+    float swordBarrageCooldown;
+    // ground sweep (MSA ceiling drop) attack
+    float groundSweepCooldown;
+    bool  groundSweepStarted;
 
     // Attack state tracking
     bool isAttacking;
@@ -199,6 +208,23 @@ typedef struct Boss {
     bool  flipAttackMidReaimed;     // ensures mid re-aim happens only once
     float flipAttackTravelYaw;      // baseline yaw used for +/- clamp
     float flipAttackPastDist;       // cached overshoot distance
+    
+    // Aerial Sword Barrage state
+    int consecutiveSwordRingUses;   // Track consecutive uses (max 2)
+    int currentBarrageVariation;    // 0 = simultaneous, 1 = sequential
+    float figureEightPhase;         // Starting phase for figure 8 motion
+    float hoverCenterPos[3];        // Center position for hover
+    float swordRingRadius;          // Ring radius for sword placement
+    float swordRingHeight;          // Height offset for sword ring
+    int swordRingCount;             // Number of swords in ring
+    bool swordRingSpawned;          // Whether swords have been spawned
+    int swordRingFiredCount;        // Number of swords that have fired
+    float swordRingFireTimer;       // Timer for sequential firing
+    float aerialSwordPositions[12][3]; // Starting positions of aerial swords [index][xyz]
+    float aerialSwordTargets[12][3]; // Target positions for aerial swords [index][xyz]  
+    float aerialSwordProgress[12];   // Progress [0-1] for each aerial sword
+    bool aerialSwordActive[12];      // Whether each aerial sword is active
+    bool preTelegraphFX;            // Flag for telegraph effects
     
     // Targeting system
     float debugTargetingPos[3];
