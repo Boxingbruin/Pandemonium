@@ -1037,14 +1037,9 @@ void scene_init(void)
 
     msa_init();
 
-    // Optional: tweak the “cluster” layout (defaults are fine if you don’t call this)
-    //msa_set_cluster_spacing(80.0f, 220.0f);
-
-    // Optional: if you exposed msa_set_render_assets and you have these pointers here
-    // msa_set_render_assets(swordModel, swordDpl, swordMatrixArray, glowModel,  glowDpl,  glowMatrixArray);
-
-    msa_set_enabled(true);
-    msa_set_pattern(MSA_PATTERN_GROUND_SWEEP);
+    // DEBUG: uncomment to start the fight in phase 2
+    if (g_boss) g_boss->phaseIndex = 2;
+    phase2CutsceneTriggered = true;
 }
 
 static bool scene_get_boss_bone_world_pos(int boneIndex, T3DVec3 *outWorld);

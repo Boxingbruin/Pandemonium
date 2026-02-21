@@ -29,6 +29,8 @@
 #include "utilities/game_math.h"
 #include "utilities/animation_utility.h"
 
+#include "environmental_mechanics/multi_sword_attacks.h"
+
 // Access global character instance
 extern Character character;
 
@@ -109,6 +111,8 @@ static void boss_attacks_handle_flip_attack(Boss* boss, float dt);
 static void boss_attacks_handle_lunge_starter(Boss* boss, float dt);
 static void boss_attacks_handle_stomp(Boss* boss, float dt);
 static void boss_attacks_handle_attack1(Boss* boss, float dt);
+static void boss_attacks_handle_aerial_sword_barrage(Boss* boss, float dt);
+static void boss_attacks_handle_ground_sweep(Boss* boss, float dt);
 
 void boss_attacks_update(Boss* boss, float dt) {
     if (!boss) return;
@@ -122,7 +126,9 @@ void boss_attacks_update(Boss* boss, float dt) {
                         boss->state == BOSS_STATE_FLIP_ATTACK ||
                         boss->state == BOSS_STATE_LUNGE_STARTER ||
                         boss->state == BOSS_STATE_STOMP ||
-                        boss->state == BOSS_STATE_ATTACK1);
+                        boss->state == BOSS_STATE_ATTACK1 ||
+                        boss->state == BOSS_STATE_AERIAL_SWORD_BARRAGE ||
+                        boss->state == BOSS_STATE_GROUND_SWEEP);
 
     if (!isAttackState) {
         boss->handAttackColliderActive = false;
@@ -164,6 +170,15 @@ void boss_attacks_update(Boss* boss, float dt) {
         case BOSS_STATE_ATTACK1:
             boss_attacks_handle_attack1(boss, dt);
             break;
+            
+        case BOSS_STATE_AERIAL_SWORD_BARRAGE:
+            boss_attacks_handle_aerial_sword_barrage(boss, dt);
+            break;
+
+        case BOSS_STATE_GROUND_SWEEP:
+            boss_attacks_handle_ground_sweep(boss, dt);
+            break;
+            
         default:
             // Not an attack state, nothing to do
             break;
@@ -1090,5 +1105,297 @@ static void boss_attacks_handle_flip_attack(Boss* boss, float dt)
         if (mdx != 0.0f || mdz != 0.0f) {
             boss->rot[1] = -atan2f(-mdz, mdx) + T3D_PI;
         }
+    }
+}
+
+// Ground Sweep Attack Implementation
+// ====================================
+// Boss stays on the ground while MSA spawns swords above the player (CEILING_SETUP),
+// drops them (DROPPING → POST_LAND → SCURVE → DESCEND), then signals done.
+
+static void boss_attacks_handle_ground_sweep(Boss* boss, float dt) {
+    if (!boss) return;
+
+    if (!boss->groundSweepStarted) {
+        boss->groundSweepStarted = true;
+        msa_set_floor_y(boss->pos[1]);
+        msa_set_sword_count(5);
+        msa_ground_sweep_start();
+    }
+
+    // Boss faces the player slowly while swords do their work.
+    boss_turn_towards_player(boss, dt, 0.4f);
+
+    // No attack colliders — damage is handled by MSA sword collision.
+    boss->handAttackColliderActive   = false;
+    boss->sphereAttackColliderActive = false;
+    // (AI transition is handled in boss_ai.c once msa_ground_sweep_is_done() is true)
+}
+
+// Aerial Sword Barrage Attack Implementation
+// ==========================================
+
+static void boss_attacks_spawn_sword_ring(Boss* boss) {
+    if (!boss || boss->swordRingSpawned) return;
+    
+    boss->swordRingSpawned = true;
+    
+    float centerX = boss->pos[0];
+    float centerY = boss->pos[1] + boss->swordRingHeight;
+    float centerZ = boss->pos[2];
+    float radius = boss->swordRingRadius;
+    int count = boss->swordRingCount / 2;
+
+    if (count < 1) count = 1;
+    if (count > 12) count = 12;
+    boss->swordRingCount = count;
+
+    msa_set_enabled(true);
+    msa_set_floor_y(centerY);
+    msa_spawn_aerial_ring(centerX, centerY, centerZ, radius, count);
+}
+
+static void boss_attacks_update_figure_eight_hover(Boss* boss, float dt) {
+    if (!boss) return;
+    
+    // Figure 8 motion parameters - slower and vertical movement
+    const float omega = 2.0f * T3D_PI * 0.2f; // 0.2 Hz frequency (slower)
+    const float amplitudeY = 15.0f;  // Vertical bob amplitude
+    const float amplitudeForward = 25.0f;  // Forward/back movement toward player
+    const float maxSpeed = 40.0f * dt;  // Much slower movement
+    
+    float hoverTimer = boss->stateTimer;
+    float a = boss->figureEightPhase + omega * hoverTimer;
+    
+    // Calculate direction toward player from hover center
+    float toPlayerX = character.pos[0] - boss->hoverCenterPos[0];
+    float toPlayerZ = character.pos[2] - boss->hoverCenterPos[2];
+    float distToPlayer = sqrtf(toPlayerX*toPlayerX + toPlayerZ*toPlayerZ);
+    
+    float dirX = 0.0f, dirZ = 0.0f;
+    if (distToPlayer > 0.001f) {
+        dirX = toPlayerX / distToPlayer;
+        dirZ = toPlayerZ / distToPlayer;
+    }
+    
+    // Figure 8 motion: vertical bob + forward/back movement toward player
+    float offsetY = sinf(a * 2.0f) * amplitudeY;  // Vertical bob (double frequency)
+    float offsetForward = sinf(a) * amplitudeForward;  // Forward/back movement
+    
+    // Target position: hover center + vertical bob + forward/back toward player
+    float targetX = boss->hoverCenterPos[0] + dirX * offsetForward;
+    float targetY = boss->hoverCenterPos[1] + 80.0f + offsetY;  // Base hover height + bob
+    float targetZ = boss->hoverCenterPos[2] + dirZ * offsetForward;
+    
+    // Apply movement with speed limiting
+    float dx = targetX - boss->pos[0];
+    float dy = targetY - boss->pos[1];
+    float dz = targetZ - boss->pos[2];
+    float dist = sqrtf(dx*dx + dy*dy + dz*dz);
+    
+    if (dist > maxSpeed && dist > 0.001f) {
+        dx = (dx / dist) * maxSpeed;
+        dy = (dy / dist) * maxSpeed;
+        dz = (dz / dist) * maxSpeed;
+    }
+    
+    boss->pos[0] += dx;
+    boss->pos[1] += dy;
+    boss->pos[2] += dz;
+}
+
+static void boss_attacks_cleanup_sword_ring(Boss* boss) {
+    if (!boss) return;
+    
+    // Reset boss state
+    boss->swordRingSpawned = false;
+    boss->swordRingFiredCount = 0;
+    boss->swordRingFireTimer = 0.0f;
+    boss->preTelegraphFX = false;
+}
+
+static void boss_attacks_fire_sword_projectile(Boss* boss, int swordIndex) {
+    if (!boss || swordIndex >= 12 || swordIndex >= boss->swordRingCount) return;
+
+    // Target current player position.
+    float targetX = character.pos[0];
+    float targetY = character.pos[1] + 10.0f;
+    float targetZ = character.pos[2];
+
+    msa_fire_aerial_sword(swordIndex, targetX, targetY, targetZ);
+}
+
+static void boss_attacks_update_aerial_swords(Boss* boss, float dt) {
+    if (!boss) return;
+    
+    const float swordSpeed = 120.0f; // Units per second
+    
+    for (int i = 0; i < 12; i++) {
+        if (!boss->aerialSwordActive[i]) continue;
+        
+        // Update progress
+        float startX = boss->aerialSwordPositions[i][0];
+        float startY = boss->aerialSwordPositions[i][1];
+        float startZ = boss->aerialSwordPositions[i][2];
+        
+        float targetX = boss->aerialSwordTargets[i][0];
+        float targetY = boss->aerialSwordTargets[i][1];
+        float targetZ = boss->aerialSwordTargets[i][2];
+        
+        float dx = targetX - startX;
+        float dy = targetY - startY;
+        float dz = targetZ - startZ;
+        float totalDistance = sqrtf(dx*dx + dy*dy + dz*dz);
+        
+        if (totalDistance > 0.1f) {
+            float progressIncrement = (swordSpeed * dt) / totalDistance;
+            boss->aerialSwordProgress[i] += progressIncrement;
+            
+            if (boss->aerialSwordProgress[i] >= 1.0f) {
+                // Sword reached target - check for hit
+                boss->aerialSwordProgress[i] = 1.0f;
+                
+                // Check collision with player
+                float hitDx = character.pos[0] - targetX;
+                float hitDy = character.pos[1] - targetY;
+                float hitDz = character.pos[2] - targetZ;
+                float hitDist = sqrtf(hitDx*hitDx + hitDy*hitDy + hitDz*hitDz);
+                
+                if (hitDist <= 25.0f) {
+                    float damagePerSword = 50.0f / (float)boss->swordRingCount;
+                    character_apply_damage(damagePerSword);
+                    boss_attacks_on_player_hit(damagePerSword);
+                }
+                
+                // Impact effect
+                scene_spawn_dust_burst(targetX, targetY, targetZ, 1.5f);
+                
+                // Deactivate sword
+                boss->aerialSwordActive[i] = false;
+            }
+        } else {
+            boss->aerialSwordActive[i] = false;
+        }
+    }
+}
+
+static void boss_attacks_handle_aerial_sword_barrage(Boss* boss, float dt) {
+    if (!boss) return;
+    
+    // Phase timings
+    const float liftDuration = 1.0f;      // Lift to hover height
+    const float hoverDuration = 3.0f;     // Minimum hover phase
+    const float descendDuration = 1.0f;   // Descend back down
+    
+    const float hoverHeight = 80.0f;      // Height above ground
+    const float fireStartTime = liftDuration + 0.5f;   // Start firing after lift + delay
+    const float sequentialFireInterval = 0.5f;         // Time between sequential shots
+
+    float requiredHoverDuration = hoverDuration;
+    if (boss->currentBarrageVariation != 0) {
+        float sequentialFireSpan = 0.0f;
+        if (boss->swordRingCount > 1) {
+            sequentialFireSpan = (float)(boss->swordRingCount - 1) * sequentialFireInterval;
+        }
+
+        float hoverNeededForAllThrows = (fireStartTime - liftDuration) + sequentialFireSpan + 0.1f;
+        if (hoverNeededForAllThrows > requiredHoverDuration) {
+            requiredHoverDuration = hoverNeededForAllThrows;
+        }
+    }
+
+    const float hoverEndTime = liftDuration + requiredHoverDuration;
+    const float totalDuration = hoverEndTime + descendDuration;
+    
+    // Phase 1: Lift to hover height (0.0 - 1.0s)
+    if (boss->stateTimer < liftDuration) {
+        float t = boss->stateTimer / liftDuration;
+        boss->pos[1] = boss->hoverCenterPos[1] + t * hoverHeight;
+        
+        // Face player during lift
+        boss_turn_towards_player(boss, dt, 0.8f);
+        
+        // Spawn sword ring at 50% lift
+        if (boss->stateTimer >= liftDuration * 0.5f && !boss->swordRingSpawned) {
+            boss_attacks_spawn_sword_ring(boss);
+        }
+        
+        // Pre-telegraph VFX placeholder (dust removed).
+        if (boss->stateTimer >= 0.5f && !boss->preTelegraphFX) {
+            boss->preTelegraphFX = true;
+        }
+        
+        // Boss is invulnerable during lift
+        boss->handAttackColliderActive = false;
+        boss->sphereAttackColliderActive = false;
+    }
+    
+    // Phase 2: Hover and attack (extends until all swords can be thrown)
+    else if (boss->stateTimer < hoverEndTime) {
+        boss->pos[1] = boss->hoverCenterPos[1] + hoverHeight;
+        
+        // Figure 8 hover motion
+        boss_attacks_update_figure_eight_hover(boss, dt);
+
+        // Keep unthrown swords surrounding the boss body and aiming tips at player
+        msa_update_aerial_ring_pose(
+            boss->pos[0],
+            boss->pos[1] + boss->swordRingHeight,
+            boss->pos[2],
+            boss->swordRingRadius,
+            character.pos[0],
+            character.pos[1],
+            character.pos[2]
+        );
+        
+        // Boss remains invulnerable during hover
+        boss->handAttackColliderActive = false;
+        boss->sphereAttackColliderActive = false;
+        
+        // Fire swords sequentially (one-by-one)
+        if (boss->stateTimer >= fireStartTime && boss->swordRingFiredCount < boss->swordRingCount) {
+            if (boss->swordRingFireTimer <= 0.0f) {
+                boss_attacks_fire_sword_projectile(boss, boss->swordRingFiredCount);
+                boss->swordRingFiredCount++;
+                boss->swordRingFireTimer = sequentialFireInterval;
+            }
+            boss->swordRingFireTimer -= dt;
+        }
+
+        // Failsafe: ensure no sword is left behind before descent starts
+        if (boss->stateTimer + dt >= hoverEndTime && boss->swordRingFiredCount < boss->swordRingCount) {
+            while (boss->swordRingFiredCount < boss->swordRingCount) {
+                boss_attacks_fire_sword_projectile(boss, boss->swordRingFiredCount);
+                boss->swordRingFiredCount++;
+            }
+        }
+
+        // Once all swords are thrown, begin descent quickly.
+        if (boss->swordRingFiredCount >= boss->swordRingCount) {
+            const float DESCENT_LEAD_SEC = 0.15f;
+            float descendTriggerTime = hoverEndTime - DESCENT_LEAD_SEC;
+            if (boss->stateTimer < descendTriggerTime) {
+                boss->stateTimer = descendTriggerTime;
+            }
+        }
+    }
+    
+    // Phase 3: Descend
+    else if (boss->stateTimer < totalDuration) {
+        float t = (boss->stateTimer - hoverEndTime) / descendDuration;
+        boss->pos[1] = boss->hoverCenterPos[1] + hoverHeight * (1.0f - t);
+        
+        // Face player during descent
+        boss_turn_towards_player(boss, dt, 1.0f);
+        
+        // Re-enable vulnerability during descent
+        boss->handAttackColliderActive = false;
+        boss->sphereAttackColliderActive = false;
+    }
+    
+    // Attack complete - cleanup handled by AI state transition
+    if (boss->stateTimer >= totalDuration) {
+        boss->pos[1] = boss->hoverCenterPos[1]; // Ensure back on ground
+        boss_attacks_cleanup_sword_ring(boss);
     }
 }

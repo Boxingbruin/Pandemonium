@@ -133,7 +133,10 @@ typedef enum {
     SW_FALLING  = 2,
     SW_LANDED   = 3,
     SW_SCURVE   = 4,
-    SW_DESCEND  = 5
+    SW_DESCEND  = 5,
+    SW_AERIAL_FLY = 6,
+    SW_AERIAL_AIM = 7,
+    SW_AERIAL_STUCK = 8
 } MsaSwordState;
 
 typedef struct {
@@ -185,6 +188,39 @@ static float gDropAcc  = 0.0f;
 static float gLoopDelay = 0.0f;
 
 static uint8_t gDidSpawnThisCycle = 0;
+
+static bool gAerialMode = false;
+static float gAerialTargets[MSA_MAX_SWORDS][3];
+
+// Ground-sweep single-cycle mode: set true while the boss is running the attack;
+// cleared + gGroundSweepDone set true once the DESCEND phase fully completes.
+static bool gGroundSweepActive = false;
+static bool gGroundSweepDone   = false;
+static const float AERIAL_SPEED = 1000.0f;
+static const float AERIAL_MODEL_PITCH_OFFSET = 0.0f;
+static float gAerialAimTimer[MSA_MAX_SWORDS];
+static const float AERIAL_AIM_TIME = 0.55f;  // how long the aim-rotate window lasts
+static float gAerialStickTimer[MSA_MAX_SWORDS];
+static const float AERIAL_STUCK_TIME = 0.75f;
+static const float AERIAL_SINK_SPEED = 120.0f;
+static const float AERIAL_SINK_DEPTH = 28.0f;
+
+// Per-sword start angles (captured when fired from SW_CEILING)
+static float gAerialStartYaw  [MSA_MAX_SWORDS];
+static float gAerialStartPitch[MSA_MAX_SWORDS];
+static float gAerialStartRoll [MSA_MAX_SWORDS];
+// Per-sword landing angles (captured at moment of impact)
+static float gAerialLandYaw   [MSA_MAX_SWORDS];
+static float gAerialLandPitch [MSA_MAX_SWORDS];
+static float gAerialLandRoll  [MSA_MAX_SWORDS];
+
+// Short-path lerp between two angles.
+static float aerial_angle_lerp(float a, float b, float t) {
+    float d = b - a;
+    while (d >  (float)T3D_PI) d -= 2.0f * (float)T3D_PI;
+    while (d < -(float)T3D_PI) d += 2.0f * (float)T3D_PI;
+    return a + d * t;
+}
 
 // ============================================================
 // UN-CACHED 16-BYTE ALIGNED ALLOC
@@ -686,6 +722,33 @@ void msa_set_cluster_spacing(float minSpacing, float radius) {
 
 void msa_set_pattern(MsaPattern p) { gPattern = p; (void)gPattern; }
 
+// Start a single ground-sweep cycle driven by the boss AI.
+// Resets the MSA to CEILING_SETUP, runs one full cycle, then signals done.
+void msa_ground_sweep_start(void) {
+    // Reset all swords
+    for (int i = 0; i < MSA_MAX_SWORDS; i++) {
+        MsaSword *s = &gSwords[i];
+        s->state = SW_INACTIVE;
+        s->glowVisible = 0;
+        path_ribbon_clear(&s->ribbon);
+    }
+
+    gPhase          = MSA_PHASE_CEILING_SETUP;
+    gPhaseT         = 0.0f;
+    gLoopDelay      = 0.0f;
+    gDidSpawnThisCycle = 0;
+    gDropNext       = 0;
+    gDropAcc        = 0.0f;
+
+    gGroundSweepActive = true;
+    gGroundSweepDone   = false;
+    gEnabled           = true;
+}
+
+bool msa_ground_sweep_is_done(void) {
+    return gGroundSweepDone;
+}
+
 // ============================================================
 // INIT / SHUTDOWN
 // ============================================================
@@ -708,6 +771,20 @@ void msa_init(void) {
     gLoopDelay = 0.0f;
 
     gDidSpawnThisCycle = 0;
+
+    gAerialMode = false;
+    memset(gAerialTargets, 0, sizeof(gAerialTargets));
+    memset(gAerialAimTimer,    0, sizeof(gAerialAimTimer));
+    memset(gAerialStickTimer,   0, sizeof(gAerialStickTimer));
+    memset(gAerialStartYaw,     0, sizeof(gAerialStartYaw));
+    memset(gAerialStartPitch,   0, sizeof(gAerialStartPitch));
+    memset(gAerialStartRoll,    0, sizeof(gAerialStartRoll));
+    memset(gAerialLandYaw,      0, sizeof(gAerialLandYaw));
+    memset(gAerialLandPitch,    0, sizeof(gAerialLandPitch));
+    memset(gAerialLandRoll,     0, sizeof(gAerialLandRoll));
+
+    gGroundSweepActive = false;
+    gGroundSweepDone   = false;
 
     uint32_t seed = 0xA123BEEF;
 
@@ -760,6 +837,132 @@ void msa_update(float dt) {
     if (gHitCd > 0.0f) gHitCd -= dt;
 
     if (gLightningFx) lightning_fx_update(gLightningFx, dt);
+
+    if (gAerialMode) {
+        bool anyAerialSword = false;
+        for (int i = 0; i < gCount; i++) {
+            MsaSword *s = &gSwords[i];
+
+            if (s->state == SW_CEILING || s->state == SW_AERIAL_AIM || s->state == SW_AERIAL_FLY || s->state == SW_AERIAL_STUCK) {
+                anyAerialSword = true;
+            }
+
+            if (s->state == SW_AERIAL_STUCK) {
+                if (gAerialStickTimer[i] > 0.0f) {
+                    gAerialStickTimer[i] -= dt;
+                } else {
+                    s->pos[1] -= AERIAL_SINK_SPEED * dt;
+                    float sinkEndY = gAerialTargets[i][1] - AERIAL_SINK_DEPTH;
+                    if (s->pos[1] <= sinkEndY) {
+                        s->state = SW_INACTIVE;
+                        s->glowVisible = 0;
+                        path_ribbon_clear(&s->ribbon);
+                    }
+                }
+                continue;
+            }
+
+            if (s->state == SW_AERIAL_AIM) {
+                float tx = gAerialTargets[i][0];
+                float tz = gAerialTargets[i][2];
+
+                float dx = tx - s->pos[0];
+                float dz = tz - s->pos[2];
+                float d2 = dx*dx + dz*dz;
+                if (d2 > 0.0001f) {
+                    float inv = fast_rsqrtf(d2);
+                    s->dir[0] = dx * inv;
+                    s->dir[1] = dz * inv;
+                }
+
+                gAerialAimTimer[i] -= dt;
+                if (gAerialAimTimer[i] <= 0.0f) {
+                    s->state = SW_AERIAL_FLY;
+                }
+                continue;
+            }
+
+            if (s->state != SW_AERIAL_FLY) continue;
+
+            float tx = gAerialTargets[i][0];
+            float ty = gAerialTargets[i][1];
+            float tz = gAerialTargets[i][2];
+
+            float dx = tx - s->pos[0];
+            float dy = ty - s->pos[1];
+            float dz = tz - s->pos[2];
+            float d2 = dx*dx + dy*dy + dz*dz;
+
+            if (d2 < 1.0f) {
+                float pdx = character.pos[0] - tx;
+                float pdy = character.pos[1] - ty;
+                float pdz = character.pos[2] - tz;
+                float p2 = pdx*pdx + pdy*pdy + pdz*pdz;
+
+                if (p2 <= (32.0f * 32.0f) && gHitCd <= 0.0f) {
+                    character_apply_damage(DMG_BODY);
+                    gHitCd = HIT_COOLDOWN;
+                }
+
+                // Lock in the flying orientation at the moment of impact.
+                {
+                    float ldx = tx - s->pos[0];
+                    float ldy = ty - s->pos[1];
+                    float ldz = tz - s->pos[2];
+                    float lxz = sqrtf(ldx*ldx + ldz*ldz);
+                    if (lxz < 0.001f) { ldx = s->dir[0]; ldz = s->dir[1]; lxz = 1.0f; ldy = 0.0f; }
+                    gAerialLandYaw  [i] = atan2f(ldz, ldx) + MSA_MODEL_YAW_OFFSET;
+                    gAerialLandPitch[i] = -atan2f(ldy, lxz + 0.0001f) + AERIAL_MODEL_PITCH_OFFSET;
+                    gAerialLandRoll [i] = (float)T3D_PI * 0.5f;
+                }
+
+                s->pos[0] = tx;
+                s->pos[1] = ty;
+                s->pos[2] = tz;
+
+                s->state = SW_AERIAL_STUCK;
+                gAerialStickTimer[i] = AERIAL_STUCK_TIME;
+                s->glowVisible = 0;
+                continue;
+            }
+
+            float invD = fast_rsqrtf(d2);
+            float nx = dx * invD;
+            float ny = dy * invD;
+            float nz = dz * invD;
+
+            float step = AERIAL_SPEED * dt;
+            float dist = sqrtf(d2);
+            if (step > dist) step = dist;
+
+            s->pos[0] += nx * step;
+            s->pos[1] += ny * step;
+            s->pos[2] += nz * step;
+
+            float xz2 = nx*nx + nz*nz;
+            if (xz2 > 0.0001f) {
+                s->dir[0] = nx;
+                s->dir[1] = nz;
+            }
+
+            // Keep tip facing player while flying (visual polish)
+            float pdx = character.pos[0] - s->pos[0];
+            float pdz = character.pos[2] - s->pos[2];
+            float pd2 = pdx*pdx + pdz*pdz;
+            if (pd2 > 0.0001f) {
+                float pinv = fast_rsqrtf(pd2);
+                s->dir[0] = pdx * pinv;
+                s->dir[1] = pdz * pinv;
+            }
+        }
+
+        if (!anyAerialSword) {
+            gAerialMode = false;
+            gCount = 0;
+        }
+
+        return;
+    }
 
     float charA[3], charB[3], charR;
     getCharacterCapsuleWorld(charA, charB, &charR);
@@ -955,10 +1158,17 @@ void msa_update(float dt) {
         }
 
         if (!any_swords_active()) {
-            gPhase = MSA_PHASE_CEILING_SETUP;
-            gPhaseT = 0.0f;
-            gLoopDelay = 0.25f;
-            gDidSpawnThisCycle = 0;
+            if (gGroundSweepActive) {
+                // One full cycle done — signal boss and stop.
+                gGroundSweepActive = false;
+                gGroundSweepDone   = true;
+                gEnabled           = false;
+            } else {
+                gPhase = MSA_PHASE_CEILING_SETUP;
+                gPhaseT = 0.0f;
+                gLoopDelay = 0.25f;
+                gDidSpawnThisCycle = 0;
+            }
         }
     }
 
@@ -1044,7 +1254,55 @@ void msa_draw_visuals(T3DViewport *viewport) {
 #if MSA_FACE_DIR
         yaw = atan2f(s->dir[1], s->dir[0]) + MSA_MODEL_YAW_OFFSET;
 #endif
-        msa_build_srt_scaled(&swordMatrix[i], MODEL_SCALE*2.0f, s->pos[0], s->pos[1], s->pos[2], yaw);
+
+        if (gAerialMode && s->state == SW_CEILING) {
+            // Keep dormant ring swords straight-down until activated.
+            const float scale[3] = { MODEL_SCALE*2.0f, MODEL_SCALE*2.0f, MODEL_SCALE*2.0f };
+            const float rot[3] = { 0.0f, 0.0f, 0.0f };
+            const float trans[3] = { s->pos[0], s->pos[1], s->pos[2] };
+            t3d_mat4fp_from_srt_euler(&swordMatrix[i], scale, rot, trans);
+        } else if (gAerialMode && (s->state == SW_AERIAL_AIM || s->state == SW_AERIAL_FLY)) {
+            float tx = gAerialTargets[i][0];
+            float ty = gAerialTargets[i][1];
+            float tz = gAerialTargets[i][2];
+
+            float dx = tx - s->pos[0];
+            float dy = ty - s->pos[1];
+            float dz = tz - s->pos[2];
+            float xz = sqrtf(dx*dx + dz*dz);
+            float tgtYaw   = atan2f(dz, dx) + MSA_MODEL_YAW_OFFSET;
+            float tgtPitch = -atan2f(dy, xz + 0.0001f) + AERIAL_MODEL_PITCH_OFFSET;
+            float tgtRoll  = (float)T3D_PI * 0.5f;
+
+            float finalYaw, finalPitch, finalRoll;
+            if (s->state == SW_AERIAL_AIM) {
+                // Interpolate from the rest pose toward the target angle.
+                float t = 1.0f - (gAerialAimTimer[i] / AERIAL_AIM_TIME);
+                if (t < 0.0f) t = 0.0f;
+                if (t > 1.0f) t = 1.0f;
+                finalYaw   = aerial_angle_lerp(gAerialStartYaw[i],   tgtYaw,   t);
+                finalPitch = gAerialStartPitch[i] + (tgtPitch - gAerialStartPitch[i]) * t;
+                finalRoll  = gAerialStartRoll[i]  + (tgtRoll  - gAerialStartRoll[i])  * t;
+            } else {
+                finalYaw   = tgtYaw;
+                finalPitch = tgtPitch;
+                finalRoll  = tgtRoll;
+            }
+
+            const float scale[3] = { MODEL_SCALE*2.0f, MODEL_SCALE*2.0f, MODEL_SCALE*2.0f };
+            const float rot[3] = { finalPitch, finalYaw, finalRoll };
+            const float trans[3] = { s->pos[0], s->pos[1], s->pos[2] };
+            t3d_mat4fp_from_srt_euler(&swordMatrix[i], scale, rot, trans);
+        } else if (gAerialMode && s->state == SW_AERIAL_STUCK) {
+            // Keep exactly the orientation locked in at the moment of impact —
+            // no rotation, just sink straight into the ground.
+            const float scale[3] = { MODEL_SCALE*2.0f, MODEL_SCALE*2.0f, MODEL_SCALE*2.0f };
+            const float rot[3] = { gAerialLandPitch[i], gAerialLandYaw[i], gAerialLandRoll[i] };
+            const float trans[3] = { s->pos[0], s->pos[1], s->pos[2] };
+            t3d_mat4fp_from_srt_euler(&swordMatrix[i], scale, rot, trans);
+        } else {
+            msa_build_srt_scaled(&swordMatrix[i], MODEL_SCALE*2.0f, s->pos[0], s->pos[1], s->pos[2], yaw);
+        }
 
         t3d_matrix_set(&swordMatrix[i], true);
         rspq_block_run(swordDpl);
@@ -1155,4 +1413,169 @@ void msa_draw_debug(T3DViewport *viewport) {
 
 void msa_draw(T3DViewport *viewport) {
     msa_draw_visuals(viewport);
+}
+
+// ============================================================
+// AERIAL ATTACK SUPPORT
+// ============================================================
+
+void msa_spawn_aerial_ring(float centerX, float centerY, float centerZ, float radius, int count) {
+    if (count < 1) count = 1;
+    if (count > MSA_MAX_SWORDS) count = MSA_MAX_SWORDS;
+
+    gEnabled = true;
+    gAerialMode = true;
+    gCount = count;
+
+    for (int i = 0; i < MSA_MAX_SWORDS; i++) {
+        gSwords[i].state = SW_INACTIVE;
+        gSwords[i].glowVisible = 0;
+        path_ribbon_clear(&gSwords[i].ribbon);
+        gAerialAimTimer[i] = 0.0f;
+        gAerialStickTimer[i] = 0.0f;
+    }
+    
+    for (int i = 0; i < count; i++) {
+        MsaSword *s = &gSwords[i];
+        
+        // Calculate ring position
+        float angle = (float)i / (float)count * 2.0f * T3D_PI;
+        float swordX = centerX + cosf(angle) * radius;
+        float swordZ = centerZ + sinf(angle) * radius;
+        
+        // Set spawn position
+        s->spawnX = swordX;
+        s->spawnZ = swordZ;
+        
+        // Position at specified height
+        s->pos[0] = swordX;
+        s->pos[1] = centerY;
+        s->pos[2] = swordZ;
+        
+        // Set state to stationary at ceiling height
+        s->state = SW_CEILING;
+        
+        // Direction pointing toward center initially
+        float dirAngle = angle + T3D_PI;
+        s->dir[0] = cosf(dirAngle);
+        s->dir[1] = sinf(dirAngle);
+        
+        // Initialize movement parameters
+        s->figPhase = (float)i / (float)count * 2.0f * T3D_PI;
+        s->driftDirX = cosf(s->figPhase);
+        s->driftDirZ = sinf(s->figPhase);
+        
+        // Reset timing
+        s->t = 0.0f;
+        s->fallT = 0.0f;
+        s->fallTime = 2.0f; // 2 seconds to fall/attack
+        
+        // Initialize other fields
+        s->seed = i * 12345;
+        s->renormTick = 0;
+        s->glowVisible = 1;
+
+        path_ribbon_clear(&s->ribbon);
+        path_ribbon_set_floor(&s->ribbon, centerY);
+        path_ribbon_set_seed(&s->ribbon, s->seed);
+
+        s->lastRibbonXZ[0] = s->pos[0];
+        s->lastRibbonXZ[1] = s->pos[2];
+
+        gAerialTargets[i][0] = s->pos[0];
+        gAerialTargets[i][1] = s->pos[1];
+        gAerialTargets[i][2] = s->pos[2];
+    }
+}
+
+void msa_update_aerial_ring_pose(float centerX, float centerY, float centerZ, float radius,
+                                 float targetX, float targetY, float targetZ) {
+    (void)targetX;
+    (void)targetY;
+    (void)targetZ;
+    if (!gAerialMode) return;
+
+    for (int i = 0; i < gCount; i++) {
+        MsaSword *s = &gSwords[i];
+        if (s->state != SW_CEILING) continue;
+
+        float angle = ((float)i / (float)gCount) * 2.0f * T3D_PI;
+        float swordX = centerX + cosf(angle) * radius;
+        float swordZ = centerZ + sinf(angle) * radius;
+
+        s->spawnX = swordX;
+        s->spawnZ = swordZ;
+        s->pos[0] = swordX;
+        s->pos[1] = centerY;
+        s->pos[2] = swordZ;
+
+        // Keep waiting swords unrotated until activated.
+    }
+}
+
+void msa_fire_aerial_sword(int index, float targetX, float targetY, float targetZ) {
+    if (index < 0 || index >= gCount) return;
+    
+    MsaSword *s = &gSwords[index];
+    if (s->state == SW_INACTIVE) return;
+    
+    // Calculate direction to target
+    float dx = targetX - s->pos[0];
+    float dz = targetZ - s->pos[2];
+    float dist = sqrtf(dx*dx + dz*dz);
+    
+    // Set direction (MSA uses 2D direction in XZ plane)
+    if (dist > 0.001f) {
+        s->dir[0] = dx / dist;
+        s->dir[1] = dz / dist;
+    }
+
+    gAerialTargets[index][0] = targetX;
+    gAerialTargets[index][1] = targetY;
+    gAerialTargets[index][2] = targetZ;
+
+    // Capture the sword's current (SW_CEILING) rest orientation as the
+    // start of the aim rotation so we can smoothly lerp to the target.
+    gAerialStartYaw  [index] = 0.0f;
+    gAerialStartPitch[index] = 0.0f;
+    gAerialStartRoll [index] = 0.0f;
+
+    s->state = SW_AERIAL_AIM;
+    gAerialAimTimer[index] = AERIAL_AIM_TIME;
+    gAerialStickTimer[index] = 0.0f;
+    s->fallT = 0.0f;
+    s->t = 0.0f;
+    s->glowVisible = 0;
+}
+
+bool msa_has_active_aerial_swords(void) {
+    if (!gAerialMode) return false;
+
+    for (int i = 0; i < gCount; i++) {
+        MsaSwordState st = gSwords[i].state;
+        if (st == SW_CEILING || st == SW_AERIAL_AIM || st == SW_AERIAL_FLY || st == SW_AERIAL_STUCK) {
+            return true;
+        }
+    }
+    return false;
+}
+
+void msa_cleanup_aerial_swords(void) {
+    gAerialMode = false;
+
+    // Mark all swords as inactive
+    for (int i = 0; i < gCount; i++) {
+        MsaSword *s = &gSwords[i];
+        s->state = SW_INACTIVE;
+        s->pos[0] = 0.0f;
+        s->pos[1] = -9999.0f; // Move off-screen
+        s->pos[2] = 0.0f;
+        gAerialAimTimer[i] = 0.0f;
+        gAerialStickTimer[i] = 0.0f;
+        
+        // Cleanup ribbon
+        path_ribbon_clear(&s->ribbon);
+    }
+    
+    gCount = 0;
 }

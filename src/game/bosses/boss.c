@@ -599,7 +599,7 @@ void boss_init(Boss* boss) {
     boss->name = "Guardian of the Shackled Sun";
     boss->maxHealth = 100.0f;
     boss->health = 100.0f;
-    boss->phaseIndex = 1;
+    boss->phaseIndex = 1; // DEBUG: change to 2 to start in phase 2
     
     // Initialize movement
     boss->velX = 0.0f;
