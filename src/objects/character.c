@@ -621,9 +621,9 @@ static inline void character_update_shadow_mat(void)
     float shadowPos[3]   = { character.pos[0], SHADOW_GROUND_Y, character.pos[2] };
     float shadowRot[3]   = { 0.0f, 0.0f, 0.0f };
     float shadowScale[3] = {
-        character.scale[0] * 2.0f * shrink,
+        character.scale[0] * 2.25f * shrink,
         character.scale[1],
-        character.scale[2] * 2.0f * shrink
+        character.scale[2] * 2.25f * shrink
     };
 
     t3d_mat4fp_from_srt_euler(character.shadowMat, shadowScale, shadowRot, shadowPos);

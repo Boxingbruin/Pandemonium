@@ -43,7 +43,7 @@ static const float BOSS_SHADOW_Y_OFFSET = 0.2f;        // prevent z-fighting wit
 static const float BOSS_SHADOW_BASE_ALPHA = 120.0f;    // alpha when on the ground
 static const float BOSS_SHADOW_SHRINK_AMOUNT = 0.35f;  // shrink as boss goes up
 static const float BOSS_JUMP_REF_HEIGHT = 120.0f;      // reference height for full shrink
-static const float BOSS_SHADOW_SIZE_MULT = 3.6f;       // 2x larger than previous
+static const float BOSS_SHADOW_SIZE_MULT = 4.05f;      // 2x larger than previous
 
 void boss_turn_towards_yaw(Boss *boss, float targetYaw, float maxTurn) {
     float cur = boss->rot[1];
