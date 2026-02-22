@@ -1038,8 +1038,8 @@ void scene_init(void)
     msa_init();
 
     // DEBUG: uncomment to start the fight in phase 2
-    if (g_boss) g_boss->phaseIndex = 2;
-    phase2CutsceneTriggered = true;
+    // if (g_boss) g_boss->phaseIndex = 2;
+    // phase2CutsceneTriggered = true;
 }
 
 static bool scene_get_boss_bone_world_pos(int boneIndex, T3DVec3 *outWorld);
