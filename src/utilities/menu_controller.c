@@ -61,15 +61,16 @@ static const char* mainMenuOptions[MENU_MAIN_COUNT] = {
 };
 
 static const char* titleMenuOptions[MENU_TITLE_COUNT] = {
-    "Play",
+    "Continue",
+    "Load Game",
     "Settings",
-    "Controls",
     "Credits",
 };
 
 static const char* settingsMenuOptions[MENU_SETTINGS_COUNT] = {
     "Audio",
     "Video",
+    "Controls",
     "Back",
 };
 
@@ -79,6 +80,7 @@ static const char* audioMenuOptions[MENU_AUDIO_COUNT] = {
     "SFX Volume: %d",
     "Mute All: %s",
     "Audio Mode: %s",
+    "Rumble: %s",
     "Back",
 };
 
@@ -86,6 +88,13 @@ static const char* videoMenuOptions[MENU_VIDEO_COUNT] = {
     "Aspect: %s",
     "Calibrate Overscan",
     "Back",
+};
+
+static const char* loadGameMenuOptions[MENU_LOAD_GAME_COUNT] = {
+    "Save 1",      // MENU_LOAD_GAME_SLOT_1
+    "Save 2",      // MENU_LOAD_GAME_SLOT_2
+    "Save 3",      // MENU_LOAD_GAME_SLOT_3
+    "Back",        // MENU_LOAD_GAME_BACK
 };
 
 static int8_t clamp_overscan_x(int v)
@@ -102,6 +111,21 @@ static int8_t clamp_overscan_y(int v)
     int maxY = (SCREEN_HEIGHT / 2) - 2;
     if (v > maxY) v = maxY;
     return (int8_t)v;
+}
+
+static int get_menu_option_count(MenuState menu)
+{
+    switch (menu) {
+        case MENU_MAIN:      return MENU_MAIN_COUNT;
+        case MENU_TITLE:     return MENU_TITLE_COUNT;
+        case MENU_SETTINGS:  return MENU_SETTINGS_COUNT;
+        case MENU_AUDIO:     return MENU_AUDIO_COUNT;
+        case MENU_VIDEO:     return MENU_VIDEO_COUNT;
+        case MENU_LOAD_GAME: return 4;  // 3 save slots + back button (not DELETE options)
+        case MENU_CONTROLS:  return 1;
+        case MENU_CREDITS:   return 1;
+        default:             return 1;
+    }
 }
 
 static void overscan_apply_and_save(void)
@@ -288,16 +312,10 @@ void menu_controller_update(void) {
     // Navigation between options
     // (Disable list navigation during overscan calibration since D-pad is used to adjust values.)
     if (!(currentMenu == MENU_VIDEO && overscanCalibrating)) {
+        int maxOptions = get_menu_option_count(currentMenu);
+        
         if (upJustPressed || stickUpJustPressed) {
             selectedOption--;
-            int maxOptions = 0;
-            if (currentMenu == MENU_MAIN) maxOptions = MENU_MAIN_COUNT;
-            else if (currentMenu == MENU_TITLE) maxOptions = MENU_TITLE_COUNT;
-            else if (currentMenu == MENU_SETTINGS) maxOptions = MENU_SETTINGS_COUNT;
-            else if (currentMenu == MENU_AUDIO) maxOptions = MENU_AUDIO_COUNT;
-            else if (currentMenu == MENU_VIDEO) maxOptions = MENU_VIDEO_COUNT;
-            else if (currentMenu == MENU_CONTROLS) maxOptions = 1;
-            else if (currentMenu == MENU_CREDITS) maxOptions = 1;
             if (selectedOption < 0) {
                 selectedOption = maxOptions - 1; // Wrap to bottom
             }
@@ -305,14 +323,6 @@ void menu_controller_update(void) {
         
         if (downJustPressed || stickDownJustPressed) {
             selectedOption++;
-            int maxOptions = 0;
-            if (currentMenu == MENU_MAIN) maxOptions = MENU_MAIN_COUNT;
-            else if (currentMenu == MENU_TITLE) maxOptions = MENU_TITLE_COUNT;
-            else if (currentMenu == MENU_SETTINGS) maxOptions = MENU_SETTINGS_COUNT;
-            else if (currentMenu == MENU_AUDIO) maxOptions = MENU_AUDIO_COUNT;
-            else if (currentMenu == MENU_VIDEO) maxOptions = MENU_VIDEO_COUNT;
-            else if (currentMenu == MENU_CONTROLS) maxOptions = 1;
-            else if (currentMenu == MENU_CREDITS) maxOptions = 1;
             if (selectedOption >= maxOptions) {
                 selectedOption = 0; // Wrap to top
             }
@@ -358,10 +368,21 @@ void menu_controller_update(void) {
 
         if (aJustPressed) {
             switch (selectedOption) {
-                case MENU_TITLE_PLAY:
-                    // Close first so title doesn't interpret stale edges on the next frame.
+                case MENU_TITLE_CONTINUE: {
+                    // Find and load the last played save, or start with first save if all are empty
+                    int lastPlayedSlot = save_controller_get_last_played_slot();
+                    int slotToLoad = (lastPlayedSlot >= 0) ? lastPlayedSlot : 0;
+                    save_controller_set_active_slot(slotToLoad);
+                    save_controller_update_last_played_timestamp();
                     menu_controller_close();
                     scene_begin_title_transition();
+                    break;
+                }
+                case MENU_TITLE_LOAD_GAME:
+                    parentMenu = MENU_TITLE;
+                    parentSelectedOption = MENU_TITLE_LOAD_GAME;
+                    currentMenu = MENU_LOAD_GAME;
+                    selectedOption = 0;
                     break;
                 case MENU_TITLE_SETTINGS:
                     parentMenu = MENU_TITLE;
@@ -369,12 +390,6 @@ void menu_controller_update(void) {
                     settingsHubReturnMenu = parentMenu;
                     settingsHubReturnSelectedOption = parentSelectedOption;
                     currentMenu = MENU_SETTINGS;
-                    selectedOption = 0;
-                    break;
-                case MENU_TITLE_CONTROLS:
-                    parentMenu = MENU_TITLE;
-                    parentSelectedOption = MENU_TITLE_CONTROLS;
-                    currentMenu = MENU_CONTROLS;
                     selectedOption = 0;
                     break;
                 case MENU_TITLE_CREDITS:
@@ -398,6 +413,12 @@ void menu_controller_update(void) {
                     parentMenu = MENU_SETTINGS;
                     parentSelectedOption = MENU_SETTINGS_VIDEO;
                     currentMenu = MENU_VIDEO;
+                    selectedOption = 0;
+                    break;
+                case MENU_SETTINGS_CONTROLS:
+                    parentMenu = MENU_SETTINGS;
+                    parentSelectedOption = MENU_SETTINGS_CONTROLS;
+                    currentMenu = MENU_CONTROLS;
                     selectedOption = 0;
                     break;
                 case MENU_SETTINGS_BACK:
@@ -436,6 +457,12 @@ void menu_controller_update(void) {
                         audio_toggle_stereo_mode();
                     }
                     break;
+                case MENU_AUDIO_RUMBLE_TOGGLE:
+                    if (leftJustPressed || rightJustPressed) {
+                        joypad_set_rumble_enabled(!joypad_is_rumble_enabled());
+                        (void)save_controller_save_settings();
+                    }
+                    break;
             }
         }
         
@@ -446,6 +473,10 @@ void menu_controller_update(void) {
                     break;
                 case MENU_AUDIO_STEREO_MODE:
                     audio_toggle_stereo_mode();
+                    break;
+                case MENU_AUDIO_RUMBLE_TOGGLE:
+                    joypad_set_rumble_enabled(!joypad_is_rumble_enabled());
+                    (void)save_controller_save_settings();
                     break;
                 case MENU_AUDIO_BACK:
                     currentMenu = parentMenu;
@@ -520,6 +551,27 @@ void menu_controller_update(void) {
     } else if (currentMenu == MENU_CREDITS) {
         // Any A/B returns
         if (aJustPressed || bJustPressed) {
+            currentMenu = parentMenu;
+            selectedOption = parentSelectedOption;
+        }
+    } else if (currentMenu == MENU_LOAD_GAME) {
+        // Load Game menu input handling
+        if (aJustPressed) {
+            if (selectedOption >= 0 && selectedOption < 3) {
+                // Load the selected save slot
+                save_controller_set_active_slot(selectedOption);
+                save_controller_update_last_played_timestamp();
+                menu_controller_close();
+                scene_begin_title_transition();
+            } else if (selectedOption == 3) {  // Back button
+                // Go back to title menu
+                currentMenu = parentMenu;
+                selectedOption = parentSelectedOption;
+            }
+        }
+
+        if (bJustPressed) {
+            // B button to go back without loading
             currentMenu = parentMenu;
             selectedOption = parentSelectedOption;
         }
@@ -698,15 +750,196 @@ void menu_controller_draw(void) {
                 rdpq_set_prim_color(RGBA32(220, 220, 220, 255));
             }
 
+            // Check if Continue button should say "Play" when all saves are empty
+            const char *displayText = titleMenuOptions[i];
+            if (i == MENU_TITLE_CONTINUE) {
+                bool allSavesEmpty = true;
+                for (int slot = 0; slot < 3; slot++) {
+                    const SaveData *saveData = save_controller_get_slot_data(slot);
+                    if (saveData && (saveData->run_count > 0 || saveData->best_boss_time_ms > 0)) {
+                        allSavesEmpty = false;
+                        break;
+                    }
+                }
+                displayText = allSavesEmpty ? "Play" : "Continue";
+            }
+
             rdpq_text_printf(&(rdpq_textparms_t){
                 .align = ALIGN_LEFT,
                 .width = menuW,
                 .wrap = WRAP_WORD,
-            }, FONT_UNBALANCED, menuX, y, "%s", titleMenuOptions[i]);
+            }, FONT_UNBALANCED, menuX, y, "%s", displayText);
 
             y += lineHeight + 6;
         }
 
+        return;
+    }
+    
+    // Load Game menu: special layout showing 3 save slots
+    if (currentMenu == MENU_LOAD_GAME) {
+        rdpq_sync_pipe();
+        rdpq_set_mode_standard();
+        rdpq_mode_blender(RDPQ_BLENDER_MULTIPLY);
+        
+        const int dialogMarginX = 0;
+        int dialogWidth = SCREEN_WIDTH - (dialogMarginX * 2);
+        int dialogHeight = 230;
+        
+        // Submenus use narrower dialog
+        dialogWidth = 260;
+        
+        int dialogX = (SCREEN_WIDTH - dialogWidth) / 2;
+        int dialogY = (SCREEN_HEIGHT - dialogHeight) / 2;
+        
+        // Draw custom menu background
+        draw_pause_menu_background(dialogX, dialogY, dialogWidth, dialogHeight);
+        
+        // Light overlay to keep text readable
+        rdpq_set_prim_color(RGBA32(0, 0, 0, 90));
+        rdpq_fill_rectangle(dialogX, dialogY, dialogX + dialogWidth, dialogY + dialogHeight);
+        
+        // Draw border frame
+        rdpq_set_prim_color(RGBA32(180, 160, 120, 255));
+        rdpq_fill_rectangle(dialogX, dialogY, dialogX + dialogWidth, dialogY + 3);
+        rdpq_fill_rectangle(dialogX, dialogY + dialogHeight - 3, dialogX + dialogWidth, dialogY + dialogHeight);
+        rdpq_fill_rectangle(dialogX, dialogY, dialogX + 3, dialogY + dialogHeight);
+        rdpq_fill_rectangle(dialogX + dialogWidth - 3, dialogY, dialogX + dialogWidth, dialogY + dialogHeight);
+        
+        rdpq_set_prim_color(RGBA32(220, 200, 160, 255));
+        rdpq_fill_rectangle(dialogX + 3, dialogY + 3, dialogX + dialogWidth - 3, dialogY + 4);
+        rdpq_fill_rectangle(dialogX + 3, dialogY + 3, dialogX + 4, dialogY + dialogHeight - 3);
+        
+        // Content area
+        const int paddingX = 15;
+        const int paddingY = 20;
+        const int contentX = dialogX + paddingX;
+        const int contentY = dialogY + paddingY;
+        const int contentW = dialogWidth - (paddingX * 2);
+        const int titleYOffset = 8;
+        
+        // Title
+        rdpq_set_prim_color(RGBA32(255, 255, 255, 255));
+        rdpq_text_printf(&(rdpq_textparms_t){
+            .align = ALIGN_CENTER,
+            .width = contentW,
+            .wrap = WRAP_WORD,
+        }, FONT_UNBALANCED, contentX, contentY + titleYOffset, "LOAD GAME");
+        
+        // Draw save slot boxes
+        int boxY = contentY + 50;
+        const int boxHeight = 28;
+        const int boxSpacing = 8;
+        const int slotInnerPadX = 14;
+        // Match back button width (contentW / 2) and center the slots
+        const int slotWidth = contentW / 2;
+        const int boxLeft = contentX + (contentW - slotWidth) / 2;
+        const int boxRight = boxLeft + slotWidth;
+        const int boxWidth = boxRight - boxLeft;
+        
+        for (int slot = 0; slot < 3; slot++) {
+            const SaveData *saveData = save_controller_get_slot_data(slot);
+            int lastPlayedSlot = save_controller_get_last_played_slot();
+            bool isLastPlayed = (slot == lastPlayedSlot);
+            bool isSelected = (slot == selectedOption);
+            
+            // Draw selection highlight if selected (same size as box)
+            if (isSelected) {
+                rdpq_sync_pipe();
+                rdpq_set_mode_standard();
+                rdpq_mode_blender(RDPQ_BLENDER_MULTIPLY);
+                rdpq_mode_combiner(RDPQ_COMBINER_FLAT);
+                rdpq_set_prim_color(RGBA32(0, 0, 0, 100));
+                rdpq_fill_rectangle(boxLeft, boxY, boxRight, boxY + boxHeight);
+            }
+            
+            // Draw box background (darker)
+            rdpq_sync_pipe();
+            rdpq_set_mode_standard();
+            rdpq_mode_blender(RDPQ_BLENDER_MULTIPLY);
+            rdpq_set_prim_color(RGBA32(40, 35, 30, 200));
+            rdpq_fill_rectangle(boxLeft, boxY, boxRight, boxY + boxHeight);
+            
+            // Draw border
+            rdpq_sync_pipe();
+            rdpq_set_mode_standard();
+            rdpq_mode_blender(RDPQ_BLENDER_MULTIPLY);
+            rdpq_mode_combiner(RDPQ_COMBINER_FLAT);
+            
+            if (isSelected) {
+                // White 1px border for selected to match requested style.
+                rdpq_set_prim_color(RGBA32(255, 255, 255, 255));
+                rdpq_fill_rectangle(boxLeft, boxY, boxRight, boxY + 1);                    // Top
+                rdpq_fill_rectangle(boxLeft, boxY + boxHeight - 1, boxRight, boxY + boxHeight); // Bottom
+                rdpq_fill_rectangle(boxLeft, boxY, boxLeft + 1, boxY + boxHeight);         // Left
+                rdpq_fill_rectangle(boxRight - 1, boxY, boxRight, boxY + boxHeight);       // Right
+            } else if (isLastPlayed) {
+                // Yellow border for last played (non-selected)
+                rdpq_set_prim_color(RGBA32(255, 255, 0, 255));
+                rdpq_fill_rectangle(boxLeft, boxY, boxRight, boxY + 1);                    // Top
+                rdpq_fill_rectangle(boxLeft, boxY + boxHeight - 1, boxRight, boxY + boxHeight); // Bottom
+                rdpq_fill_rectangle(boxLeft, boxY, boxLeft + 1, boxY + boxHeight);         // Left
+                rdpq_fill_rectangle(boxRight - 1, boxY, boxRight, boxY + boxHeight);       // Right
+            } else {
+                // Grey border for others
+                rdpq_set_prim_color(RGBA32(180, 160, 120, 255));
+                rdpq_fill_rectangle(boxLeft, boxY, boxRight, boxY + 1);                    // Top
+                rdpq_fill_rectangle(boxLeft, boxY + boxHeight - 1, boxRight, boxY + boxHeight); // Bottom
+                rdpq_fill_rectangle(boxLeft, boxY, boxLeft + 1, boxY + boxHeight);         // Left
+                rdpq_fill_rectangle(boxRight - 1, boxY, boxRight, boxY + boxHeight);       // Right
+            }
+            
+            // Draw centered text inside box
+            rdpq_set_prim_color(RGBA32(255, 255, 255, 255));
+            // Save slot name (centered, top part of box)
+            rdpq_text_printf(&(rdpq_textparms_t){
+                .align = ALIGN_CENTER,
+                .width = boxWidth - (slotInnerPadX * 2),
+                .wrap = WRAP_WORD,
+            }, FONT_UNBALANCED, boxLeft + slotInnerPadX, boxY + 9, "%s", loadGameMenuOptions[slot]);
+            
+            // Show stats if the save has been played
+            if (saveData && (saveData->run_count > 0 || saveData->best_boss_time_ms > 0)) {
+                rdpq_set_prim_color(RGBA32(200, 200, 200, 255));
+                char statsText[64];
+                snprintf(statsText, sizeof(statsText), "Runs: %lu", (unsigned long)saveData->run_count);
+                rdpq_text_printf(&(rdpq_textparms_t){
+                    .align = ALIGN_CENTER,
+                    .width = boxWidth - (slotInnerPadX * 2),
+                    .wrap = WRAP_WORD,
+                }, FONT_UNBALANCED, boxLeft + slotInnerPadX, boxY + 25, "%s", statsText);
+            } else {
+                rdpq_set_prim_color(RGBA32(150, 150, 150, 255));
+                rdpq_text_printf(&(rdpq_textparms_t){
+                    .align = ALIGN_CENTER,
+                    .width = boxWidth - (slotInnerPadX * 2),
+                    .wrap = WRAP_WORD,
+                }, FONT_UNBALANCED, boxLeft + slotInnerPadX, boxY + 25, "Empty");
+            }
+            
+            boxY += boxHeight + boxSpacing;
+        }
+        
+        // Back option - position after all boxes
+        int backY = boxY + 8;
+        if (selectedOption == 3) {  // 3 is the back button (after 3 save slots)
+            // Center highlight around text baseline; rdpq baseline is at top of text, so offset for vertical center
+            const int highlightH = 16;
+            const int highlightY = backY - (highlightH / 2) - 2;  // Slight upward nudge for balance
+            draw_menu_selection_highlight_centered(contentX, highlightY, contentW, highlightH, 103);
+            rdpq_set_prim_color(RGBA32(255, 255, 255, 255));
+        } else {
+            rdpq_set_prim_color(RGBA32(220, 220, 220, 255));
+        }
+        // Match save slot width (contentW / 2) and center it
+        const int backButtonWidth = contentW / 2;
+        const int backButtonX = contentX + (contentW - backButtonWidth) / 2;
+        rdpq_text_printf(&(rdpq_textparms_t){
+            .align = ALIGN_CENTER,
+            .width = backButtonWidth,
+            .wrap = WRAP_WORD,
+        }, FONT_UNBALANCED, backButtonX, backY, "%s", loadGameMenuOptions[MENU_LOAD_GAME_BACK]);
+        
         return;
     }
     
@@ -825,6 +1058,20 @@ void menu_controller_draw(void) {
         y += (lineHeight * 3) + titleYOffset;
 
         for (int i = 0; i < MENU_TITLE_COUNT; i++) {
+            // Check if Continue button should say "Play" when all saves are empty
+            const char *displayText = titleMenuOptions[i];
+            if (i == MENU_TITLE_CONTINUE) {
+                bool allSavesEmpty = true;
+                for (int slot = 0; slot < 3; slot++) {
+                    const SaveData *saveData = save_controller_get_slot_data(slot);
+                    if (saveData && (saveData->run_count > 0 || saveData->best_boss_time_ms > 0)) {
+                        allSavesEmpty = false;
+                        break;
+                    }
+                }
+                displayText = allSavesEmpty ? "Play" : "Continue";
+            }
+
             if (i == selectedOption) {
                 draw_menu_selection_highlight_centered(x, y, contentW, lineHeight, contentW / 2);
                 rdpq_set_prim_color(RGBA32(255, 255, 255, 255));
@@ -833,7 +1080,7 @@ void menu_controller_draw(void) {
                     .width = contentW,
                     .height = contentH,
                     .wrap = WRAP_WORD,
-                }, FONT_UNBALANCED, x, y, "%s", titleMenuOptions[i]);
+                }, FONT_UNBALANCED, x, y, "%s", displayText);
             } else {
                 rdpq_set_prim_color(RGBA32(220, 220, 220, 255));
                 rdpq_text_printf(&(rdpq_textparms_t){
@@ -841,7 +1088,7 @@ void menu_controller_draw(void) {
                     .width = contentW,
                     .height = contentH,
                     .wrap = WRAP_WORD,
-                }, FONT_UNBALANCED, x, y, "%s", titleMenuOptions[i]);
+                }, FONT_UNBALANCED, x, y, "%s", displayText);
             }
             y += lineHeight + 4;
         }
@@ -903,6 +1150,15 @@ void menu_controller_draw(void) {
                 snprintf(optionText, sizeof(optionText), fmt, audio_is_muted() ? "ON" : "OFF");
             } else if (i == MENU_AUDIO_STEREO_MODE) {
                 snprintf(optionText, sizeof(optionText), fmt, audio_get_stereo_mode() ? "Stereo" : "Mono");
+            } else if (i == MENU_AUDIO_RUMBLE_TOGGLE) {
+                bool rumbleEnabled = joypad_is_rumble_enabled();
+                bool rumbleAvailable = joypad_is_connected(JOYPAD_PORT_1) && joypad_get_rumble_supported(JOYPAD_PORT_1);
+
+                if (!rumbleAvailable) {
+                    snprintf(optionText, sizeof(optionText), rumbleEnabled ? "Rumble: ON (No Pak)" : "Rumble: OFF (No Pak)");
+                } else {
+                    snprintf(optionText, sizeof(optionText), fmt, rumbleEnabled ? "ON" : "OFF");
+                }
             } else {
                 snprintf(optionText, sizeof(optionText), "%s", fmt);
             }
@@ -1051,6 +1307,8 @@ bool menu_controller_is_pause_menu_active(void) {
 void menu_controller_toggle(void) {
     menuActive = !menuActive;
     if (menuActive) {
+        joypad_rumble_stop();
+
         GameState state = scene_get_game_state();
 
         // Pick which "root" menu to show based on where we are.
@@ -1082,6 +1340,8 @@ void menu_controller_toggle(void) {
             }
         }
     } else {
+        joypad_rumble_stop();
+
         // Ensure we don't get stuck in calibration overlay when reopening.
         overscanCalibrating = false;
         if (!menuIsTitleMenu) {
@@ -1097,6 +1357,7 @@ void menu_controller_toggle(void) {
 
 void menu_controller_close(void) {
     menuActive = false;
+    joypad_rumble_stop();
     overscanCalibrating = false;
 
     if (!menuIsTitleMenu) {

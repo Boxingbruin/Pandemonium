@@ -910,6 +910,8 @@ static void scene_title_init(void)
 
 void scene_init(void) 
 {
+    joypad_rumble_stop();
+
     // ==== Sounds ====
 
     audio_scene_load_paths(SCENE1_SFX_PATHS, SCENE1_SFX_COUNT);

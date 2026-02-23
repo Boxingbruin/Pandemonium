@@ -2693,6 +2693,8 @@ void character_apply_damage(float amount)
     character.health -= amount;
     if (character.health < 0.0f) character.health = 0.0f;
 
+    joypad_rumble_pulse_seconds((amount >= 20.0f) ? 0.22f : 0.12f);
+
     if (character.health <= 0.0f) {
         characterState = CHAR_STATE_DEAD;
         scene_set_game_state(GAME_STATE_DEAD);

@@ -6,6 +6,7 @@
 
 #include "save_controller.h"
 #include "audio_controller.h"
+#include "joypad_utility.h"
 #include "globals.h"
 #include "video_controller.h"
 
@@ -45,6 +46,7 @@ static int  s_active_slot = 0;
 static SaveBlob s_blob;
 static bool s_dirty = false;
 static double s_last_dirty_time_s = 0.0;
+static uint32_t s_play_session_counter = 0;
 
 static uint32_t calculate_crc32(const void *data, size_t size) {
     static const uint32_t CRC32_POLY = 0xEDB88320u;
@@ -114,6 +116,19 @@ static void save_set_overscan(SaveData *d, int8_t x, int8_t y)
     d->_pad[1] = (uint8_t)y;
 }
 
+static bool saved_rumble_enabled(const SaveData *d)
+{
+    if (!d) return true;
+    // Stored in padding to keep save size stable across versions.
+    return d->_pad[2] != 0;
+}
+
+static void save_set_rumble_enabled(SaveData *d, bool enabled)
+{
+    if (!d) return;
+    d->_pad[2] = enabled ? 1 : 0;
+}
+
 static void save_defaults_for_slot(SaveData *d, int slot) {
     memset(d, 0, sizeof(*d));
 
@@ -130,6 +145,7 @@ static void save_defaults_for_slot(SaveData *d, int slot) {
 
     // UI overscan defaults (extra padding beyond TITLE_SAFE)
     save_set_overscan(d, 0, 0);
+    save_set_rumble_enabled(d, true);
 
     d->checksum = compute_slot_checksum(d);
 }
@@ -314,6 +330,8 @@ bool save_controller_load_settings(void) {
     // UI overscan (applied to edge-anchored UI via globals.h helpers)
     uiOverscanX = saved_overscan_x(d);
     uiOverscanY = saved_overscan_y(d);
+
+    joypad_set_rumble_enabled(saved_rumble_enabled(d));
     return true;
 }
 
@@ -329,6 +347,7 @@ bool save_controller_save_settings(void) {
 
     // Persist current UI overscan values
     save_set_overscan(d, uiOverscanX, uiOverscanY);
+    save_set_rumble_enabled(d, joypad_is_rumble_enabled());
 
     d->checksum     = compute_slot_checksum(d);
 
@@ -372,6 +391,66 @@ uint32_t save_controller_get_run_count(void) {
 uint32_t save_controller_get_best_boss_time_ms(void) {
     if (!s_initialized) return 0;
     return s_blob.slots[s_active_slot].best_boss_time_ms;
+}
+
+const SaveData* save_controller_get_slot_data(int slot) {
+    if (!s_initialized) return NULL;
+    if (slot < 0 || slot >= SAVE_SLOT_COUNT) return NULL;
+    return &s_blob.slots[slot];
+}
+
+uint32_t save_controller_get_slot_run_count(int slot) {
+    if (!s_initialized) return 0;
+    if (slot < 0 || slot >= SAVE_SLOT_COUNT) return 0;
+    return s_blob.slots[slot].run_count;
+}
+
+uint32_t save_controller_get_slot_best_boss_time_ms(int slot) {
+    if (!s_initialized) return 0;
+    if (slot < 0 || slot >= SAVE_SLOT_COUNT) return 0;
+    return s_blob.slots[slot].best_boss_time_ms;
+}
+
+uint32_t save_controller_get_slot_last_played_timestamp(int slot) {
+    if (!s_initialized) return 0;
+    if (slot < 0 || slot >= SAVE_SLOT_COUNT) return 0;
+    return s_blob.slots[slot].last_played_timestamp;
+}
+
+int save_controller_get_last_played_slot(void) {
+    if (!s_initialized) return -1;
+    
+    int lastPlayedSlot = -1;
+    uint32_t lastPlayedTime = 0;
+    
+    for (int i = 0; i < SAVE_SLOT_COUNT; i++) {
+        if (s_blob.slots[i].last_played_timestamp > lastPlayedTime) {
+            lastPlayedTime = s_blob.slots[i].last_played_timestamp;
+            lastPlayedSlot = i;
+        }
+    }
+    
+    return lastPlayedSlot;
+}
+
+bool save_controller_update_last_played_timestamp(void) {
+    if (!s_initialized) return false;
+    
+    // Use a simple incrementing counter to track last played
+    // In a real game, you might use actual timestamps
+    SaveData *d = &s_blob.slots[s_active_slot];
+    d->last_played_timestamp = ++s_play_session_counter;
+    d->checksum = compute_slot_checksum(d);
+    return blob_write_now();
+}
+
+bool save_controller_clear_slot(int slot) {
+    if (!s_initialized) return false;
+    if (slot < 0 || slot >= SAVE_SLOT_COUNT) return false;
+    
+    // Reset slot to defaults (empty)
+    save_defaults_for_slot(&s_blob.slots[slot], slot);
+    return blob_write_now();
 }
 
 void save_controller_free(void) {
