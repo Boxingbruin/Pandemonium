@@ -1,3 +1,4 @@
+// src/game/bosses/environmental_mechanics/multi_sword_attacks.c
 #include "multi_sword_attacks.h"
 
 #include <libdragon.h>
@@ -21,7 +22,7 @@
 #include "game_math.h"
 
 #include "path_ribbon.h"
-#include "fx/lightning_fx.h"
+#include "fx/lightning_fx.h"   // now using lightning_fx_system_* (scene owns init)
 
 // ============================================================
 // PERF / FEATURE TOGGLES
@@ -111,8 +112,8 @@ static rspq_block_t*  swordDpl         = NULL;
 static void*          swordMatrixBase  = NULL;
 static T3DMat4FP*     swordMatrix      = NULL; // [MSA_MAX_SWORDS]
 
-// Lightning FX instance (opaque => keep pointer)
-static LightningFX *gLightningFx = NULL;
+// NOTE: Lightning is now module-owned by lightning_fx.c (system API).
+// The scene initializes it via lightning_fx_system_init(...), NOT MSA.
 
 static sprite_t *sWallFogSpr = NULL;
 
@@ -517,11 +518,6 @@ static inline void msa_build_srt_scaled(T3DMat4FP *out, float scale1, float x, f
 // ASSET INIT/SHUTDOWN
 // ============================================================
 static void msa_assets_init(void) {
-    // Create lightning first
-    if (!gLightningFx) {
-        gLightningFx = lightning_fx_create("rom:/boss/boss_back_sword_lightning.t3dm");
-        assert(gLightningFx && "lightning_fx_create failed");
-    }
 
     if (swordModel && swordDpl && swordMatrix &&
         floorGlowModel && floorGlowDpl && floorGlowMatrix) {
@@ -582,10 +578,8 @@ static void msa_assets_shutdown(void) {
         floorGlowModel = NULL;
     }
 
-    if (gLightningFx) {
-        lightning_fx_destroy(gLightningFx);
-        gLightningFx = NULL;
-    }
+    // IMPORTANT: do NOT shutdown lightning here.
+    // Scene owns lightning_fx_system_init/shutdown.
 }
 
 // ============================================================
@@ -836,7 +830,8 @@ void msa_update(float dt) {
 
     if (gHitCd > 0.0f) gHitCd -= dt;
 
-    if (gLightningFx) lightning_fx_update(gLightningFx, dt);
+    // lightning is system-owned; safe no-op if scene hasn't init'd it yet
+    lightning_fx_system_update(dt);
 
     if (gAerialMode) {
         bool anyAerialSword = false;
@@ -1038,9 +1033,8 @@ void msa_update(float dt) {
                 float dz = character.pos[2] - s->spawnZ;
                 float lightningYaw = atan2f(dz, dx) + MSA_MODEL_YAW_OFFSET;
 
-                if (gLightningFx) {
-                    lightning_fx_strike(gLightningFx, s->spawnX, gFloorY, s->spawnZ, lightningYaw);
-                }
+                // system strike call (no pointer)
+                lightning_fx_system_strike(s->spawnX, gFloorY, s->spawnZ, lightningYaw);
             }
         }
 
@@ -1309,8 +1303,8 @@ void msa_draw_visuals(T3DViewport *viewport) {
     }
     t3d_matrix_pop(1);
 
-    // Lightning FX
-    if (gLightningFx) lightning_fx_draw(gLightningFx);
+    // Lightning FX (system-owned)
+    lightning_fx_system_draw();
 
     // Glows
     t3d_matrix_push_pos(1);

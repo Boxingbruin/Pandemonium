@@ -466,7 +466,12 @@ void boss_init(Boss* boss) {
         "LungeStarter1",
         "Attack1",
         "Stomp",
-        "WinCollapse"
+        "WinCollapse",
+        // Phase 2
+        "Phase2Collapse",
+        "Phase2CollapseIdle",
+        "Phase2Reveal",
+        "WinKneel"
     };
     const bool animationsLooping[] = {
         true,  // Idle - loop
@@ -485,6 +490,11 @@ void boss_init(Boss* boss) {
         false, // Attack1
         false, // Stomp
         false, // Collapse - one-shot
+        // Phase 2
+        false, // Phase2 Collapse - one-shot
+        true, // Phase2 CollapseIdle - loop
+        false, // Phase2 Reveal - one-shot
+        false, // Phase2 WinKneel - one-shot
     };
     
     T3DAnim** animations = malloc_uncached(animationCount * sizeof(T3DAnim*));

@@ -1,15 +1,22 @@
 #ifndef LIGHTNING_FX
 #define LIGHTNING_FX
 
-#include <stdint.h>
+#include <stdbool.h>
 
-typedef struct LightningFX LightningFX;
+void lightning_fx_system_init(const char* rom_model_path);
+void lightning_fx_system_shutdown(void);
 
-LightningFX* lightning_fx_create(const char* rom_model_path);
+void lightning_fx_system_update(float dt);
+void lightning_fx_system_draw(void);
 
-void lightning_fx_destroy(LightningFX* fx);
-void lightning_fx_strike(LightningFX* fx, float x, float y, float z, float yaw);
-void lightning_fx_update(LightningFX* fx, float dt);
-void lightning_fx_draw(LightningFX* fx);
+void lightning_fx_system_ring_enable(bool enabled);
+void lightning_fx_system_ring_config(float rMin, float rMax, float y,
+                                     float minIntervalSec, float maxIntervalSec);
+
+//  manual strike
+void lightning_fx_system_strike(float x, float y, float z, float yaw);
+
+// bnw trigger
+bool lightning_fx_system_is_lit(void);
 
 #endif
