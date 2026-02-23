@@ -202,6 +202,16 @@ static T3DAnim** bossChainsAnimations = NULL;
 static int currentBossChainsAnimation = 0;
 static bool bossChainsVisible = true;
 
+
+T3DModel* bossChainsGlowModel;
+rspq_block_t* bossChainsGlowDpl;
+T3DMat4FP* bossChainsGlowMatrix;
+ScrollParams bossChainsGlowScrollParams = {
+    .xSpeed = 0.0f,
+    .ySpeed = 20.0f,
+    .scale  = 64
+};
+
 //==========================
 
 // Dynamic Banner (Title Screen)
@@ -1012,6 +1022,19 @@ void scene_load_environment(){
         (float[3]){-MODEL_SCALE, -MODEL_SCALE, -MODEL_SCALE},
         (float[3]){0.0f, 0.0f, 0.0f},
         (float[3]){0.0f, 0.0f, 0.0f}
+    );
+
+    // ===== LOAD BOSS CHAINS GLOW =====
+    bossChainsGlowModel = t3d_model_load("rom:/boss/boss_chain_glow.t3dm");
+    rspq_block_begin();
+    t3d_model_draw(bossChainsGlowModel);
+    bossChainsGlowDpl = rspq_block_end();
+
+    bossChainsGlowMatrix = malloc_uncached(sizeof(T3DMat4FP));
+    t3d_mat4fp_from_srt_euler(bossChainsGlowMatrix, 
+        (float[3]){MODEL_SCALE, MODEL_SCALE, MODEL_SCALE},
+        (float[3]){0.0f, 0.0f, 0.0f},
+        (float[3]){0.0f, roomY, 0.0f}
     );
 
 
@@ -4016,6 +4039,13 @@ void scene_draw_cutscene(){
                 t3d_matrix_set(pillarsMatrix, true);
                 rspq_block_run(pillarsDpl);
 
+                t3d_matrix_set(bossChainsGlowMatrix, true);
+                // Create a struct to pass the scrolling parameters to the tile callback
+                t3d_model_draw_custom(bossChainsGlowModel, (T3DModelDrawConf){
+                    .userData = &bossChainsGlowScrollParams,
+                    .tileCb = tile_scroll,
+                });
+
             t3d_matrix_pop(1);
     
             rdpq_sync_pipe();
@@ -4041,7 +4071,6 @@ void scene_draw_cutscene(){
                 if (g_boss) {
                     boss_draw_shadow(g_boss);
                 }
-
                 //Draw transparencies last
                 t3d_matrix_set(sunshaftsMatrix, true);
                 rspq_block_run(sunshaftsDpl);
