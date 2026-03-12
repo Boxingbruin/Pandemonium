@@ -50,6 +50,7 @@
 
 #include "multi_sword_attacks.h" // TODO: call only from boss
 #include "fx/lightning_fx.h" 
+#include "boulder_hazard.h" // close-range ground-boulder hazard
 
 // Dust (implemented later near lock-on indicator)
 static void dust_reset(void);
@@ -1531,9 +1532,9 @@ static void draw_post_boss_a_prompt(T3DViewport *viewport)
 
 static void draw_cbutton_hud(void)
 {
-    // Bottom-right C-button cluster with a health potion assigned to C-left.
+    // Bottom-right C-left icon with a health potion assigned to it.
     // Drawn during gameplay/victory (same visibility rules as the player health bar).
-    if (!cUpSprite && !cDownSprite && !cLeftSprite && !cRightSprite) return;
+    if (!cLeftSprite) return;
 
     // Prefer the left icon size as the layout reference.
     int w = (cLeftSurf.width > 0) ? cLeftSurf.width : 24;
@@ -1545,21 +1546,18 @@ static void draw_cbutton_hud(void)
     const int marginX = ui_safe_margin_x();
     const int marginY = ui_safe_margin_y();
 
-    // Keep inside UI-safe bounds (account for half-icon extents).
-    const int cx = SCREEN_WIDTH  - marginX - (drawW / 2) - 6;
-    const int cy = SCREEN_HEIGHT - marginY - (drawH / 2) - 10;
+    // Anchor C-left near bottom-right while staying fully inside safe bounds.
+    int leftX = SCREEN_WIDTH  - marginX - (drawW / 2) - 8;
+    int leftY = SCREEN_HEIGHT - marginY - (drawH / 2) - 8;
 
-    const int stepX = (drawW * 3) / 4;
-    const int stepY = (drawH * 3) / 4;
-
-    const int upX    = cx;
-    const int upY    = cy - stepY;
-    const int downX  = cx;
-    const int downY  = cy + stepY;
-    const int leftX  = cx - stepX;
-    const int leftY  = cy;
-    const int rightX = cx + stepX;
-    const int rightY = cy;
+    int minCenterX = marginX + (drawW / 2);
+    int maxCenterX = SCREEN_WIDTH - marginX - (drawW / 2);
+    int minCenterY = marginY + (drawH / 2);
+    int maxCenterY = SCREEN_HEIGHT - marginY - (drawH / 2);
+    if (leftX < minCenterX) leftX = minCenterX;
+    if (leftX > maxCenterX) leftX = maxCenterX;
+    if (leftY < minCenterY) leftY = minCenterY;
+    if (leftY > maxCenterY) leftY = maxCenterY;
 
     rdpq_sync_pipe();
     rdpq_set_mode_standard();
@@ -1569,25 +1567,7 @@ static void draw_cbutton_hud(void)
     // Bilinear filtering so the 2x upscale is smooth instead of pixelated.
     rdpq_mode_filter(FILTER_BILINEAR);
 
-    // Draw the 4 C-button icons (if available).
-    if (cUpSprite && cUpSurf.width > 0 && cUpSurf.height > 0) {
-        rdpq_sprite_blit(cUpSprite, upX, upY, &(rdpq_blitparms_t){
-            .scale_x = cScale, .scale_y = cScale,
-            .cx = cUpSurf.width / 2, .cy = cUpSurf.height / 2,
-        });
-    }
-    if (cDownSprite && cDownSurf.width > 0 && cDownSurf.height > 0) {
-        rdpq_sprite_blit(cDownSprite, downX, downY, &(rdpq_blitparms_t){
-            .scale_x = cScale, .scale_y = cScale,
-            .cx = cDownSurf.width / 2, .cy = cDownSurf.height / 2,
-        });
-    }
-    if (cRightSprite && cRightSurf.width > 0 && cRightSurf.height > 0) {
-        rdpq_sprite_blit(cRightSprite, rightX, rightY, &(rdpq_blitparms_t){
-            .scale_x = cScale, .scale_y = cScale,
-            .cx = cRightSurf.width / 2, .cy = cRightSurf.height / 2,
-        });
-    }
+    // Draw only the C-left icon.
     if (cLeftSprite && cLeftSurf.width > 0 && cLeftSurf.height > 0) {
         rdpq_sprite_blit(cLeftSprite, leftX, leftY, &(rdpq_blitparms_t){
             .scale_x = cScale, .scale_y = cScale,
@@ -1794,6 +1774,26 @@ void scene_init_playing(bool skippedCutscene)
     playerUiIntro = 0.0f;
     display_utility_set_boss_ui_intro(bossUiIntro);
     display_utility_set_player_ui_intro(playerUiIntro);
+
+#if DEBUG_BOULDER_ATTACK_FIRST
+    // Debug: immediately open phase 1 with the boulder attack so the hazard
+    // can be observed without waiting for the AI to naturally select it.
+    if (g_boss) {
+        g_boss->state                    = BOSS_STATE_ATTACK1;
+        g_boss->stateTimer               = 0.0f;
+        g_boss->attack1Cooldown          = 6.0f;
+        g_boss->attackCooldown           = 1.0f;
+        g_boss->isAttacking              = true;
+        g_boss->attackAnimTimer          = 0.0f;
+        g_boss->animationTransitionTimer = 0.0f;
+        g_boss->currentAttackHasHit      = false;
+        g_boss->velX                     = 0.0f;
+        g_boss->velZ                     = 0.0f;
+        g_boss->currentAttackName        = "Attack1";
+        g_boss->attackNameDisplayTimer   = 2.0f;
+        g_boss->currentAttackId          = BOSS_ATTACK_ATTACK1;
+    }
+#endif
 }
 
 void scene_set_cinematic_camera(T3DVec3 posStart, T3DVec3 posEnd, T3DVec3 posTarget)
@@ -2990,6 +2990,7 @@ void scene_update(void)
     }
 
     msa_update(deltaTime); // multi sword attack
+    boulder_hazard_update(deltaTime); // close-range ground boulders
 
     lastZPressed = zHeld;
     lastCLeftHeld = cLeftHeld;
@@ -4587,6 +4588,7 @@ void scene_draw(T3DViewport *viewport)
     t3d_matrix_pop(1);
 
     msa_draw_visuals(viewport); // multi sword attack
+    boulder_hazard_draw(viewport); // close-range ground boulders
 
     //Draw transparencies last
     // t3d_matrix_push_pos(1);    
