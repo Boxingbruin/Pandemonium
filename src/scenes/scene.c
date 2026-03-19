@@ -2602,7 +2602,7 @@ void scene_update_title(void)
         if(titleStartGameTimer >= titleStartGameTime){
             titleStartGameTimer = 0.0f;
             // Enter the intro cutscene intentionally from title.
-            cutsceneState = CUTSCENE_PHASE2_INTRO; // TESTING TODO: CUTSCENE_PHASE1_INTRO
+            cutsceneState = CUTSCENE_PHASE1_INTRO;
             cutsceneTimer = 0.0f;
             cutsceneCameraTimer = 0.0f;
             scene_init_cutscene();
@@ -2626,7 +2626,7 @@ void scene_update_title(void)
                     // Second press - skip to cutscene
                     skipButtonVisible = false;
                     titleStartGameTimer = 0.0f;
-                    cutsceneState = CUTSCENE_PHASE2_INTRO; // TESTING TODO: CUTSCENE_PHASE1_INTRO
+                    cutsceneState = CUTSCENE_PHASE1_INTRO;
                     cutsceneTimer = 0.0f;
                     cutsceneCameraTimer = 0.0f;
                     scene_init_cutscene();
@@ -2643,7 +2643,7 @@ void scene_update_title(void)
             if(btn.start)
             {
                 titleStartGameTimer = 0.0f;
-                cutsceneState = CUTSCENE_PHASE2_INTRO; // TESTING TODO: CUTSCENE_PHASE1_INTRO
+                cutsceneState = CUTSCENE_PHASE1_INTRO;
                 cutsceneTimer = 0.0f;
                 cutsceneCameraTimer = 0.0f;
                 scene_init_cutscene();
