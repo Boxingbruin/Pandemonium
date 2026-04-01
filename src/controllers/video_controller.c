@@ -2,7 +2,7 @@
 
 bool hdAspect = false;
 
-// User-adjustable UI overscan padding (pixels)
-int8_t uiOverscanX = 0;
-int8_t uiOverscanY = 0;
+// User-adjustable UI overscan padding (pixels); default widest UI in safe range.
+int8_t uiOverscanX = UI_OVERSCAN_MIN;
+int8_t uiOverscanY = UI_OVERSCAN_MIN;
 

@@ -99,7 +99,7 @@ static const char* loadGameMenuOptions[MENU_LOAD_GAME_COUNT] = {
 
 static int8_t clamp_overscan_x(int v)
 {
-    if (v < -15) v = -15;
+    if (v < UI_OVERSCAN_MIN) v = UI_OVERSCAN_MIN;
     int maxX = (SCREEN_WIDTH / 2) - 2;
     if (v > maxX) v = maxX;
     return (int8_t)v;
@@ -107,7 +107,7 @@ static int8_t clamp_overscan_x(int v)
 
 static int8_t clamp_overscan_y(int v)
 {
-    if (v < -15) v = -15;
+    if (v < UI_OVERSCAN_MIN) v = UI_OVERSCAN_MIN;
     int maxY = (SCREEN_HEIGHT / 2) - 2;
     if (v > maxY) v = maxY;
     return (int8_t)v;
