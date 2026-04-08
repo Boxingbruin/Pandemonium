@@ -62,8 +62,6 @@ void draw_boss_health_bar(const char *name, float ratio, float flash)
 	const int marginY = ui_safe_margin_y();
 	int left = marginX;
 	int right = SCREEN_WIDTH - marginX;
-	int top = marginY + 6;
-	int bottom = top + 12;
 	const int fillInsetX = 24;
 	int barLeft = left + fillInsetX;
 	int barRight = right - fillInsetX;
@@ -78,16 +76,19 @@ void draw_boss_health_bar(const char *name, float ratio, float flash)
 		bossHealthBarBackgroundSprite = sprite_load("rom:/ui/healthbars/boss/boss_background_healthbar.sprite");
 	}
 
+	// Taller red/dark fill only; frame sprite scale/position below is unchanged.
+	const int fillHeight = 16;
 	float frameScale = 1.0f;
 	int frameY = marginY;
+	int fillCenterY = marginY + 12;
 	if (bossHealthBarBackgroundSprite) {
 		frameScale = (float)(right - left) / (float)bossHealthBarBackgroundSprite->width;
-		// Anchor frame at safe top; then derive fill Y from frame center so fill and border stay aligned.
 		frameY = marginY;
 		int frameHeight = (int)((float)bossHealthBarBackgroundSprite->height * frameScale);
-		top = frameY + (frameHeight / 2) - 6;
-		bottom = top + 12;
+		fillCenterY = frameY + frameHeight / 2;
 	}
+	int top = fillCenterY - fillHeight / 2;
+	int bottom = top + fillHeight;
 
 	// center-out growth only (no vertical slide)
 	float p = boss_ui_intro;
