@@ -13,8 +13,11 @@
 
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+_SCRIPTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT="$(cd "$_SCRIPTS_DIR/.." && pwd)"
 ROM="${ROOT}/pandemonium.z64"
+# shellcheck source=sc64-common.sh
+source "$_SCRIPTS_DIR/sc64-common.sh"
 
 usage() {
 	cat <<'EOF'
@@ -59,48 +62,7 @@ while [[ $# -gt 0 ]]; do
 	esac
 done
 
-# Resolve SC64_DEPLOYER: may be the binary, or a directory from the release archive.
-resolve_sc64deployer_path() {
-	local p="$1"
-	if [[ ! -e "$p" ]]; then
-		local hint=""
-		# Common mistake: release archives are named sc64-deployer-* but the binary/dir is often sc64deployer (no hyphen).
-		local alt="${p//sc64-deployer/sc64deployer}"
-		if [[ "$alt" != "$p" && -e "$alt" ]]; then
-			hint=" — try: $alt"
-		fi
-		die "SC64_DEPLOYER path does not exist: $p${hint}"
-	fi
-	if [[ -d "$p" ]]; then
-		if [[ -f "$p/sc64deployer" ]]; then
-			p="$p/sc64deployer"
-		else
-			local found
-			found="$(find "$p" -maxdepth 4 -type f -name sc64deployer 2>/dev/null | head -n 1)"
-			if [[ -n "$found" ]]; then
-				p="$found"
-			else
-				die "SC64_DEPLOYER directory contains no sc64deployer binary (searched up to depth 4): $1"
-			fi
-		fi
-	fi
-	if [[ ! -f "$p" ]]; then
-		die "SC64_DEPLOYER must be a file or directory: $1"
-	fi
-	if [[ ! -x "$p" ]]; then
-		die "sc64deployer is not executable: $p (try: chmod +x \"$p\")"
-	fi
-	SC64_RESOLVED="$p"
-}
-
-if [[ -n "${SC64_DEPLOYER:-}" ]]; then
-	resolve_sc64deployer_path "${SC64_DEPLOYER}"
-	SC64="$SC64_RESOLVED"
-else
-	SC64="$(command -v sc64deployer 2>/dev/null || true)"
-	[[ -n "$SC64" ]] || die "sc64deployer not found. Set SC64_DEPLOYER (binary or extracted folder) or add it to PATH."
-	[[ -x "$SC64" ]] || die "sc64deployer on PATH is not executable: $SC64"
-fi
+sc64_set_deployer_binary die
 
 if [[ "$do_build" -eq 1 ]]; then
 	if [[ "$verbose" -eq 1 ]]; then
