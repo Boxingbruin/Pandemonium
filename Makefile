@@ -146,6 +146,9 @@ pandemonium.z64: N64_ROM_SAVETYPE=eeprom4k
 pandemonium.z64: $(BUILD_DIR)/$(TARGET).dfs $(BUILD_DIR)/$(TARGET).elf
 pandemonium.z64: N64_ROM_METADATA=metadata/metadata.ini
 
+deploy: pandemonium.z64
+	./scripts/deploy.sh --no-build
+
 rebuild:
 	rm -rf $(BUILD_DIR) *.z64
 	rm -rf $(FILESYSTEMDIR)
@@ -164,4 +167,4 @@ build_lib:
 
 -include $(wildcard $(BUILD_DIR)/*.d)
 
-.PHONY: all clean versioned
+.PHONY: all clean versioned deploy
