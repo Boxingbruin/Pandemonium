@@ -58,6 +58,30 @@ Hold Z trigger + left/right on Cpad: Change z target
 - Install Tiny3D (main)
 - run make file
 
+## SummerCart64
+
+Deploy to a [SummerCart64](https://github.com/Polprzewodnikowy/SummerCart64) over USB using [sc64deployer](https://github.com/Polprzewodnikowy/SummerCart64/releases). Connect the cart in developer / USB upload mode so `sc64deployer list` succeeds.
+
+**Makefile (builds `pandemonium.z64` first, then uploads):**
+
+- `make deploy` — direct ROM upload to the cart (EEPROM4K save type; optional `--save` via env below).
+- `make upload-sd` — copy `pandemonium.z64` to the microSD path `Games/Homebrew/Pandemonium.z64` (override with `SC64_SD_DEST`).
+- `make sc64-bootloader` — run `sc64deployer reset` so the cart returns to normal bootloader / power-up behavior.
+
+**Scripts (same behavior; use `--no-build` if you already have `pandemonium.z64`):**
+
+- `./scripts/deploy.sh` — build + deploy, or `./scripts/deploy.sh --no-build`
+- `./scripts/upload-sd.sh` — build + SD copy, or `./scripts/upload-sd.sh --no-build`
+- `./scripts/upload-sd.sh --reset-first` — if the SD is locked by the N64, reset first then upload (also resets cart config)
+- `./scripts/sc64-bootloader.sh` — reset only (equivalent to `make sc64-bootloader`)
+
+**Environment:**
+
+- `SC64_DEPLOYER` — path to the `sc64deployer` binary, or to the extracted release folder containing it (otherwise `sc64deployer` on `PATH`).
+- `SC64_SAVE` — if set, passed to deploy as `--save` (preserve EEPROM across uploads), e.g. `SC64_SAVE=./pandemonium.eep`.
+- `SC64_EXTRA_ARGS` — extra deployer flags (space-separated), e.g. `SC64_EXTRA_ARGS="--direct"`.
+- `SC64_SD_DEST` — destination path on SD for `upload-sd` (default: `Games/Homebrew/Pandemonium.z64`).
+
 ## Creating a release (GitHub)
 - **Bump version**: update `VERSION`, commit, and push.
 - **Build the versioned ROM**:
