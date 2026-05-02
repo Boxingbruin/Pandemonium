@@ -1,4 +1,5 @@
 # Build outputs
+pandemonium.description
 *.z64
 *.elf
 *.o
