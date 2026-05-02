@@ -6,19 +6,20 @@
 # "SD card is locked by the N64 side", turn the N64 off (see SummerCart64 USB docs)
 # or run with --reset-first so sc64deployer reset runs first (releases lock; resets cart state).
 #
+# Menu text and box art come from the ROM: the Makefile sets N64_ROM_METADATA=metadata/metadata.ini,
+# and libdragon runs n64metadata to embed that INI plus referenced files (e.g. [boxart]) into the .z64.
+# You do not need a separate PNG on the SD for N64FlashcartMenu unless you choose an external override.
+#
 # Environment:
 #   SC64_DEPLOYER Same as scripts/deploy.sh
-#   SC64_SD_DEST    Path on SD (default: Games/Homebrew/Pandemonium.z64)
+#   SC64_SD_DEST Path on SD (default: Games/Homebrew/Pandemonium.z64)
 
 set -euo pipefail
 
 _SCRIPTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$_SCRIPTS_DIR/.." && pwd)"
 ROM="${ROOT}/pandemonium.z64"
-DESC="${ROOT}/pandemonium.description"
 SD_DEST="${SC64_SD_DEST:-Games/Homebrew/Pandemonium.z64}"
-# Same folder as ROM, same basename, extension .description (patched N64FlashcartMenu)
-SD_DESC_DEST="${SD_DEST%.*}.description"
 # shellcheck source=sc64-common.sh
 source "$_SCRIPTS_DIR/sc64-common.sh"
 
@@ -118,16 +119,4 @@ if ! "${cmd[@]}" 2>&1 | tee "$log"; then
 		printf '%s\n' "  • Or retry with: ./scripts/upload-sd.sh --no-build --reset-first" >&2
 	fi
 	exit 1
-fi
-
-if [[ -f "$DESC" ]]; then
-	desc_cmd=("$SC64" sd upload "$DESC" "$SD_DESC_DEST")
-	if [[ "$verbose" -eq 1 ]]; then
-		printf 'Running:'
-		printf ' %q' "${desc_cmd[@]}"
-		printf '\n'
-	fi
-	if ! "${desc_cmd[@]}"; then
-		die "sd upload failed for ROM description sidecar (try --reset-first if SD is locked)"
-	fi
 fi

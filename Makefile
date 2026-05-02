@@ -11,6 +11,9 @@ FILESYSTEMDIR = filesystem
 
 TARGET = pandemonium
 
+# Keep in sync with N64_ROM_TITLE below (ROM display name / Advanced Homebrew header).
+ROM_TITLE := Pandemonium
+
 # Read version from VERSION file for versioned builds
 VERSION := $(strip $(shell cat VERSION))
 
@@ -141,13 +144,21 @@ $(FILESYSTEMDIR)/%.bin: $(ASSDIR)/%.bin
 $(BUILD_DIR)/$(TARGET).dfs: $(ASSETSCONV)
 $(BUILD_DIR)/$(TARGET).elf: $(CODEOBJECTS)
 
-pandemonium.z64: N64_ROM_TITLE="Pandemonium"
+pandemonium.z64: N64_ROM_TITLE="$(ROM_TITLE)"
 pandemonium.z64: N64_ROM_SAVETYPE=eeprom4k
 pandemonium.z64: $(BUILD_DIR)/$(TARGET).dfs $(BUILD_DIR)/$(TARGET).elf
 pandemonium.z64: N64_ROM_METADATA=metadata/metadata.ini
 
 deploy: pandemonium.z64
 	./scripts/deploy.sh --no-build
+
+# Copy pandemonium.z64 to SC64 SD at Games/Homebrew/Pandemonium.z64 (USB; overwrites)
+upload-sd: pandemonium.z64
+	./scripts/upload-sd.sh --no-build
+
+# Reset SC64 to normal bootloader / power-up defaults (sc64deployer reset)
+sc64-bootloader:
+	./scripts/sc64-bootloader.sh
 
 rebuild:
 	rm -rf $(BUILD_DIR) *.z64
@@ -167,4 +178,4 @@ build_lib:
 
 -include $(wildcard $(BUILD_DIR)/*.d)
 
-.PHONY: all clean versioned deploy
+.PHONY: all clean versioned deploy upload-sd sc64-bootloader
