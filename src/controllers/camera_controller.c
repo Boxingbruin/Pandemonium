@@ -41,7 +41,7 @@ T3DVec3 customCamDir;
 T3DVec3 camPos;
 T3DVec3 camTarget;
 T3DVec3 camDir;
-T3DVec3 up;
+T3DVec3 up = {{0.0f, 1.0f, 0.0f}};
 
 float camScale = 0.5f;
 float camRotX = 0.0f;
