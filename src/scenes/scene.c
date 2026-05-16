@@ -50,7 +50,7 @@
 
 #include "multi_sword_attacks.h" // TODO: call only from boss
 #include "fx/lightning_fx.h" 
-#include "boulder_hazard.h" // close-range ground-boulder hazard
+//#include "boulder_hazard.h" // close-range ground-boulder hazard
 
 // Dust (implemented later near lock-on indicator)
 static void dust_reset(void);
