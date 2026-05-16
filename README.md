@@ -73,7 +73,6 @@ BoxingBruin:
 - Github: BoxingBruin
 - Discord: BoxingBruin
 - Bluesky: boxingbruin.bsky.social
-- Mastodon: @BoxingBruin
 
 HelloNewman:
 - Github: HellooooNewman
