@@ -22,7 +22,7 @@ Hold Z trigger + left/right on Cpad: Change z target
 - December 1st - Feburary 1st
 - Theme Annonced on December 8th
 - Theme: Repair
-- We are going for a fully fleshed out boss battle. Similar to a dark souls or Majoras Mask battle. Weaving in the theme of repair into the boss. 
+- We are going for a fully fleshed out boss battle. Aesthetic and mechanics of Elden Ring. Weaving in the theme of repair into the boss. 
 
 ## Features:
 - Souls-Like Boss AI with many different attacks and animations.
