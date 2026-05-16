@@ -13,9 +13,9 @@ static int fadeBlackAlpha = 255; // Default alpha value for the rectangle
 bool startScreenFade = false;
 static sprite_t* bossHealthBarBackgroundSprite = NULL;
 static bool bossHealthBarBackgroundLoadAttempted = false;
-static sprite_t* playerShieldHealthSprites[5] = { NULL, NULL, NULL, NULL, NULL };
-static bool playerShieldHealthSpritesLoadAttempted = false;
-static float playerShieldDeathAnimTime = 0.0f;
+//static sprite_t* playerShieldHealthSprites[5] = { NULL, NULL, NULL, NULL, NULL };
+//static bool playerShieldHealthSpritesLoadAttempted = false;
+//static float playerShieldDeathAnimTime = 0.0f;
 
 // UI intro progress values (0.0 = off-screen, 1.0 = fully visible)
 static float boss_ui_intro = 1.0f;
@@ -145,6 +145,71 @@ void draw_boss_health_bar(const char *name, float ratio, float flash)
 
 void draw_player_health_bar(const char *name, float ratio, float flash)
 {
+    (void)name;
+
+    if (ratio < 0.0f) ratio = 0.0f;
+    if (ratio > 1.0f) ratio = 1.0f;
+    if (flash < 0.0f) flash = 0.0f;
+    if (flash > 1.0f) flash = 1.0f;
+
+    rdpq_sync_pipe();
+    rdpq_set_mode_standard();
+
+#ifdef RDPQ_FOG_DISABLED
+    rdpq_mode_fog(RDPQ_FOG_DISABLED);
+#else
+    rdpq_mode_fog(0);
+#endif
+
+    rdpq_mode_combiner(RDPQ_COMBINER_FLAT);
+    rdpq_mode_blender(RDPQ_BLENDER_MULTIPLY);
+
+    const int marginX = ui_safe_margin_x();
+    const int marginY = ui_safe_margin_y();
+
+    const int barWidth = 120;
+    const int barHeight = 10;
+
+    float p = player_ui_intro;
+    int slideDistBottom = 40;
+    int yOffset = (int)((1.0f - p) * (float)slideDistBottom);
+
+    int left = marginX + 12;
+    int bottom = SCREEN_HEIGHT - marginY - 14 + yOffset;
+    int top = bottom - barHeight;
+    int right = left + barWidth;
+
+    // Background
+    rdpq_set_prim_color(RGBA32(35, 35, 35, 160));
+    rdpq_fill_rectangle(left, top, right, bottom);
+
+    // Optional darker inner border/empty region
+    rdpq_set_prim_color(RGBA32(10, 10, 10, 190));
+    rdpq_fill_rectangle(left + 1, top + 1, right - 1, bottom - 1);
+
+    // Health fill
+    int red = 200 + (int)(55.0f * flash);
+    int green = 35 + (int)(45.0f * flash);
+    int blue = 35 + (int)(45.0f * flash);
+
+    int fillRight = left + 2 + (int)((barWidth - 4) * ratio);
+
+    if (fillRight > left + 2) {
+        rdpq_set_prim_color(RGBA32(red, green, blue, 220));
+        rdpq_fill_rectangle(left + 2, top + 2, fillRight, bottom - 2);
+    }
+
+    // Light frame
+    rdpq_set_prim_color(RGBA32(210, 210, 210, 180));
+    rdpq_fill_rectangle(left, top, right, top + 1);
+    rdpq_fill_rectangle(left, bottom - 1, right, bottom);
+    rdpq_fill_rectangle(left, top, left + 1, bottom);
+    rdpq_fill_rectangle(right - 1, top, right, bottom);
+}
+
+//Shield version
+/*void draw_player_health_bar(const char *name, float ratio, float flash)
+{
 	(void)name;
 
 	// Clamp ratio
@@ -249,7 +314,7 @@ void draw_player_health_bar(const char *name, float ratio, float flash)
 		.scale_x = scale,
 		.scale_y = scale,
 	});
-}
+}*/
 
 void display_manager_draw_rectangle(int x, int y, int width, int height, color_t color)
 {
