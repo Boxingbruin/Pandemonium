@@ -24,7 +24,7 @@
 #include "globals.h"
 #include "audio_controller.h"
 #include "scene.h"
-#include "scene_cutscene.h"
+#include "cutscene_manager.h"
 #include "dev.h"
 
 /*
@@ -47,7 +47,7 @@ static void video_player_fmv_osd(void *osd_ctx, int frame_idx, float time_sec, f
     (void)frame_idx;
     (void)time_sec;
 
-    scene_fmv_draw_skip_overlay();
+    cutscene_manager_draw_skip_overlay();
 
     joypad_poll();
     joypad_buttons_t pressed = joypad_get_buttons_pressed(JOYPAD_PORT_1);

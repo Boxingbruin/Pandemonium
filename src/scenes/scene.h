@@ -3,6 +3,10 @@
 
 #include <stdbool.h>
 #include <t3d/t3d.h>
+#include <sprite.h>
+
+// CutsceneState now lives with the cutscene manager.
+#include "cutscene_manager.h"
 
 typedef enum {
     GAME_STATE_PLAYING,
@@ -13,29 +17,6 @@ typedef enum {
     GAME_STATE_TITLE_TRANSITION,
     GAME_STATE_VIDEO
 } GameState;
-
-// Cutscene state management
-typedef enum {
-    CUTSCENE_NONE,
-    CUTSCENE_PHASE1_INTRO,
-    CUTSCENE_PHASE1_CHAIN_CLOSEUP,
-    CUTSCENE_PHASE1_SWORDS_CLOSEUP,
-    CUTSCENE_PHASE1_FILLER,
-    CUTSCENE_PHASE1_LOYALTY,
-    CUTSCENE_PHASE1_FEAR,
-    CUTSCENE_PHASE1_BREAK_CHAINS,
-    CUTSCENE_PHASE1_FACE_ZOOM_OUT,
-    CUTSCENE_PHASE1_INTRO_END,
-    CUTSCENE_PHASE2_INTRO,
-    CUTSCENE_PHASE2_KNEEL,
-    CUTSCENE_PHASE2_BLURB,
-    CUTSCENE_PHASE2_MIND,
-    CUTSCENE_PHASE2_SHACKLED_SUN,
-    CUTSCENE_PHASE2_BURN,
-    CUTSCENE_PHASE2_BNW,
-    CUTSCENE_PHASE2_END,
-    CUTSCENE_POST_BOSS_RESTORED
-} CutsceneState;
 
 typedef enum {
     VIDEO_PREROLL_NONE = 0,
@@ -64,9 +45,17 @@ void scene_spawn_ground_crushed(float x, float z);
 // Must be called after audio initialization and before first scene draws.
 void scene_boot_logos(void);
 
-// Cutscene state functions
+// Cutscene state functions. `scene_is_cutscene_active` is a one-line wrapper
+// around `cutscene_manager_is_active()` kept for the few callers in
+// character.c / boss_render.c / menu_controller.c that already use it.
 bool scene_is_cutscene_active(void);
 bool scene_is_boss_active(void);
+
+// The A-button sprite is loaded by scene.c because it's reused by the dialog
+// "press A" prompt and the title-screen button hint, not just by cutscenes.
+// The cutscene manager reads it through this accessor when drawing the skip
+// overlay (both for in-engine cutscenes and FMV playback).
+sprite_t *scene_get_a_button_sprite(void);
 
 // Game state functions
 GameState scene_get_game_state(void);
@@ -75,6 +64,12 @@ bool scene_is_menu_active(void);
 
 // Title helpers
 void scene_begin_title_transition(void);
+
+// Dev-only warps (used by the DEV_SCENE_FLOW menu).
+// Skip straight into the phase-1 boss fight, or drop the boss to ~42% HP so
+// the next hit triggers the phase-2 cutscene chain.
+void scene_dev_warp_to_fight(void);
+void scene_dev_warp_to_pre_phase2(void);
 
 // Room collision functions
 bool scene_check_room_bounds(float posX, float posY, float posZ);

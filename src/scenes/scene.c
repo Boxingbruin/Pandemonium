@@ -26,6 +26,9 @@
 #include "globals.h"
 #include "video_layout.h"
 
+#include "cutscene_manager.h"
+#include "cutscene_manager_internal.h"
+
 #include "character.h"
 #include "game/bosses/boss.h"
 #include "game/bosses/boss_anim.h"
@@ -230,12 +233,8 @@ static T3DSkeleton* cinematicChainsSkeleton;
 static T3DAnim** cinematicChainsAnimations = NULL;
 static int currentCinematicChainsAnimation = 0;
 static bool cinematicChainsVisible = true;
-// Cutscene Chain Break
-static T3DModel* cutsceneChainBreakModel; 
-static rspq_block_t* cutsceneChainBreakDpl; 
-static T3DMat4FP* cutsceneChainBreakMatrix; 
-static T3DSkeleton* cutsceneChainBreakSkeleton; 
-static T3DAnim** cutsceneChainBreakAnimations = NULL;
+// (PHASE1_BREAK_CHAINS model lives in cutscene_manager.c — accessed via the
+// internal header above; rendered by cutscene_manager_chain_break_draw().)
 
 static int currentTitleDialog = 0;
 static float titleTextActivationTimer = 0.0f;
@@ -391,27 +390,12 @@ static const char *titleDialogs[] = {
     ">Enduring\nblade and\ntorment\nuntil nothing\nremains but\nhollow armor."
 };
 
-static const char *phase1Dialogs[] = {
-    "^Those who approach the\nthrone of gold~ ^fall at my\nblade.",
-    "^A Knight?~ >Where is your\n^loyalty...",
-    "^Where is your...~ <Fear.",
-};
-
-static const char *phase2Dialogs[] = {
-    "^Valiant effort...~ ^Knight.",
-    "^Now leave these sundered\nhalls.",
-    "^Before the endless night",
-    "^Through shackled sun\ndeliverance...~ ^Forces my\nhand once more.",
-    "~ <Burn.",
-    "<BURN MY MORTAL FLESH!!"
-};
-
-bool cutsceneDialogActive = false;
-static bool phase2CutsceneTriggered = false;
+// (phase1Dialogs / phase2Dialogs and cutsceneDialogActive, phase2CutsceneTriggered,
+// bossPostDefeatDialogStep all live in cutscene_manager.c — accessed via the
+// internal header above.)
 
 // Post-boss interaction ("restored") state
 static bool bossPostDefeatTalkDone = false;
-static int bossPostDefeatDialogStep = 0; // 0 -> first line pending/shown, 1 -> second line pending/shown
 static bool bossWasDead = false; // Tracks death transition for one-time post-death cleanup
 
 // Per-slot save stats: track one "run" (boss attempt) start time, and record clear time at death transition.
@@ -481,14 +465,10 @@ static float bossUiIntro = 1.0f;
 static float playerUiIntro = 1.0f;
 static float uiIntroSpeed = 1.5f;
 
-// Title should not be treated as an active cutscene; we explicitly enter cutscenes when needed.
-static CutsceneState cutsceneState = CUTSCENE_NONE;
-static float cutsceneTimer = 0.0f;
-static float cutsceneCameraTimer = 0.0f;  // Separate timer for camera movement (doesn't reset)
+// (cutsceneState, cutsceneTimer, cutsceneCameraTimer, cutsceneCamPosStart/End
+// live in cutscene_manager.c — accessed via the internal header above.)
 static bool bossActivated = false;
 static Boss* g_boss = NULL;  // Boss instance pointer
-static T3DVec3 cutsceneCamPosStart;  // Initial camera position (further back)
-static T3DVec3 cutsceneCamPosEnd;    // Final camera position (closer to boss)
 
 // Game state management
 static GameState gameState = GAME_STATE_TITLE;
@@ -525,11 +505,12 @@ typedef enum {
 // Current lock target selection (cycled via held-Z + C-left/C-right)
 static int s_lockTargetIndex = LOCK_TARGET_WAIST;
 
-// Cutscene skip - toggle button visibility
+// Cutscene skip - toggle button visibility.
+// (skipButtonVisible and lastCutsceneAPressed are owned by cutscene_manager.c
+// — see the internal header above. aButtonSprite is loaded here because it is
+// also reused by the dialog "press A" prompt and the title-screen hint.)
 static sprite_t* aButtonSprite = NULL;
 static surface_t aButtonSurf;
-static bool skipButtonVisible = false; // Whether the skip button is currently visible
-static bool lastCutsceneAPressed = false; // Track A button state for edge detection
 
 // Victory title card background ("Enemy restored")
 static sprite_t* victoryTitleBgSprite = NULL;
@@ -1039,27 +1020,9 @@ void scene_load_environment(){
     );
 
 
-    // ===== LOAD Chain Break =====
-    cutsceneChainBreakModel = t3d_model_load("rom:/cutscene/shatter_chain.t3dm"); 
-    cutsceneChainBreakSkeleton = malloc_uncached(sizeof(T3DSkeleton)); 
-    *cutsceneChainBreakSkeleton = t3d_skeleton_create(cutsceneChainBreakModel); 
-    const char* cutsceneChainBreakAnimationNames[] = {"ChainBreak"}; 
-    const int cutsceneChainBreakAnimationCount = 1;
-
-    cutsceneChainBreakAnimations = malloc_uncached(cutsceneChainBreakAnimationCount * sizeof(T3DAnim*)); 
-    for (int i = 0; i < cutsceneChainBreakAnimationCount; i++) { 
-        cutsceneChainBreakAnimations[i] = malloc_uncached(sizeof(T3DAnim)); 
-        *cutsceneChainBreakAnimations[i] = t3d_anim_create(cutsceneChainBreakModel, cutsceneChainBreakAnimationNames[i]); 
-        t3d_anim_set_looping(cutsceneChainBreakAnimations[i], false); 
-        t3d_anim_set_playing(cutsceneChainBreakAnimations[i], true); 
-        t3d_anim_attach(cutsceneChainBreakAnimations[i], cutsceneChainBreakSkeleton); 
-    }
-
-    rspq_block_begin(); 
-    t3d_model_draw_skinned(cutsceneChainBreakModel, cutsceneChainBreakSkeleton); 
-    cutsceneChainBreakDpl = rspq_block_end(); 
-    cutsceneChainBreakMatrix = malloc_uncached(sizeof(T3DMat4FP)); 
-    t3d_mat4fp_from_srt_euler(cutsceneChainBreakMatrix, (float[3]){MODEL_SCALE, MODEL_SCALE, MODEL_SCALE}, (float[3]){0.0f, 0.0f, 0.0f}, (float[3]){0.0f, 0.0f, 0.0f} );
+    // Chain-break asset for the PHASE1_BREAK_CHAINS cutscene is owned by the
+    // cutscene manager.
+    cutscene_manager_init();
 
     lightning_fx_system_init("rom:/boss/boss_back_sword_lightning2.t3dm");
 
@@ -1630,6 +1593,10 @@ GameState scene_get_game_state(void) {
     return gameState;
 }
 
+sprite_t *scene_get_a_button_sprite(void) {
+    return aButtonSprite;
+}
+
 void scene_set_game_state(GameState state) {
     if (state == gameState) return;
 
@@ -1796,6 +1763,23 @@ void scene_init_playing(bool skippedCutscene)
 #endif
 }
 
+void scene_dev_warp_to_fight(void)
+{
+    gameState = GAME_STATE_PLAYING;
+    cutscene_manager_reset();
+    scene_init_playing(true);
+}
+
+void scene_dev_warp_to_pre_phase2(void)
+{
+    scene_dev_warp_to_fight();
+    // Drop boss to just above the phase-2 trigger (40% of maxHealth) so the next
+    // hit kicks off the phase 2 cutscene chain.
+    if (g_boss) {
+        g_boss->health = g_boss->maxHealth * 0.42f;
+    }
+}
+
 void scene_set_cinematic_camera(T3DVec3 posStart, T3DVec3 posEnd, T3DVec3 posTarget)
 {
     cutsceneCamPosStart = posStart;
@@ -1839,17 +1823,17 @@ void scene_init_cutscene()
         case CUTSCENE_PHASE1_FILLER:
             cutsceneDialogActive = true;
             scene_set_cinematic_camera((T3DVec3){{-0.47f, 6.89f,  70.0f}}, (T3DVec3){{-0.15f, 22.99f, 32.26f}}, (T3DVec3){{0.476f, 55.54f, -71.29f}});
-            dialog_controller_speak(phase1Dialogs[0], 0, 0.0f, false, false);
+            dialog_controller_speak(cutscene_manager_get_phase1_dialog(0), 0, 0.0f, false, false);
             break;
         case CUTSCENE_PHASE1_LOYALTY:
             cutsceneDialogActive = true;
             scene_set_cinematic_camera((T3DVec3){{-18.28f, 11.45f,  2.0f}}, (T3DVec3){{-18.28f, 11.45f,  -2.0f}}, (T3DVec3){{80.4f, -1.0f, -11.0f}});
-            dialog_controller_speak(phase1Dialogs[1], 0, 0.0f, false, false);
+            dialog_controller_speak(cutscene_manager_get_phase1_dialog(1), 0, 0.0f, false, false);
             break;
         case CUTSCENE_PHASE1_FEAR:
             cutsceneDialogActive = true;
             scene_set_cinematic_camera((T3DVec3){{-13.454f, 13.41f,  -24.27f}}, (T3DVec3){{-13.454f, 25.41f,  -24.27f}}, (T3DVec3){{400.0f, 43.41f, -29.67f}});
-            dialog_controller_speak(phase1Dialogs[2], 0, 0.0f, false, false);
+            dialog_controller_speak(cutscene_manager_get_phase1_dialog(2), 0, 0.0f, false, false);
 
             break;
         case CUTSCENE_PHASE1_BREAK_CHAINS:
@@ -1916,7 +1900,7 @@ void scene_init_cutscene()
             g_boss->currentAnimState = BOSS_ANIM_PHASE2_COLLAPSE_IDLE;
             
             cutsceneDialogActive = true;
-            dialog_controller_speak(phase2Dialogs[0], 0, 0.0f, false, false);
+            dialog_controller_speak(cutscene_manager_get_phase2_dialog(0), 0, 0.0f, false, false);
         } break;
         case CUTSCENE_PHASE2_BLURB: {
             T3DAnim** anims = (T3DAnim**)g_boss->animations;
@@ -1925,21 +1909,21 @@ void scene_init_cutscene()
             g_boss->currentAnimState = BOSS_ANIM_PHASE2_COLLAPSE_IDLE;
             
             cutsceneDialogActive = true;
-            dialog_controller_speak(phase2Dialogs[1], 0, 0.0f, false, false);
+            dialog_controller_speak(cutscene_manager_get_phase2_dialog(1), 0, 0.0f, false, false);
             scene_set_cinematic_camera((T3DVec3){{-15.44f, 23.37f, -23.00f}}, (T3DVec3){{-36.95f, 18.85f, -1.9f}}, (T3DVec3){{g_boss->pos[0] - 10.0f, g_boss->pos[1] + 30.0f, g_boss->pos[2]}});
         } break;
         case CUTSCENE_PHASE2_MIND: {
             cutsceneDialogActive = true;
             screenTransition = true;
             startScreenFade = true;
-            dialog_controller_speak(phase2Dialogs[2], 0, 0.0f, false, false);
+            dialog_controller_speak(cutscene_manager_get_phase2_dialog(2), 0, 0.0f, false, false);
             scene_set_cinematic_camera((T3DVec3){{-36.95f, 18.85f, -1.9f}}, (T3DVec3){{-16.97f, 28.0f, -1.6f}}, (T3DVec3){{53.87f, 60.67f, 0.0f}});
         } break;
         case CUTSCENE_PHASE2_SHACKLED_SUN: {
             screenTransition = true;
             startScreenFade = true;
             cutsceneDialogActive = true;
-            dialog_controller_speak(phase2Dialogs[3], 0, 0.0f, false, false);
+            dialog_controller_speak(cutscene_manager_get_phase2_dialog(3), 0, 0.0f, false, false);
             scene_set_cinematic_camera((T3DVec3){{-35.0f, 0.0f, 0.0f}}, (T3DVec3){{-25.0f, 0.0f, 0.0f}}, (T3DVec3){{100.0f, 0.0f, 0.0f}});
         } break;
         case CUTSCENE_PHASE2_BURN: {
@@ -1949,7 +1933,7 @@ void scene_init_cutscene()
             g_boss->currentAnimState = BOSS_ANIM_PHASE2_WIN_KNEEL;
             
             cutsceneDialogActive = true;
-            dialog_controller_speak(phase2Dialogs[4], 0, 0.0f, false, false);
+            dialog_controller_speak(cutscene_manager_get_phase2_dialog(4), 0, 0.0f, false, false);
             scene_set_cinematic_camera((T3DVec3){{-50.0f, 20.0f, -10.0f}}, (T3DVec3){{-40.0f, 20.0f, -10.0f}}, (T3DVec3){{100.0f, 50.0f, 0.0f}});
         } break;
         case CUTSCENE_PHASE2_BNW: {
@@ -1967,7 +1951,7 @@ void scene_init_cutscene()
             lightning_fx_system_ring_enable(true);
 
             cutsceneDialogActive = true;
-            dialog_controller_speak(phase2Dialogs[5], 0, 0.0f, false, false);
+            dialog_controller_speak(cutscene_manager_get_phase2_dialog(5), 0, 0.0f, false, false);
 
             screenTransition = true;
             startScreenFade = true;
@@ -2035,8 +2019,7 @@ void scene_cutscene_update()
 
     if(cutsceneState == CUTSCENE_PHASE1_BREAK_CHAINS)
     {
-        t3d_anim_update(cutsceneChainBreakAnimations[0], deltaTime);
-        t3d_skeleton_update(cutsceneChainBreakSkeleton);
+        cutscene_manager_chain_break_tick(deltaTime);
     }
 
     if (g_boss) {
@@ -3487,9 +3470,6 @@ static void ground_crush_draw(T3DViewport *viewport) {
     rdpq_mode_zbuf(false, false);
 }
 
-// Forward declaration
-static void draw_cutscene_skip_indicator(void);
-
 void scene_draw_title(T3DViewport *viewport)
 {
     // ===== DRAW 3D =====
@@ -3609,106 +3589,7 @@ void scene_draw_title(T3DViewport *viewport)
         }
         
         // Draw skip button on top during title transition (fog part)
-        draw_cutscene_skip_indicator();
-    }
-}
-
-// Draw the A button skip indicator (only when visible after first A press)
-static void draw_cutscene_skip_indicator(void)
-{
-    // Only draw if button sprite is loaded, button is visible, and either:
-    // - cutscene is active, OR
-    // - we're in title transition (fog part)
-    bool isTitleTransition = (gameState == GAME_STATE_TITLE_TRANSITION);
-    bool isCutsceneActive = (cutsceneState != CUTSCENE_NONE);
-    
-    if (!aButtonSprite || !skipButtonVisible || (!isCutsceneActive && !isTitleTransition)) {
-        return;
-    }
-    
-    // Get actual sprite dimensions
-    int buttonWidth = aButtonSurf.width;
-    int buttonHeight = aButtonSurf.height;
-    
-    // Position at bottom right of screen, inside user-adjusted UI safe area.
-    // (Helps avoid CRT overscan clipping.)
-    const int marginX = ui_safe_margin_x();
-    const int marginY = ui_safe_margin_y();
-    int buttonX = SCREEN_WIDTH - buttonWidth - marginX;
-    int buttonY = SCREEN_HEIGHT - buttonHeight - marginY;
-    
-    // Draw the A button sprite first (text rendering changes RDP state)
-    rdpq_sync_pipe();
-    rdpq_set_mode_standard();
-    // Avoid alpha-compare clipping on anti-aliased edges
-    rdpq_mode_alphacompare(0);
-    rdpq_mode_blender(RDPQ_BLENDER_MULTIPLY);
-    // Use sprite blit for robustness across formats / states
-    rdpq_sprite_blit(aButtonSprite, buttonX, buttonY, NULL);
-
-    // Draw the "skip" label to the left of the A button
-    const int gap = 6;
-    const int textRight = buttonX - gap;
-    if (textRight > 0) {
-        // Baseline is generally "y" in this codebase; align near the icon's vertical center/bottom.
-        const int textY = buttonY + (buttonHeight / 2) + 6;
-        rdpq_set_prim_color(RGBA32(255, 255, 255, 255));
-        rdpq_text_printf(&(rdpq_textparms_t){
-            .align = ALIGN_RIGHT,
-            .width = textRight,
-            .wrap = WRAP_WORD,
-        }, FONT_UNBALANCED, 0, textY, "%s", "skip");
-    }
-}
-
-void scene_draw_cutscene_fog(){
-    switch(cutsceneState){
-        case CUTSCENE_PHASE1_INTRO:
-            t3d_fog_set_range(300.0f, 600.0f);
-            break;
-        case CUTSCENE_PHASE1_CHAIN_CLOSEUP:
-            t3d_fog_set_range(300.0f, 500.0f);
-            break;
-        case CUTSCENE_PHASE1_SWORDS_CLOSEUP:
-            t3d_fog_set_range(450.0f, 800.0f);
-            break;
-        case CUTSCENE_PHASE1_FILLER:
-            t3d_fog_set_range(30.0f, 50.0f);
-            //t3d_fog_set_range(450.0f, 800.0f);
-            break;
-        case CUTSCENE_PHASE1_LOYALTY:
-            t3d_fog_set_range(3.0f, 10.0f);
-            break;
-        case CUTSCENE_PHASE1_FEAR:
-            t3d_fog_set_range(20.0f, 50.0f);
-            break;
-        case CUTSCENE_PHASE1_INTRO_END:
-            t3d_fog_set_range(450.0f, 800.0f);
-            break;
-        case CUTSCENE_PHASE2_MIND:
-        case CUTSCENE_PHASE2_KNEEL:
-        case CUTSCENE_PHASE2_BURN:
-        case CUTSCENE_PHASE2_INTRO:
-            t3d_fog_set_range(300.0f, 600.0f);
-            break;
-        case CUTSCENE_PHASE2_SHACKLED_SUN:
-            break;
-        case CUTSCENE_PHASE2_BNW:{
-                const color_t prim = RGBA32(255,255,255,255);
-
-                t3d_screen_clear_color(prim);
-                t3d_screen_clear_depth();
-
-                rdpq_mode_fog(RDPQ_FOG_STANDARD);
-                rdpq_set_fog_color(prim);
-                t3d_fog_set_range(300.0f, 500.0f);
-            }
-            break;
-        case CUTSCENE_PHASE2_END:
-            t3d_fog_set_range(30.0f, 400.0f);
-            break;
-        default:
-            break;
+        cutscene_manager_draw_skip_overlay();
     }
 }
 
@@ -4325,8 +4206,7 @@ void scene_draw_cutscene(){
             
             // Draw no depth environment first
             t3d_matrix_push_pos(1);
-                t3d_matrix_set(cutsceneChainBreakMatrix, true);
-                rspq_block_run(cutsceneChainBreakDpl);
+                cutscene_manager_chain_break_draw();
             t3d_matrix_pop(1);
 
             rdpq_sync_pipe(); // idk if it's needed but there was a crash here
@@ -4458,7 +4338,7 @@ void scene_draw(T3DViewport *viewport)
     t3d_screen_clear_depth();
 
     if(cutsceneState != CUTSCENE_NONE){
-        scene_draw_cutscene_fog();
+        cutscene_manager_draw_fog();
     }else{
         t3d_fog_set_range(450.0f, 800.0f);
     }
@@ -4482,7 +4362,7 @@ void scene_draw(T3DViewport *viewport)
         // Draw letterbox bars during cutscenes
         letterbox_draw();
         // Draw skip indicator on top of letterbox bars
-        draw_cutscene_skip_indicator();
+        cutscene_manager_draw_skip_overlay();
         return;
     }
     // ===== DRAW 3D =====
@@ -4934,16 +4814,7 @@ void scene_cleanup(void) // Realistically we never want to call this for the jam
         cinematicChainsAnimations = NULL;
     }
 
-    if (cutsceneChainBreakDpl) { rspq_block_free(cutsceneChainBreakDpl); cutsceneChainBreakDpl = NULL; }
-    if (cutsceneChainBreakModel) { t3d_model_free(cutsceneChainBreakModel); cutsceneChainBreakModel = NULL; }
-    if (cutsceneChainBreakMatrix) { free_uncached(cutsceneChainBreakMatrix); cutsceneChainBreakMatrix = NULL; }
-    if (cutsceneChainBreakSkeleton) { t3d_skeleton_destroy(cutsceneChainBreakSkeleton); free_uncached(cutsceneChainBreakSkeleton); cutsceneChainBreakSkeleton = NULL; }
-    if (cutsceneChainBreakAnimations) {
-        // only 1 anim currently
-        if (cutsceneChainBreakAnimations[0]) { t3d_anim_destroy(cutsceneChainBreakAnimations[0]); free_uncached(cutsceneChainBreakAnimations[0]); }
-        free_uncached(cutsceneChainBreakAnimations);
-        cutsceneChainBreakAnimations = NULL;
-    }
+    cutscene_manager_cleanup();
 
     if (aButtonSprite) {
         sprite_free(aButtonSprite);
