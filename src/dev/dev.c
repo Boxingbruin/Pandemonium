@@ -20,6 +20,7 @@
 #include "joypad_utility.h"
 
 #include "globals.h"
+#include "scene.h"
 
 bool debugDraw = true;
 
@@ -38,8 +39,9 @@ enum {
     DEV_COLLISION,
     DEV_RSPQ_PROFILER,
     DEV_MEMORY_DEBUG,
+    DEV_SCENE_FLOW,
 };
-static int rowCount = 6;
+static int rowCount = 7;
 static int controlling = DEV_NONE;
 
 static bool toggleDevMenu = false;
@@ -237,6 +239,27 @@ void dev_controller_update()
                         dev_take_heap_snapshot();
                     }
                     break;
+                case DEV_SCENE_FLOW:
+                    if (btn.d_up) {
+                        selected--;
+                        if (selected < 0) selected = 1;
+                    }
+                    if (btn.d_down) {
+                        selected++;
+                        if (selected > 1) selected = 0;
+                    }
+                    if (btn.a && DEV_MODE) {
+                        if (selected == 0) {
+                            scene_dev_warp_to_fight();
+                        } else {
+                            scene_dev_warp_to_pre_phase2();
+                        }
+                        toggleDevMenu = false;
+                        inCategoryScreen = false;
+                        controlling = DEV_NONE;
+                        dev_handle_camera_state();
+                    }
+                    break;
                 default:
                     break;
             }
@@ -374,7 +397,8 @@ void dev_update()
             "Camera Position",
             "Collision",
             "Profiler",
-            "Memory Debug"
+            "Memory Debug",
+            "Scene Flow"
         };
         int sidebarCount = rowCount + 1;
         int sidebarX = 10;
@@ -465,6 +489,14 @@ void dev_update()
                     } else {
                         t3d_debug_printf(paneX, 44, "No snapshot taken yet.");
                     }
+                    break;
+                case DEV_SCENE_FLOW:
+                    t3d_debug_printf(paneX, 24, "DEV_MODE warps (A = run)");
+                    t3d_debug_printf(paneX, 40, "%s Skip to boss fight",
+                        selected == 0 ? ">" : " ");
+                    t3d_debug_printf(paneX, 56, "%s Pre phase-2 (~42%% HP)",
+                        selected == 1 ? ">" : " ");
+                    t3d_debug_printf(paneX, 80, "Up/Down: choose");
                     break;
             }
         }
