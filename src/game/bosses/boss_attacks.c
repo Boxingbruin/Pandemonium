@@ -1206,12 +1206,16 @@ static void boss_attacks_update_figure_eight_hover(Boss* boss, float dt) {
 
 static void boss_attacks_cleanup_sword_ring(Boss* boss) {
     if (!boss) return;
-    
+
     // Reset boss state
     boss->swordRingSpawned = false;
     boss->swordRingFiredCount = 0;
     boss->swordRingFireTimer = 0.0f;
     boss->preTelegraphFX = false;
+    // Restore the default ring size. spawn_sword_ring halves swordRingCount
+    // each time it runs and writes the halved value back, so without this
+    // reset every subsequent aerial barrage spawns fewer swords (12 → 6 → 3 → 1).
+    boss->swordRingCount = 12;
 }
 
 static void boss_attacks_fire_sword_projectile(Boss* boss, int swordIndex) {
