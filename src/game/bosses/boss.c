@@ -365,6 +365,11 @@ void boss_update(Boss* boss) {
     // 6. Update transforms (matrices, hitboxes, etc.)
     boss_update_transforms(boss);
 
+    if (boss->damageFlashTimer > 0.0f) {
+        boss->damageFlashTimer -= dt;
+        if (boss->damageFlashTimer < 0.0f) boss->damageFlashTimer = 0.0f;
+    }
+
     // Boss sword trail: emit only while the attack collider is active.
     SwordTrail *trail = sword_trail_get_boss();
     float baseW[3], tipW[3];
@@ -408,8 +413,8 @@ void boss_apply_damage(Boss* boss, float amount) {
     
     boss->health -= amount;
     if (boss->health < 0.0f) boss->health = 0.0f;
-    
-    boss->damageFlashTimer = 0.3f;
+
+    boss->damageFlashTimer = 0.25f;
     
     // // Set pending stagger request if not already dead
     // if (boss->health > 0.0f) {
