@@ -68,6 +68,12 @@ static const float ROLL_DURATION = 0.9f;
 static const float ROLL_DURATION_MOVING = 0.45f; // tune 0.45–0.70
 static const float ROLL_MOVING_MAG      = 0.20f; // stick magnitude threshold
 
+// Invulnerability window inside the roll, expressed as normalized actionTimer
+// (which runs 0..1 over currentActionDuration). Outside this window the player
+// can be hit — keeps the recovery frames of the roll vulnerable.
+static const float ROLL_IFRAME_START = 0.02f;
+static const float ROLL_IFRAME_END   = 0.72f;
+
 static const float ROLL_ANIM_SPEED = 1.0f;
 static const float ATTACK_DURATION = 0.9f; // (legacy, not used directly)
 static const float STRONG_ATTACK_DURATION = 1.2f;
@@ -1100,8 +1106,11 @@ static inline void upgrade_to_strong_attack(bool leftHeldNow)
 
 static inline bool character_is_invulnerable(void)
 {
-    return (characterState == CHAR_STATE_ROLLING) ||
-           (characterState == CHAR_STATE_KNOCKDOWN);
+    if (characterState == CHAR_STATE_KNOCKDOWN) return true;
+    if (characterState == CHAR_STATE_ROLLING) {
+        return (actionTimer >= ROLL_IFRAME_START) && (actionTimer <= ROLL_IFRAME_END);
+    }
+    return false;
 }
 
 static inline void accelerate_towards(float desiredX, float desiredZ, float maxSpeed, float dt)
