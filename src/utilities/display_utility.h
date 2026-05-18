@@ -23,6 +23,11 @@ void draw_player_stamina_bar(float ratio);
 void display_utility_set_boss_ui_intro(float progress);
 void display_utility_set_player_ui_intro(float progress);
 
+// Snap the boss health bar's recent-damage/heal trail to the current ratio,
+// suppressing any leftover trail decay. Call when the HUD has been hidden
+// (e.g. through a cutscene) so it doesn't appear to "animate in" on return.
+void display_utility_snap_boss_health_trail(float ratio);
+
 void display_utility_solid_black_transition(bool fadeIn, float speed);
 
 #endif
