@@ -780,6 +780,14 @@ void msa_init(void) {
     gGroundSweepActive = false;
     gGroundSweepDone   = false;
 
+    // Quiet the system on init. The descend-phase exit in msa_update
+    // self-loops back into CEILING_SETUP whenever gEnabled is true and
+    // gGroundSweepActive is false, so leaving gEnabled at its default of
+    // true here would dump swords on the player during phase 1 after a
+    // mid-phase-2 death. msa_ground_sweep_start / msa_spawn_aerial_ring
+    // set gEnabled = true themselves when the boss next calls them.
+    gEnabled = false;
+
     uint32_t seed = 0xA123BEEF;
 
     for (int i = 0; i < MSA_MAX_SWORDS; i++) {

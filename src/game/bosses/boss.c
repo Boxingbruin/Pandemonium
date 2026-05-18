@@ -512,10 +512,7 @@ void boss_init(Boss* boss) {
     }
     
     boss->animations = (void**)animations;
-    if (boss->animationCount <= 0 || boss->animationCount > 64) {
-        debugf("BAD boss->animationCount = %d\n", boss->animationCount);
-        boss->animationCount = BOSS_ANIM_COUNT;
-    }
+    boss->animationCount = animationCount;
         
     // Set current animation index
     boss->currentAnimation = BOSS_ANIM_KNEEL;

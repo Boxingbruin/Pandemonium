@@ -52,6 +52,8 @@ void boss_ai_init(Boss* boss) {
     boss->trackingSlamCooldown = 0.0f;
     boss->flipAttackCooldown = 0.0f;
     boss->swordBarrageCooldown = 0.0f;
+    boss->groundSweepCooldown = 0.0f;
+    boss->groundSweepStarted = false;
     
     // Initialize attack state
     boss->isAttacking = false;
@@ -312,6 +314,41 @@ static void boss_ai_combo_lunge_helper(Boss* boss, float dist, float dx, float d
 
 static void boss_ai_select_attack(Boss* boss, float dist) {
     boss->currentAttackHasHit = false;
+
+    // ------------------------------------------------------------
+    // PHASE 2 attacks take priority over the phase 1 attack roster
+    // whenever the boss is in phase 2 and their range/cooldown gates
+    // are satisfied. Otherwise they'd never fire — the phase 1
+    // selection below issues `return` for almost every branch.
+    // ------------------------------------------------------------
+    if (boss->phaseIndex == 2) {
+        // Aerial Sword Barrage: any range. The attack lifts the boss above
+        // the arena and rains swords at the predicted player position, so
+        // there's no minimum-distance requirement.
+        if (boss->swordBarrageCooldown <= 0.0f && boss->consecutiveSwordRingUses < 2) {
+            boss_ai_start_aerial_sword_barrage(boss);
+            return;
+        }
+
+        // Ground Sweep: mid-range, boss stays grounded while MSA drops swords.
+        if (dist >= 100.0f && dist <= 350.0f && boss->groundSweepCooldown <= 0.0f) {
+            boss->state = BOSS_STATE_GROUND_SWEEP;
+            boss->stateTimer = 0.0f;
+            boss->groundSweepCooldown = 25.0f;
+            boss->attackCooldown = 1.0f;
+            boss->groundSweepStarted = false;
+
+            boss->isAttacking = true;
+            boss->attackAnimTimer = 0.0f;
+            boss->animationTransitionTimer = 0.0f;
+            boss->currentAttackHasHit = false;
+
+            boss->currentAttackName = "Ground Sweep";
+            boss->attackNameDisplayTimer = 2.0f;
+            boss->currentAttackId = BOSS_ATTACK_GROUND_SWEEP;
+            return;
+        }
+    }
 
     // ------------------------------------------------------------
     // NEW: Stomp (super close) and Attack1 (close band)
@@ -664,67 +701,40 @@ static void boss_ai_select_attack(Boss* boss, float dist) {
         }
 
     }
-    
-    // Ground Sweep: mid-range, boss stays on ground while MSA drops swords from ceiling.
-    // Phase 2 only.
-    if (boss->phaseIndex == 2 && dist >= 100.0f && dist <= 350.0f && boss->groundSweepCooldown <= 0.0f) {
-        boss->state = BOSS_STATE_GROUND_SWEEP;
-        boss->stateTimer = 0.0f;
-        boss->groundSweepCooldown = 25.0f;
-        boss->attackCooldown = 1.0f;
-        boss->groundSweepStarted = false;
+}
 
-        boss->isAttacking = true;
-        boss->attackAnimTimer = 0.0f;
-        boss->animationTransitionTimer = 0.0f;
-        boss->currentAttackHasHit = false;
+void boss_ai_start_aerial_sword_barrage(Boss* boss) {
+    if (!boss) return;
 
-        boss->currentAttackName = "Ground Sweep";
-        boss->attackNameDisplayTimer = 2.0f;
-        boss->currentAttackId = BOSS_ATTACK_GROUND_SWEEP;
-        return;
-    }
+    boss->state = BOSS_STATE_AERIAL_SWORD_BARRAGE;
+    boss->stateTimer = 0.0f;
+    boss->swordBarrageCooldown = 15.0f;
+    boss->attackCooldown = 1.0f;
 
-    // -------------------------------------------
-    // LONG RANGE ATTACKS - Outside of distance restrictions
-    // -------------------------------------------
-    // Aerial Sword Barrage: very long range, limited consecutive uses
-    // Phase 2 only.
-    if (boss->phaseIndex == 2 && dist >= 250.0f && boss->swordBarrageCooldown <= 0.0f && boss->consecutiveSwordRingUses < 2) {
-        boss->state = BOSS_STATE_AERIAL_SWORD_BARRAGE;
-        boss->stateTimer = 0.0f;
-        boss->swordBarrageCooldown = 15.0f;
-        boss->attackCooldown = 1.0f;
-        
-        // Randomly select variation
-        boss->currentBarrageVariation = rand() % 2;
-        boss->consecutiveSwordRingUses++;
-        
-        // Reset state
-        boss->swordRingSpawned = false;
-        boss->swordRingFiredCount = 0;
-        boss->swordRingFireTimer = 0.0f;
-        boss->preTelegraphFX = false;
-        
-        // Set hover center to current position
-        boss->hoverCenterPos[0] = boss->pos[0];
-        boss->hoverCenterPos[1] = boss->pos[1];
-        boss->hoverCenterPos[2] = boss->pos[2];
-        
-        // Lock targeting
-        predict_character_position(boss->lockedTargetingPos, 0.8f);
-        boss->targetingLocked = true;
-        
-        boss->isAttacking = true;
-        boss->attackAnimTimer = 0.0f;
-        boss->animationTransitionTimer = 0.0f;
-        boss->currentAttackHasHit = false;
-        
-        boss->currentAttackName = boss->currentBarrageVariation == 0 ? "Angel Burst" : "Angel Rain";
-        boss->attackNameDisplayTimer = 3.0f;
-        boss->currentAttackId = BOSS_ATTACK_AERIAL_SWORD_BARRAGE;
-        return;
-    }
+    boss->currentBarrageVariation = rand() % 2;
+    boss->consecutiveSwordRingUses++;
+
+    boss->swordRingSpawned = false;
+    boss->swordRingFiredCount = 0;
+    boss->swordRingFireTimer = 0.0f;
+    boss->preTelegraphFX = false;
+
+    // Hover anchor = ground Y to lift from / descend back to.
+    boss->hoverCenterPos[0] = boss->pos[0];
+    boss->hoverCenterPos[1] = boss->pos[1];
+    boss->hoverCenterPos[2] = boss->pos[2];
+
+    predict_character_position(boss->lockedTargetingPos, 0.8f);
+    boss->targetingLocked = true;
+
+    boss->isAttacking = true;
+    boss->attackAnimTimer = 0.0f;
+    boss->animationTransitionTimer = 0.0f;
+    boss->currentAttackHasHit = false;
+
+    boss->currentAttackName = boss->currentBarrageVariation == 0 ? "Angel Burst" : "Angel Rain";
+    boss->attackNameDisplayTimer = 3.0f;
+    boss->currentAttackId = BOSS_ATTACK_AERIAL_SWORD_BARRAGE;
 }
 
 void boss_ai_update(Boss* boss, BossIntent* out_intent) {
@@ -1247,6 +1257,7 @@ void boss_ai_update(Boss* boss, BossIntent* out_intent) {
                         boss->state = BOSS_STATE_STRAFE;
                     }
                     boss->stateTimer = 0.0f;
+                    boss->consecutiveSwordRingUses = 0;
                 }
                 break;
 
