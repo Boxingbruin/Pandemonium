@@ -31,6 +31,90 @@ static const float BOSS_SHADOW_GROUND_Y = -1.0f;  // Match roomY floor level
 static const float BOSS_JUMP_REF_HEIGHT = 120.0f;
 static const float BOSS_SHADOW_BASE_ALPHA = 120.0f;
 
+// Damage flash material tint cache: t3d sets prim color per material from the
+// model asset, so an external rdpq_set_prim_color() gets clobbered. We mutate
+// each material's primColor while flashing and restore on flash end.
+static T3DMaterial** s_flashMats = NULL;
+static color_t*      s_flashOrigPrim = NULL;
+static uint8_t*      s_flashOrigFlags = NULL;
+static int           s_flashMatCount = 0;
+static const T3DModel* s_flashCachedModel = NULL;
+static bool          s_flashTintApplied = false;
+
+static void boss_flash_cache_init(const T3DModel* model) {
+    if (s_flashCachedModel == model && s_flashMats) return;
+
+    // Free any previous cache (model changed).
+    if (s_flashMats)      { free(s_flashMats);      s_flashMats = NULL; }
+    if (s_flashOrigPrim)  { free(s_flashOrigPrim);  s_flashOrigPrim = NULL; }
+    if (s_flashOrigFlags) { free(s_flashOrigFlags); s_flashOrigFlags = NULL; }
+    s_flashMatCount = 0;
+    s_flashCachedModel = NULL;
+    s_flashTintApplied = false;
+    if (!model) return;
+
+    int count = 0;
+    T3DModelIter it = t3d_model_iter_create(model, T3D_CHUNK_TYPE_MATERIAL);
+    while (t3d_model_iter_next(&it)) count++;
+    if (count <= 0) return;
+
+    s_flashMats      = (T3DMaterial**)malloc(sizeof(T3DMaterial*) * count);
+    s_flashOrigPrim  = (color_t*)malloc(sizeof(color_t) * count);
+    s_flashOrigFlags = (uint8_t*)malloc(sizeof(uint8_t) * count);
+    if (!s_flashMats || !s_flashOrigPrim || !s_flashOrigFlags) {
+        free(s_flashMats);      s_flashMats = NULL;
+        free(s_flashOrigPrim);  s_flashOrigPrim = NULL;
+        free(s_flashOrigFlags); s_flashOrigFlags = NULL;
+        return;
+    }
+
+    int i = 0;
+    it = t3d_model_iter_create(model, T3D_CHUNK_TYPE_MATERIAL);
+    while (t3d_model_iter_next(&it)) {
+        T3DMaterial* m = it.material;
+        s_flashMats[i]      = m;
+        s_flashOrigPrim[i]  = m->primColor;
+        s_flashOrigFlags[i] = m->setColorFlags;
+        i++;
+    }
+    s_flashMatCount = i;
+    s_flashCachedModel = model;
+}
+
+// tintAmount in [0..1]: 0 = fully original color, 1 = fully red.
+// Each material lerps from its own original primColor toward red, so the
+// fade returns smoothly to per-material colors (e.g. yellow swords, red cloth)
+// instead of routing through a shared white and popping back at the end.
+static void boss_flash_apply_tint(float tintAmount) {
+    if (!s_flashMats) return;
+    if (tintAmount < 0.0f) tintAmount = 0.0f;
+    if (tintAmount > 1.0f) tintAmount = 1.0f;
+    const float ta = tintAmount;
+    const float ka = 1.0f - tintAmount;
+    // Muted dark red target so the flash reads as "hurt" without blowing out.
+    const float tr = 100.0f, tg = 20.0f, tb = 20.0f;
+    for (int i = 0; i < s_flashMatCount; i++) {
+        T3DMaterial* m = s_flashMats[i];
+        color_t o = s_flashOrigPrim[i];
+        uint8_t r = (uint8_t)(o.r * ka + tr * ta);
+        uint8_t g = (uint8_t)(o.g * ka + tg * ta);
+        uint8_t b = (uint8_t)(o.b * ka + tb * ta);
+        m->primColor = (color_t){ r, g, b, o.a };
+        m->setColorFlags = s_flashOrigFlags[i] | 0b001;
+    }
+    s_flashTintApplied = true;
+}
+
+static void boss_flash_restore(void) {
+    if (!s_flashMats || !s_flashTintApplied) return;
+    for (int i = 0; i < s_flashMatCount; i++) {
+        T3DMaterial* m = s_flashMats[i];
+        m->primColor     = s_flashOrigPrim[i];
+        m->setColorFlags = s_flashOrigFlags[i];
+    }
+    s_flashTintApplied = false;
+}
+
 ScrollDyn bossScrollDyn = {
     .xSpeed = 0.0f,
     .ySpeed = 30.0f,
@@ -148,9 +232,21 @@ void boss_render_draw(Boss* boss) {
 
     // Be defensive: render might be called before init is fully complete.
     if (!boss->model || !boss->modelMat) return;
-    
+
     // Shadow is now drawn separately via boss_draw_shadow() in a batched pass
     // This avoids expensive mode changes per boss
+
+    boss_flash_cache_init((const T3DModel*)boss->model);
+    if (boss->damageFlashTimer > 0.0f) {
+        // 0.25s window: solid red for the first half, then fade out over the second.
+        float f = boss->damageFlashTimer / 0.25f;
+        if (f < 0.0f) f = 0.0f;
+        if (f > 1.0f) f = 1.0f;
+        float tint = (f >= 0.5f) ? 1.0f : (f * 2.0f);
+        boss_flash_apply_tint(tint);
+    } else if (s_flashTintApplied) {
+        boss_flash_restore();
+    }
 
     boss_draw_scrolling(boss);
     
@@ -181,9 +277,7 @@ void boss_render_debug(Boss* boss, void* viewport) {
     float ratio = boss->maxHealth > 0.0f ? fmaxf(0.0f, fminf(1.0f, boss->health / boss->maxHealth)) : 0.0f;
     float flash = 0.0f;
     if (boss->damageFlashTimer > 0.0f) {
-        flash = fminf(1.0f, boss->damageFlashTimer / 0.3f);
-        boss->damageFlashTimer -= deltaTime;
-        if (boss->damageFlashTimer < 0.0f) boss->damageFlashTimer = 0.0f;
+        flash = fminf(1.0f, boss->damageFlashTimer / 0.25f);
     }
     draw_boss_health_bar(boss->name, ratio, flash);
     
