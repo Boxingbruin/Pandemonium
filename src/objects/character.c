@@ -235,7 +235,7 @@ static float strongKnockbackDirX     = 0.0f;
 static float strongKnockbackDirZ     = 0.0f;
 
 // Tuning
-static const float STRONG_KNOCKBACK_DIST = 50.0f; // world units
+static const float STRONG_KNOCKBACK_DIST = 100.0f; // world units
 
 // Knockdown timing (seconds)
 static const float KNOCKDOWN_TOTAL_TIME_S      = 5.0f;
@@ -1553,6 +1553,9 @@ static void switch_to_action_animation_immediate(int targetAnim)
     character.previousAnimation = character.currentAnimation;
     character.currentAnimation = targetAnim;
     character.isBlending = false;
+    character.blendFactor = 0.0f;
+    character.blendTimer = 0.0f;
+    hasBlendSnapshot = false;
 
     anim_bind_and_play(character.animations, targetAnim, character.skeleton, false, true);
     lastAttachedMain = targetAnim;
