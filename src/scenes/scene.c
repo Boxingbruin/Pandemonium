@@ -2910,6 +2910,7 @@ void scene_update(void)
                 cutsceneTimer = 0.0f;
                 cutsceneCameraTimer = 0.0f;
                 cutsceneState = CUTSCENE_PHASE2_INTRO;
+                g_boss->damageFlashTimer = 0.0f;
                 scene_init_cutscene();
                 return;
             }
