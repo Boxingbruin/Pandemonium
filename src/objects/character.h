@@ -94,6 +94,11 @@ typedef struct {
     float health;
     int healthPotions;
 
+    // Stamina (drained by attacks and rolls; regens only when idle)
+    float maxStamina;
+    float stamina;
+    float staminaRegenDelay;
+
     // Visual feedback
     float damageFlashTimer;
 

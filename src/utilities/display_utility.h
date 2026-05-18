@@ -16,6 +16,9 @@ void draw_boss_health_bar(const char *name, float ratio, float flash);
 // Simple player health bar API (smaller, bottom-right positioned)
 void draw_player_health_bar(const char *name, float ratio, float flash);
 
+// Player stamina bar — green, sits directly below the health bar
+void draw_player_stamina_bar(float ratio);
+
 // UI intro animation controls (0.0 = off-screen, 1.0 = fully visible)
 void display_utility_set_boss_ui_intro(float progress);
 void display_utility_set_player_ui_intro(float progress);
