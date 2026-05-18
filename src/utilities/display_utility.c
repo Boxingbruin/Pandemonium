@@ -57,12 +57,12 @@ void draw_boss_health_bar(const char *name, float ratio, float flash)
 	rdpq_mode_blender(RDPQ_BLENDER_MULTIPLY);
 	
 	// Background bar (darker so the red fill is clearly visible as it shrinks).
-	// Keep the entire boss HUD inside the UI-safe / overscan rectangle.
-	const int marginX = ui_safe_margin_x();
+	// Boss HUD is anchored to the bottom-center of the screen, narrower than full width.
 	const int marginY = ui_safe_margin_y();
-	int left = marginX;
-	int right = SCREEN_WIDTH - marginX;
-	const int fillInsetX = 24;
+	const int bossBarWidth = 220;
+	int left = (SCREEN_WIDTH - bossBarWidth) / 2;
+	int right = left + bossBarWidth;
+	const int fillInsetX = 18;
 	int barLeft = left + fillInsetX;
 	int barRight = right - fillInsetX;
 	if (barRight <= barLeft) {
@@ -77,14 +77,14 @@ void draw_boss_health_bar(const char *name, float ratio, float flash)
 	}
 
 	// Taller red/dark fill only; frame sprite scale/position below is unchanged.
-	const int fillHeight = 16;
+	const int fillHeight = 12;
 	float frameScale = 1.0f;
-	int frameY = marginY;
-	int fillCenterY = marginY + 12;
+	int frameY = SCREEN_HEIGHT - marginY - 24;
+	int fillCenterY = frameY + 12;
 	if (bossHealthBarBackgroundSprite) {
 		frameScale = (float)(right - left) / (float)bossHealthBarBackgroundSprite->width;
-		frameY = marginY;
 		int frameHeight = (int)((float)bossHealthBarBackgroundSprite->height * frameScale);
+		frameY = SCREEN_HEIGHT - marginY - frameHeight;
 		fillCenterY = frameY + frameHeight / 2;
 	}
 	int top = fillCenterY - fillHeight / 2;
@@ -172,12 +172,12 @@ void draw_player_health_bar(const char *name, float ratio, float flash)
     const int barHeight = 10;
 
     float p = player_ui_intro;
-    int slideDistBottom = 40;
-    int yOffset = (int)((1.0f - p) * (float)slideDistBottom);
+    int slideDist = 40;
+    int yOffset = (int)((1.0f - p) * (float)slideDist);
 
     int left = marginX + 12;
-    int bottom = SCREEN_HEIGHT - marginY - 14 + yOffset;
-    int top = bottom - barHeight;
+    int top = marginY + 4 - yOffset;
+    int bottom = top + barHeight;
     int right = left + barWidth;
 
     // Background
@@ -201,6 +201,66 @@ void draw_player_health_bar(const char *name, float ratio, float flash)
     }
 
     // Light frame
+    rdpq_set_prim_color(RGBA32(210, 210, 210, 180));
+    rdpq_fill_rectangle(left, top, right, top + 1);
+    rdpq_fill_rectangle(left, bottom - 1, right, bottom);
+    rdpq_fill_rectangle(left, top, left + 1, bottom);
+    rdpq_fill_rectangle(right - 1, top, right, bottom);
+}
+
+void draw_player_stamina_bar(float ratio)
+{
+    if (ratio < 0.0f) ratio = 0.0f;
+    if (ratio > 1.0f) ratio = 1.0f;
+
+    rdpq_sync_pipe();
+    rdpq_set_mode_standard();
+
+#ifdef RDPQ_FOG_DISABLED
+    rdpq_mode_fog(RDPQ_FOG_DISABLED);
+#else
+    rdpq_mode_fog(0);
+#endif
+
+    rdpq_mode_combiner(RDPQ_COMBINER_FLAT);
+    rdpq_mode_blender(RDPQ_BLENDER_MULTIPLY);
+
+    const int marginX = ui_safe_margin_x();
+    const int marginY = ui_safe_margin_y();
+
+    const int healthBarWidth = 120;
+    const int healthBarHeight = 10;
+    const int barWidth = healthBarWidth;
+    const int barHeight = 6;
+
+    float p = player_ui_intro;
+    int slideDist = 40;
+    int yOffset = (int)((1.0f - p) * (float)slideDist);
+
+    // Sit flush against the bottom of the health bar so the borders share a line.
+    int healthBarBottom = marginY + 4 + healthBarHeight - yOffset;
+
+    int left = marginX + 12;
+    int top = healthBarBottom;
+    int bottom = top + barHeight;
+    int right = left + barWidth;
+
+    // Background
+    rdpq_set_prim_color(RGBA32(35, 35, 35, 160));
+    rdpq_fill_rectangle(left, top, right, bottom);
+
+    // Inner empty region
+    rdpq_set_prim_color(RGBA32(10, 10, 10, 190));
+    rdpq_fill_rectangle(left + 1, top + 1, right - 1, bottom - 1);
+
+    // Green fill
+    int fillRight = left + 2 + (int)((barWidth - 4) * ratio);
+    if (fillRight > left + 2) {
+        rdpq_set_prim_color(RGBA32(60, 200, 80, 220));
+        rdpq_fill_rectangle(left + 2, top + 2, fillRight, bottom - 2);
+    }
+
+    // Light frame (shares its top edge with the health bar's bottom edge)
     rdpq_set_prim_color(RGBA32(210, 210, 210, 180));
     rdpq_fill_rectangle(left, top, right, top + 1);
     rdpq_fill_rectangle(left, bottom - 1, right, bottom);
