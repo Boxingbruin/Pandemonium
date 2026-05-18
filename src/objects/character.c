@@ -2613,6 +2613,38 @@ void character_update_position(void)
 void character_update_camera(void)
 {
     static bool lastLockOnActive = false;
+    static float autoFollowTimer = 0.0f;
+
+    // Auto-follow: when not Z-targeting, after a delay, rotate the camera to sit
+    // behind the player's movement direction. Skipped while the player is holding
+    // C-left/C-right so manual look-around always wins.
+    const float AUTO_FOLLOW_DELAY    = 2.0f;
+    const float AUTO_FOLLOW_MIN_SPEED = 5.0f;   // world units / sec
+    const float AUTO_FOLLOW_RATE      = 1.2f;   // radians / sec
+
+    if (cameraLockOnActive) {
+        autoFollowTimer = 0.0f;
+    } else if (deltaTime > 0.0f) {
+        autoFollowTimer += deltaTime;
+    }
+
+    bool cStickRotating = (joypad.btn.c_left || joypad.btn.c_right) && !joypad.btn.z;
+    if (autoFollowTimer >= AUTO_FOLLOW_DELAY && !cameraLockOnActive
+        && !cStickRotating && deltaTime > 0.0f) {
+        float vx, vz;
+        character_get_velocity(&vx, &vz);
+        float speedSq = vx * vx + vz * vz;
+        if (speedSq > AUTO_FOLLOW_MIN_SPEED * AUTO_FOLLOW_MIN_SPEED) {
+            float targetAngle = atan2f(-vx, -vz);
+            float delta = targetAngle - cameraAngleX;
+            while (delta >  T3D_PI) delta -= 2.0f * T3D_PI;
+            while (delta < -T3D_PI) delta += 2.0f * T3D_PI;
+            float maxStep = AUTO_FOLLOW_RATE * deltaTime;
+            if (delta >  maxStep) delta =  maxStep;
+            if (delta < -maxStep) delta = -maxStep;
+            cameraAngleX += delta;
+        }
+    }
 
     float scaledDistance = cameraDistance * 0.04f;
     float scaledHeight = cameraHeight * 0.03f;
