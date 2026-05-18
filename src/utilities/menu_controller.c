@@ -517,6 +517,7 @@ void menu_controller_update(void) {
             switch (selectedOption) {
                 case MENU_VIDEO_ASPECT:
                     hdAspect = !hdAspect;
+                    (void)save_controller_save_settings();
                     break;
             }
         }
@@ -525,6 +526,7 @@ void menu_controller_update(void) {
             switch (selectedOption) {
                 case MENU_VIDEO_ASPECT:
                     hdAspect = !hdAspect;
+                    (void)save_controller_save_settings();
                     break;
                 case MENU_VIDEO_UI_OVERSCAN_CALIBRATE:
                     overscanPrevX = uiOverscanX;
