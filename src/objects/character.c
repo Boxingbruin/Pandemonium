@@ -2419,6 +2419,66 @@ void character_update(void)
                 Boss* boss = boss_get_instance();
                 if (boss) {
                     boss_apply_damage(boss, damage);
+
+                    // Spawn blood at the actual sword/boss contact point. The sword tip alone
+                    // extends past the boss capsule, so we converge on the closest points
+                    // between the two segments and then push out by the boss radius to land
+                    // on the body surface.
+                    float swordBase[3], swordTip[3];
+                    if (character_sword_world_segment(swordBase, swordTip)) {
+                        float bcA[3] = {
+                            boss->pos[0] + boss->capsuleCollider.localCapA.v[0],
+                            boss->pos[1] + boss->capsuleCollider.localCapA.v[1],
+                            boss->pos[2] + boss->capsuleCollider.localCapA.v[2],
+                        };
+                        float bcB[3] = {
+                            boss->pos[0] + boss->capsuleCollider.localCapB.v[0],
+                            boss->pos[1] + boss->capsuleCollider.localCapB.v[1],
+                            boss->pos[2] + boss->capsuleCollider.localCapB.v[2],
+                        };
+
+                        // Inline closest-point-on-segment(A,B; P) -> out
+                        #define CHAR_CLOSEST_PT(A, B, P, OUT) do { \
+                            float _ab0=(B)[0]-(A)[0], _ab1=(B)[1]-(A)[1], _ab2=(B)[2]-(A)[2]; \
+                            float _ap0=(P)[0]-(A)[0], _ap1=(P)[1]-(A)[1], _ap2=(P)[2]-(A)[2]; \
+                            float _len2 = _ab0*_ab0 + _ab1*_ab1 + _ab2*_ab2; \
+                            float _t = (_len2 > 1e-6f) ? ((_ap0*_ab0 + _ap1*_ab1 + _ap2*_ab2) / _len2) : 0.0f; \
+                            if (_t < 0.0f) _t = 0.0f; else if (_t > 1.0f) _t = 1.0f; \
+                            (OUT)[0] = (A)[0] + _ab0*_t; \
+                            (OUT)[1] = (A)[1] + _ab1*_t; \
+                            (OUT)[2] = (A)[2] + _ab2*_t; \
+                        } while (0)
+
+                        // 3 iterations is more than enough to converge for visual purposes.
+                        float pSword[3] = { swordTip[0], swordTip[1], swordTip[2] };
+                        float pBoss[3];
+                        for (int it = 0; it < 3; it++) {
+                            CHAR_CLOSEST_PT(bcA, bcB, pSword, pBoss);
+                            CHAR_CLOSEST_PT(swordBase, swordTip, pBoss, pSword);
+                        }
+                        #undef CHAR_CLOSEST_PT
+
+                        // Push out from the boss capsule axis toward the sword by the boss
+                        // radius so the burst sits on the body surface, not inside it.
+                        float dx = pSword[0] - pBoss[0];
+                        float dy = pSword[1] - pBoss[1];
+                        float dz = pSword[2] - pBoss[2];
+                        float d  = sqrtf(dx*dx + dy*dy + dz*dz);
+                        float impact[3];
+                        if (d > 1e-4f) {
+                            float k = boss->capsuleCollider.radius / d;
+                            impact[0] = pBoss[0] + dx * k;
+                            impact[1] = pBoss[1] + dy * k;
+                            impact[2] = pBoss[2] + dz * k;
+                        } else {
+                            impact[0] = pBoss[0];
+                            impact[1] = pBoss[1];
+                            impact[2] = pBoss[2];
+                        }
+
+                        float strength = (characterState == CHAR_STATE_ATTACKING_STRONG) ? 1.8f : 1.0f;
+                        scene_spawn_blood_burst(impact[0], impact[1], impact[2], strength);
+                    }
                 }
                 character.currentAttackHasHit = true;
                 character_play_hit();
