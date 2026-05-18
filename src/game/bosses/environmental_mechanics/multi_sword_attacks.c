@@ -86,7 +86,7 @@ static const float SWORD_RADIUS = 9.0f;
 
 static const float WALL_THICKNESS = 10.0f;
 
-static const float DMG_BODY     = 22.0f;
+static const float DMG_BODY     = 35.0f;
 static const float DMG_WALL     = 12.0f;
 static const float HIT_COOLDOWN = 0.25f;
 
