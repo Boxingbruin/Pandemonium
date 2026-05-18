@@ -36,6 +36,10 @@ void scene_cleanup(void);
 // Intended for impacts/landings. `strength` is a loose scalar (1.0 = normal).
 void scene_spawn_dust_burst(float x, float y, float z, float strength);
 
+// Blood burst at a sword/boss impact point. World-space spawn, screen-space billboards.
+// Randomly picks from the available blood sprites (large/medium/tiny).
+void scene_spawn_blood_burst(float x, float y, float z, float strength);
+
 // Ground "crush" decal under an impact point (world-space quad, depth-tested).
 // Intended for boss slam landings. Auto-expires (~3 seconds).
 void scene_spawn_ground_crushed(float x, float z);

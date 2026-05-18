@@ -31,6 +31,7 @@
 
 #include "character.h"
 #include "game/bosses/boss.h"
+#include "game/bosses/boss_ai.h"
 #include "game/bosses/boss_anim.h"
 #include "game/bosses/boss_render.h"
 #include "dialog_controller.h"
@@ -64,6 +65,11 @@ static void dust_draw(T3DViewport *viewport);
 static void ground_crush_reset(void);
 static void ground_crush_update(float dt);
 static void ground_crush_draw(T3DViewport *viewport);
+
+// Blood (implemented after dust)
+static void blood_reset(void);
+static void blood_update(float dt);
+static void blood_draw(T3DViewport *viewport);
 
 static void boot_reinit_display_rdpq(void)
 {
@@ -411,26 +417,24 @@ static const float POST_BOSS_PROMPT_DIST  = 140.0f;   // show A prompt and allow
 static bool s_pendingBossLoopMusic = false;
 static const char *s_bossLoopMusicPath = "rom:/audio/music/boss_phase1-looping-22k.wav64";
 
-// Require the camera to be facing the boss for post-boss interaction.
-// This keeps the on-screen A prompt and the A-press trigger consistent,
-// and prevents rolling away from accidentally starting the dialog.
-static bool scene_camera_facing_boss_xz(const Boss *boss, float minDot)
+// Require the character to be facing the boss for post-boss interaction.
+// The third-person camera orbits independently of the character's body yaw,
+// so checking the character's facing direction matches what the player sees:
+// turning away with the left stick correctly hides the prompt and disables A.
+static bool scene_character_facing_boss_xz(const Boss *boss, float minDot)
 {
     if (!boss) return false;
 
-    // Camera forward (XZ)
-    float fwdX = camTarget.v[0] - camPos.v[0];
-    float fwdZ = camTarget.v[2] - camPos.v[2];
-    float fwdLen = sqrtf(fwdX*fwdX + fwdZ*fwdZ);
-    if (fwdLen < 0.001f) return false;
-    fwdX /= fwdLen;
-    fwdZ /= fwdLen;
+    // Character forward (XZ) — matches character.c convention: (-sin(yaw), cos(yaw))
+    float yaw = character.rot[1];
+    float fwdX = -sinf(yaw);
+    float fwdZ =  cosf(yaw);
 
-    // Direction from camera to boss (XZ)
-    float toX = boss->pos[0] - camPos.v[0];
-    float toZ = boss->pos[2] - camPos.v[2];
+    // Direction from character to boss (XZ)
+    float toX = boss->pos[0] - character.pos[0];
+    float toZ = boss->pos[2] - character.pos[2];
     float toLen = sqrtf(toX*toX + toZ*toZ);
-    if (toLen < 0.001f) return true; // camera is basically on top of it
+    if (toLen < 0.001f) return true; // standing on top of it
     toX /= toLen;
     toZ /= toLen;
 
@@ -446,7 +450,7 @@ static bool scene_post_boss_interact_allowed(const Boss *boss)
     float dz = boss->pos[2] - character.pos[2];
     float d = sqrtf(dx*dx + dz*dz);
     if (d > POST_BOSS_PROMPT_DIST) return false;
-    return scene_camera_facing_boss_xz(boss, 0.35f); // ~70° cone
+    return scene_character_facing_boss_xz(boss, 0.5f); // ~60° cone in front
 }
 
 // Boss title fade control (shown during intro, fades out when fight starts)
@@ -523,6 +527,21 @@ static surface_t dustParticleSurf = {0};
 // Ground impact decal (crushed ground)
 static sprite_t* groundCrushedSprite = NULL;
 static surface_t groundCrushedSurf = {0};
+
+// Blood splatter sprites (large + medium variants + tiny variants).
+// Loaded as IA8 so they can be tinted red via prim color and stay TMEM-cheap.
+enum {
+    BLOOD_SPRITE_LARGE = 0,
+    BLOOD_SPRITE_MEDIUM_A,
+    BLOOD_SPRITE_MEDIUM_B,
+    BLOOD_SPRITE_MEDIUM_C,
+    BLOOD_SPRITE_TINY_A,
+    BLOOD_SPRITE_TINY_B,
+    BLOOD_SPRITE_TINY_C,
+    BLOOD_SPRITE_COUNT
+};
+static sprite_t* bloodSprites[BLOOD_SPRITE_COUNT] = {0};
+static surface_t bloodSurfs[BLOOD_SPRITE_COUNT] = {0};
 
 // Z-target lock-on icon sprite
 static sprite_t* zTargetIconSprite = NULL;
@@ -1189,6 +1208,23 @@ void scene_init(void)
         groundCrushedSurf = sprite_get_pixels(groundCrushedSprite);
     }
 
+    // Load blood splatter sprites (IA8 - tinted red at draw time)
+    static const char* bloodPaths[BLOOD_SPRITE_COUNT] = {
+        "rom:/blood/blood_large.ia8.sprite",
+        "rom:/blood/blood_medium_a.ia8.sprite",
+        "rom:/blood/blood_medium_b.ia8.sprite",
+        "rom:/blood/blood_medium_c.ia8.sprite",
+        "rom:/blood/blood_tiny_a.ia8.sprite",
+        "rom:/blood/blood_tiny_b.ia8.sprite",
+        "rom:/blood/blood_tiny_c.ia8.sprite",
+    };
+    for (int i = 0; i < BLOOD_SPRITE_COUNT; i++) {
+        bloodSprites[i] = sprite_load(bloodPaths[i]);
+        if (bloodSprites[i]) {
+            bloodSurfs[i] = sprite_get_pixels(bloodSprites[i]);
+        }
+    }
+
     // Load Z-target lock-on icon (IA8 so the alpha gradient is preserved)
     zTargetIconSprite = sprite_load("rom:/ztargetIcon.ia8.sprite");
     if (zTargetIconSprite) {
@@ -1229,8 +1265,9 @@ void scene_init(void)
 
     dust_reset();
     ground_crush_reset();
+    blood_reset();
 
-    //msa_init();
+    msa_init();
 
     // DEBUG: uncomment to start the fight in phase 2
     // if (g_boss) g_boss->phaseIndex = 2;
@@ -1350,6 +1387,14 @@ void scene_reset(void)
 
     s_pendingBossLoopMusic = false;
 
+    // Clear cutscene/attack effects that latch globally. Without these, a
+    // mid-phase-2 death leaks state into the new run: leftover MSA swords keep
+    // falling during phase 1, the BNW lightning ring stays armed, and the
+    // shackled-sun screen shake never clears.
+    msa_init();
+    lightning_fx_system_ring_enable(false);
+    animation_utility_set_screen_shake_mag(0.0f);
+
     // Reset letterbox to show state for intro
     letterbox_show(false);
 
@@ -1359,6 +1404,7 @@ void scene_reset(void)
 
     dust_reset();
     ground_crush_reset();
+    blood_reset();
 }
 
 static void scene_sync_input_edge_state(void)
@@ -1456,7 +1502,7 @@ static void draw_post_boss_a_prompt(T3DViewport *viewport)
     if (scene_is_cutscene_active() || !scene_is_boss_active() || !g_boss) return;
     if (g_boss->state != BOSS_STATE_DEAD) return;
 
-    // Only show when the interaction is actually allowed (distance + camera facing)
+    // Only show when the interaction is actually allowed (distance + character facing)
     if (!scene_post_boss_interact_allowed(g_boss)) return;
 
     // Anchor to the boss head bone (true attachment). Fall back to lock-focus if head bone isn't available.
@@ -2480,10 +2526,40 @@ void scene_cutscene_update()
 
             if(cutsceneTimer >= 10.0f)
             {
-                //cutsceneTimer = 0.0f;
-                //cutsceneCameraTimer = 0.0f;
-                //cutsceneState = CUTSCENE_PHASE2_BNW;
-                //scene_init_cutscene();
+                // Drop cutscene-only effects and hand control back to the fight at phase 2.
+                lightning_fx_system_ring_enable(false);
+                animation_utility_set_screen_shake_mag(0.0f);
+                dialog_controller_stop_speaking();
+                cutsceneDialogActive = false;
+
+                g_boss->phaseIndex = 2;
+                g_boss->handAttackColliderActive = false;
+                g_boss->sphereAttackColliderActive = false;
+                g_boss->velX = 0.0f;
+                g_boss->velZ = 0.0f;
+
+                // Phase 2 opens with the aerial sword barrage. The handler
+                // lifts the boss to hoverCenterPos.y + hoverHeight and brings
+                // him back down at the end (no gravity in this game).
+                boss_ai_start_aerial_sword_barrage(g_boss);
+
+                // Phase 2 cutscene music was started non-looping; arm the boss loop to take over.
+                s_pendingBossLoopMusic = true;
+
+                // Long camera blend so the cinematic angle holds while the boss
+                // lifts ~80 units for the aerial sword barrage. With a short
+                // (1s) blend the player-follow camera snaps to the player
+                // while the boss is mid-lift and he ends up off-screen — the
+                // visible result is "swords fall, boss never moved."
+                camera_mode_smooth(CAMERA_CHARACTER, 5.0f);
+                cameraLockOnActive = true;
+
+                cutsceneTimer = 0.0f;
+                cutsceneCameraTimer = 0.0f;
+                cutsceneState = CUTSCENE_NONE;
+
+                character_reset_button_state();
+                scene_sync_input_edge_state();
                 return;
             }
         } break;
@@ -2819,18 +2895,17 @@ void scene_update(void)
             // Boss death no longer forces GAME_STATE_VICTORY.
             // The boss will play its collapse and remain still; the player can keep moving.
 
-            // TODO: Re-Enable this when Phase2 is complete
             // Phase 2 transition: trigger cutscene when boss health drops to 40%.
-            // if (!phase2CutsceneTriggered && g_boss->phaseIndex == 1
-            //     && g_boss->health <= g_boss->maxHealth * 0.4f
-            //     && g_boss->health > 0.0f) {
-            //     phase2CutsceneTriggered = true;
-            //     cutsceneTimer = 0.0f;
-            //     cutsceneCameraTimer = 0.0f;
-            //     cutsceneState = CUTSCENE_PHASE2_KNEEL;
-            //     scene_init_cutscene();
-            //     return;
-            // }
+            if (!phase2CutsceneTriggered && g_boss->phaseIndex == 1
+                && g_boss->health <= g_boss->maxHealth * 0.4f
+                && g_boss->health > 0.0f) {
+                phase2CutsceneTriggered = true;
+                cutsceneTimer = 0.0f;
+                cutsceneCameraTimer = 0.0f;
+                cutsceneState = CUTSCENE_PHASE2_INTRO;
+                scene_init_cutscene();
+                return;
+            }
         }
 
         collision_update();
@@ -2972,7 +3047,7 @@ void scene_update(void)
         }
     }
 
-    //msa_update(deltaTime); // multi sword attack
+    msa_update(deltaTime); // multi sword attack
     //boulder_hazard_update(deltaTime); // close-range ground boulders
 
     lastZPressed = zHeld;
@@ -3302,6 +3377,236 @@ static void dust_draw(T3DViewport *viewport) {
 }
 
 /* -----------------------------------------------------------------------------
+ * Blood splatters (sword-on-boss impact)
+ * -------------------------------------------------------------------------- */
+
+typedef struct {
+    bool  active;
+    float pos[3];     // world
+    float vel[3];     // world units/sec
+    float age;        // sec
+    float life;       // sec
+    float size_px;    // base pixel size (height of sprite drawn)
+    uint8_t spriteIdx;
+    uint8_t r, g, b;  // tint (per-particle variation)
+} BloodParticle;
+
+enum { BLOOD_MAX = 48 };
+static BloodParticle s_blood[BLOOD_MAX];
+
+static inline float blood_clampf(float x, float lo, float hi) {
+    if (x < lo) return lo;
+    if (x > hi) return hi;
+    return x;
+}
+
+static inline float blood_alpha01(const BloodParticle *p) {
+    if (!p || p->life <= 0.0f) return 0.0f;
+    float t = blood_clampf(p->age / p->life, 0.0f, 1.0f);
+    // Mostly opaque for the first half, then fade out (quadratic).
+    if (t < 0.55f) return 1.0f;
+    float u = (t - 0.55f) / 0.45f;
+    return (1.0f - u) * (1.0f - u);
+}
+
+static void blood_reset(void) {
+    memset(s_blood, 0, sizeof(s_blood));
+}
+
+static int blood_alloc_slot(void) {
+    for (int i = 0; i < BLOOD_MAX; i++) {
+        if (!s_blood[i].active) return i;
+    }
+    int oldest = 0;
+    float bestAge = s_blood[0].age;
+    for (int i = 1; i < BLOOD_MAX; i++) {
+        if (s_blood[i].age > bestAge) {
+            bestAge = s_blood[i].age;
+            oldest = i;
+        }
+    }
+    return oldest;
+}
+
+void scene_spawn_blood_burst(float x, float y, float z, float strength) {
+    if (strength < 0.05f) return;
+    if (strength > 3.0f) strength = 3.0f;
+
+    // One "large" anchor splatter, several mediums, several tinies.
+    int largeCount  = 1;
+    int mediumCount = 3 + (int)(strength * 1.5f);
+    int tinyCount   = 6 + (int)(strength * 3.0f);
+    if (mediumCount > 6) mediumCount = 6;
+    if (tinyCount   > 12) tinyCount  = 12;
+
+    int total = largeCount + mediumCount + tinyCount;
+
+    for (int i = 0; i < total; i++) {
+        int idx = blood_alloc_slot();
+        BloodParticle *p = &s_blood[idx];
+
+        // Pick which sprite tier this particle belongs to and randomize within tier.
+        uint8_t spriteIdx;
+        float baseSize;
+        if (i < largeCount) {
+            spriteIdx = BLOOD_SPRITE_LARGE;
+            baseSize  = 22.0f + 4.0f * strength;
+        } else if (i < largeCount + mediumCount) {
+            int variant = (int)(rand_custom_float() * 3.0f);
+            if (variant > 2) variant = 2;
+            spriteIdx = (uint8_t)(BLOOD_SPRITE_MEDIUM_A + variant);
+            baseSize  = 14.0f + 4.0f * strength;
+        } else {
+            int variant = (int)(rand_custom_float() * 3.0f);
+            if (variant > 2) variant = 2;
+            spriteIdx = (uint8_t)(BLOOD_SPRITE_TINY_A + variant);
+            baseSize  = 7.0f + 3.0f * strength;
+        }
+
+        p->active = true;
+        p->age    = 0.0f;
+        // Mediums/tinies fly farther; the large anchor lingers a hair longer to read.
+        p->life   = (i < largeCount) ? 0.55f : (0.35f + rand_custom_float() * 0.30f);
+        p->size_px  = baseSize + rand_custom_float() * 3.0f;
+        p->spriteIdx = spriteIdx;
+
+        // Random red tint (darker arterial through brighter splatter).
+        int rJitter = (int)((rand_custom_float() - 0.5f) * 30.0f);
+        int gJitter = (int)(rand_custom_float() * 14.0f);
+        int rr = 165 + rJitter;
+        int gg = 12  + gJitter;
+        int bb = 18;
+        if (rr < 110) rr = 110;
+        if (rr > 210) rr = 210;
+        if (gg <   0) gg = 0;
+        if (gg >  40) gg = 40;
+        p->r = (uint8_t)rr;
+        p->g = (uint8_t)gg;
+        p->b = (uint8_t)bb;
+
+        // Spawn directly at the contact point with a small jitter so all the sprites
+        // don't overlap into one blob on screen.
+        float jitterR = (rand_custom_float() * 4.0f) - 2.0f;
+        float jitterU = (rand_custom_float() * 4.0f) - 2.0f;
+        p->pos[0] = x + jitterR;
+        p->pos[1] = y + jitterU;
+        p->pos[2] = z + jitterR * 0.5f;
+
+        // Pick an outward direction in a full 3D cone biased upward + outward.
+        // Yaw is uniformly distributed; pitch leans up (toward the player's swing).
+        float yaw   = rand_custom_float() * (2.0f * T3D_PI);
+        float pitch = (T3D_PI * 0.20f) + rand_custom_float() * (T3D_PI * 0.30f); // 36° to 90°
+        float c = cosf(pitch);
+        float dirX = c * cosf(yaw);
+        float dirY = sinf(pitch);
+        float dirZ = c * sinf(yaw);
+
+        // Speeds: big anchor moves slow (looks like a heavy gout), mediums fast, tinies fastest spray.
+        float baseSpeed;
+        if (i < largeCount)                      baseSpeed = 30.0f + 20.0f * strength;
+        else if (i < largeCount + mediumCount)   baseSpeed = 110.0f + 60.0f * strength;
+        else                                     baseSpeed = 170.0f + 90.0f * strength;
+        float speed = baseSpeed * (0.75f + rand_custom_float() * 0.5f);
+
+        p->vel[0] = dirX * speed;
+        p->vel[1] = dirY * speed;
+        p->vel[2] = dirZ * speed;
+    }
+}
+
+static void blood_update(float dt) {
+    if (dt < 0.0f) dt = 0.0f;
+    if (dt > 0.25f) dt = 0.25f;
+
+    // Gravity in world units / s^2. Tuned to feel snappy at the small scale of a burst
+    // (particles only live ~0.4-0.6s, so heavy gravity makes them clearly arc).
+    const float GRAVITY = 900.0f;
+
+    for (int i = 0; i < BLOOD_MAX; i++) {
+        BloodParticle *p = &s_blood[i];
+        if (!p->active) continue;
+
+        p->age += dt;
+        if (p->age >= p->life) {
+            p->active = false;
+            continue;
+        }
+
+        // Light air drag on the lateral axes only - keeps the arc readable.
+        float dampXZ = expf(-1.5f * dt);
+        p->vel[0] *= dampXZ;
+        p->vel[2] *= dampXZ;
+
+        // Gravity.
+        p->vel[1] -= GRAVITY * dt;
+
+        p->pos[0] += p->vel[0] * dt;
+        p->pos[1] += p->vel[1] * dt;
+        p->pos[2] += p->vel[2] * dt;
+    }
+}
+
+static void blood_draw(T3DViewport *viewport) {
+    if (!viewport) return;
+
+    rdpq_sync_pipe();
+    rdpq_set_mode_standard();
+    rdpq_mode_zbuf(true, false);
+    rdpq_mode_alphacompare(1);
+    rdpq_mode_combiner(RDPQ_COMBINER_TEX_FLAT);
+    rdpq_mode_blender(RDPQ_BLENDER_MULTIPLY);
+
+    for (int i = 0; i < BLOOD_MAX; i++) {
+        const BloodParticle *p = &s_blood[i];
+        if (!p->active) continue;
+
+        sprite_t *sp = bloodSprites[p->spriteIdx];
+        surface_t *sf = &bloodSurfs[p->spriteIdx];
+        if (!sp || sf->width <= 0 || sf->height <= 0) continue;
+
+        T3DVec3 worldPos = {{ p->pos[0], p->pos[1], p->pos[2] }};
+        T3DVec3 screenPos;
+        t3d_viewport_calc_viewspace_pos(viewport, &screenPos, &worldPos);
+        if (screenPos.v[2] >= 1.0f) continue;
+
+        float z01 = blood_clampf(screenPos.v[2], 0.0f, 0.9999f);
+        rdpq_mode_zoverride(true, z01, 0);
+
+        float a01 = blood_alpha01(p);
+        uint8_t a = (uint8_t)blood_clampf(a01 * 230.0f, 0.0f, 255.0f);
+        if (a == 0) continue;
+
+        rdpq_set_prim_color(RGBA32(p->r, p->g, p->b, a));
+
+        // Slight shrink as the particle ages (droplets thin out).
+        float shrink = 1.0f - 0.25f * (p->age / p->life);
+        if (shrink < 0.5f) shrink = 0.5f;
+
+        int h = (int)(p->size_px * shrink);
+        if (h < 3) h = 3;
+        if (h > 40) h = 40;
+
+        // Preserve sprite aspect ratio.
+        float aspect = (sf->height > 0) ? ((float)sf->width / (float)sf->height) : 1.0f;
+        int w = (int)(h * aspect);
+        if (w < 3) w = 3;
+
+        int px = (int)screenPos.v[0];
+        int py = (int)screenPos.v[1];
+
+        float sx = (sf->width  > 0) ? ((float)w / (float)sf->width)  : 1.0f;
+        float sy = (sf->height > 0) ? ((float)h / (float)sf->height) : 1.0f;
+        rdpq_tex_blit(sf, px - (w / 2), py - (h / 2), &(rdpq_blitparms_t){
+            .scale_x = sx,
+            .scale_y = sy,
+        });
+    }
+
+    rdpq_mode_zoverride(false, 0.0f, 0);
+    rdpq_mode_zbuf(false, false);
+}
+
+/* -----------------------------------------------------------------------------
  * Ground crushed decal (world-space quad on the floor)
  * -------------------------------------------------------------------------- */
 
@@ -3378,8 +3683,9 @@ static void ground_crush_draw(T3DViewport *viewport) {
     rdpq_mode_alphacompare(0);
     rdpq_mode_combiner(RDPQ_COMBINER_TEX_FLAT);
     rdpq_mode_blender(RDPQ_BLENDER_MULTIPLY);
-    // We don't have clip-space W handy here, so use affine texturing.
-    rdpq_mode_persp(false);
+    // Perspective-correct texturing: required so the decal doesn't shear
+    // when the projected quad becomes a strong trapezoid (camera tilt/orbit).
+    rdpq_mode_persp(true);
 
     // Upload texture once; tile=0 is what TRIFMT_ZBUF_TEX expects by default.
     rdpq_tex_upload(TILE0, &groundCrushedSurf, NULL);
@@ -3436,16 +3742,43 @@ static void ground_crush_draw(T3DViewport *viewport) {
         T3DVec3 w2 = {{ cx - halfX, cy, cz + halfZ }};
         T3DVec3 w3 = {{ cx + halfX, cy, cz + halfZ }};
 
-        T3DVec3 s0, s1, s2, s3;
-        t3d_viewport_calc_viewspace_pos(viewport, &s0, &w0);
-        t3d_viewport_calc_viewspace_pos(viewport, &s1, &w1);
-        t3d_viewport_calc_viewspace_pos(viewport, &s2, &w2);
-        t3d_viewport_calc_viewspace_pos(viewport, &s3, &w3);
+        // Project to clip space ourselves so we keep W per vertex; without
+        // real 1/W, RDP texture interpolation is affine and the decal shears
+        // as the camera tilts/orbits.
+        T3DVec4 c0, c1, c2, c3;
+        t3d_mat4_mul_vec3(&c0, &viewport->matCamProj, &w0);
+        t3d_mat4_mul_vec3(&c1, &viewport->matCamProj, &w1);
+        t3d_mat4_mul_vec3(&c2, &viewport->matCamProj, &w2);
+        t3d_mat4_mul_vec3(&c3, &viewport->matCamProj, &w3);
 
-        // Skip if any corner is behind the camera / outside depth range.
-        if (s0.v[2] >= 1.0f || s1.v[2] >= 1.0f || s2.v[2] >= 1.0f || s3.v[2] >= 1.0f) continue;
+        // Reject if any corner is at/behind the near plane.
+        if (c0.v[3] <= 0.001f || c1.v[3] <= 0.001f ||
+            c2.v[3] <= 0.001f || c3.v[3] <= 0.001f) continue;
 
-        float z0 = s0.v[2], z1 = s1.v[2], z2 = s2.v[2], z3 = s3.v[2];
+        const float halfW = viewport->size[0] * 0.5f;
+        const float halfH = viewport->size[1] * 0.5f;
+        const float ox = (float)viewport->offset[0] + halfW;
+        const float oy = (float)viewport->offset[1] + halfH;
+
+        float invW0 = 1.0f / c0.v[3];
+        float invW1 = 1.0f / c1.v[3];
+        float invW2 = 1.0f / c2.v[3];
+        float invW3 = 1.0f / c3.v[3];
+
+        float sx0 = c0.v[0] * invW0 * halfW + ox;
+        float sy0 = -c0.v[1] * invW0 * halfH + oy;
+        float sx1 = c1.v[0] * invW1 * halfW + ox;
+        float sy1 = -c1.v[1] * invW1 * halfH + oy;
+        float sx2 = c2.v[0] * invW2 * halfW + ox;
+        float sy2 = -c2.v[1] * invW2 * halfH + oy;
+        float sx3 = c3.v[0] * invW3 * halfW + ox;
+        float sy3 = -c3.v[1] * invW3 * halfH + oy;
+
+        float z0 = c0.v[2] * invW0;
+        float z1 = c1.v[2] * invW1;
+        float z2 = c2.v[2] * invW2;
+        float z3 = c3.v[2] * invW3;
+        if (z0 >= 1.0f || z1 >= 1.0f || z2 >= 1.0f || z3 >= 1.0f) continue;
         if (z0 < 0.0f) z0 = 0.0f;
         if (z0 > 0.9999f) z0 = 0.9999f;
         if (z1 < 0.0f) z1 = 0.0f;
@@ -3455,13 +3788,13 @@ static void ground_crush_draw(T3DViewport *viewport) {
         if (z3 < 0.0f) z3 = 0.0f;
         if (z3 > 0.9999f) z3 = 0.9999f;
 
-        // Textured, z-buffered triangles.
+        // Textured, z-buffered triangles. Real per-vertex INV_W enables
+        // perspective-correct S/T interpolation (with rdpq_mode_persp(true)).
         // Vertex format: { X, Y, Z, S, T, INV_W }
-        const float invw = 1.0f;
-        float v0[6] = { s0.v[0], s0.v[1], z0, 0.0f,        0.0f,        invw };
-        float v1[6] = { s1.v[0], s1.v[1], z1, (float)texW, 0.0f,        invw };
-        float v2[6] = { s2.v[0], s2.v[1], z2, 0.0f,        (float)texH, invw };
-        float v3[6] = { s3.v[0], s3.v[1], z3, (float)texW, (float)texH, invw };
+        float v0[6] = { sx0, sy0, z0, 0.0f,        0.0f,        invW0 };
+        float v1[6] = { sx1, sy1, z1, (float)texW, 0.0f,        invW1 };
+        float v2[6] = { sx2, sy2, z2, 0.0f,        (float)texH, invW2 };
+        float v3[6] = { sx3, sy3, z3, (float)texW, (float)texH, invW3 };
 
         rdpq_triangle(&TRIFMT_ZBUF_TEX, v0, v1, v2);
         rdpq_triangle(&TRIFMT_ZBUF_TEX, v1, v3, v2);
@@ -4467,7 +4800,7 @@ void scene_draw(T3DViewport *viewport)
 
     t3d_matrix_pop(1);
 
-    //msa_draw_visuals(viewport); // multi sword attack
+    msa_draw_visuals(viewport); // multi sword attack
     //boulder_hazard_draw(viewport); // close-range ground boulders
 
     //Draw transparencies last
@@ -4509,9 +4842,13 @@ void scene_draw(T3DViewport *viewport)
 
     // Dust puffs (boss landings/impacts)
     ground_crush_update(deltaTime);
-    //ground_crush_draw(viewport);
+    ground_crush_draw(viewport);
     dust_update(deltaTime);
     dust_draw(viewport);
+
+    // Blood splatters from boss hits (drawn after dust so red reads on top of puffs)
+    blood_update(deltaTime);
+    blood_draw(viewport);
 
     // Post-boss interaction prompt ("A") above the defeated boss when close enough to interact
     draw_post_boss_a_prompt(viewport);
@@ -4838,6 +5175,14 @@ void scene_cleanup(void) // Realistically we never want to call this for the jam
         sprite_free(groundCrushedSprite);
         groundCrushedSprite = NULL;
         surface_free(&groundCrushedSurf);
+    }
+
+    for (int i = 0; i < BLOOD_SPRITE_COUNT; i++) {
+        if (bloodSprites[i]) {
+            sprite_free(bloodSprites[i]);
+            bloodSprites[i] = NULL;
+            surface_free(&bloodSurfs[i]);
+        }
     }
 
     if (zTargetIconSprite) {
