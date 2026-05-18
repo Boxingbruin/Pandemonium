@@ -261,7 +261,7 @@ void draw_player_health_bar(const char *name, float ratio, float flash)
     int slideDist = 40;
     int yOffset = (int)((1.0f - p) * (float)slideDist);
 
-    int left = marginX + 12;
+    int left = marginX;
     int top = marginY + 4 - yOffset;
     int bottom = top + barHeight;
     int right = left + barWidth;
@@ -342,7 +342,7 @@ void draw_player_stamina_bar(float ratio)
     // Sit flush against the bottom of the health bar so the borders share a line.
     int healthBarBottom = marginY + 4 + healthBarHeight - yOffset;
 
-    int left = marginX + 12;
+    int left = marginX;
     int top = healthBarBottom;
     int bottom = top + barHeight;
     int right = left + barWidth;
