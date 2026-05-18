@@ -713,6 +713,9 @@ bool character_try_use_health_potion(void)
 {
     if (character.healthPotions <= 0) return false;
 
+    // Block while mid-action — potions are only usable from a neutral state.
+    if (characterState != CHAR_STATE_NORMAL) return false;
+
     // Don't consume if already full (or extremely close to full).
     if (character.maxHealth <= 0.0f) return false;
     if (character.health >= character.maxHealth - 0.01f) return false;
