@@ -98,6 +98,25 @@ static const float ATTACK_CROSSFADE_DURATION = 0.08f;
 static const float ATTACK_FORWARD_IMPULSE = 35.0f;
 static const float KNOCKDOWN_DURATION = 0.8f;
 
+// Stamina costs and regen tuning
+static const float STAMINA_COST_ATTACK = 18.0f;
+static const float STAMINA_COST_STRONG_ATTACK = 20.0f; // extra on top of the base attack cost
+static const float STAMINA_COST_ROLL = 25.0f;
+static const float STAMINA_REGEN_PER_SEC = 40.0f;
+static const float STAMINA_REGEN_DELAY = 0.5f; // wait this long after acting before regen resumes
+static const float STAMINA_EXHAUSTED_DELAY = 2.5f; // longer punishment when stamina hits zero
+
+static inline void character_consume_stamina(float amount)
+{
+    character.stamina -= amount;
+    if (character.stamina <= 0.0f) {
+        character.stamina = 0.0f;
+        character.staminaRegenDelay = STAMINA_EXHAUSTED_DELAY;
+    } else {
+        character.staminaRegenDelay = STAMINA_REGEN_DELAY;
+    }
+}
+
 // Input state tracking
 static bool lastBPressed = false;
 static bool lastAPressed = false;
@@ -669,6 +688,8 @@ void character_reset(void)
 
     character.health = character.maxHealth;
     character.healthPotions = 3;
+    character.stamina = character.maxStamina;
+    character.staminaRegenDelay = 0.0f;
     character.damageFlashTimer = 0.0f;
     character.currentAttackHasHit = false;
 
@@ -834,12 +855,15 @@ static inline bool can_roll_now(const joypad_buttons_t* buttons, const StickInpu
 {
     (void)stick;
     if (!(buttons->a && characterState == CHAR_STATE_NORMAL)) return false;
+    if (character.stamina < STAMINA_COST_ROLL) return false;
     return true;
 }
 
 static inline void try_start_roll(const joypad_buttons_t* buttons, const StickInput* stick)
 {
     if (!can_roll_now(buttons, stick)) return;
+
+    character_consume_stamina(STAMINA_COST_ROLL);
 
     characterState = CHAR_STATE_ROLLING;
     actionTimer = 0.0f;
@@ -1008,6 +1032,10 @@ static inline void try_start_attack(bool leftJustPressed)
     if (!leftJustPressed) return;
 
     if (characterState == CHAR_STATE_NORMAL) {
+        if (character.stamina < STAMINA_COST_ATTACK) return;
+
+        character_consume_stamina(STAMINA_COST_ATTACK);
+
         characterState = CHAR_STATE_ATTACKING;
         attackComboIndex = 1;
         attackQueued = false;
@@ -1039,9 +1067,13 @@ static inline void upgrade_to_strong_attack(bool leftHeldNow)
         leftTriggerHoldTime >= STRONG_ATTACK_HOLD_THRESHOLD &&
         actionTimer < 0.3f &&
         !attackEnding &&
-        !strongAttackUpgradedFlag) {
+        !strongAttackUpgradedFlag &&
+        character.stamina >= STAMINA_COST_STRONG_ATTACK) {
 
         strongAttackUpgradedFlag = true;
+
+        character_consume_stamina(STAMINA_COST_STRONG_ATTACK);
+
         characterState = CHAR_STATE_ATTACKING_STRONG;
 
         attackComboIndex = 1;
@@ -1617,10 +1649,13 @@ static inline void progress_action_timers(float dt, KnockdownBreakawayReq breaka
     if (characterState == CHAR_STATE_ATTACKING) {
         if (!attackEnding && attackQueued &&
             actionTimer >= ATTACK_TRANSITION_TIME &&
-            attackComboIndex < 3)
+            attackComboIndex < 3 &&
+            character.stamina >= STAMINA_COST_ATTACK)
         {
             attackComboIndex++;
             attackQueued = false;
+
+            character_consume_stamina(STAMINA_COST_ATTACK);
 
             actionTimer = 0.0f;
             character_reset_swing_sfx();
@@ -2144,6 +2179,9 @@ void character_init(void)
         .maxHealth = 150.0f,
         .health = 100.0f,
         .healthPotions = 3,
+        .maxStamina = 100.0f,
+        .stamina = 100.0f,
+        .staminaRegenDelay = 0.0f,
         .damageFlashTimer = 0.0f,
         .currentAttackHasHit = false
     };
@@ -2304,6 +2342,15 @@ void character_update(void)
     }
 
     update_actions(&btn, leftTriggerHeld, leftJustPressed, jumpJustPressed, &stick, breakawayReq, deltaTime);
+
+    // Stamina regen: only ticks while the player isn't acting, and after a short post-action delay.
+    if (character.staminaRegenDelay > 0.0f) {
+        character.staminaRegenDelay -= deltaTime;
+        if (character.staminaRegenDelay < 0.0f) character.staminaRegenDelay = 0.0f;
+    } else if (characterState == CHAR_STATE_NORMAL && character.stamina < character.maxStamina) {
+        character.stamina += STAMINA_REGEN_PER_SEC * deltaTime;
+        if (character.stamina > character.maxStamina) character.stamina = character.maxStamina;
+    }
 
     {
         float t = character_get_swing_time();
@@ -2743,6 +2790,11 @@ void character_draw_ui(void)
     }
 
     draw_player_health_bar("Player", ratio, flash);
+
+    float staminaRatio = character.maxStamina > 0.0f
+        ? fmaxf(0.0f, fminf(1.0f, character.stamina / character.maxStamina))
+        : 0.0f;
+    draw_player_stamina_bar(staminaRatio);
 }
 
 void character_apply_damage(float amount)

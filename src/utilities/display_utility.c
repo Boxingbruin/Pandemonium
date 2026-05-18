@@ -230,7 +230,7 @@ void draw_player_stamina_bar(float ratio)
 
     const int healthBarWidth = 120;
     const int healthBarHeight = 10;
-    const int barWidth = healthBarWidth;
+    const int barWidth = (healthBarWidth * 3) / 4;
     const int barHeight = 6;
 
     float p = player_ui_intro;
@@ -253,11 +253,12 @@ void draw_player_stamina_bar(float ratio)
     rdpq_set_prim_color(RGBA32(10, 10, 10, 190));
     rdpq_fill_rectangle(left + 1, top + 1, right - 1, bottom - 1);
 
-    // Green fill
-    int fillRight = left + 2 + (int)((barWidth - 4) * ratio);
-    if (fillRight > left + 2) {
+    // Green fill — require at least 2px before rendering so sub-pixel residue
+    // doesn't leave a sliver when the bar is empty.
+    int fillWidth = (int)((barWidth - 4) * ratio);
+    if (fillWidth >= 2) {
         rdpq_set_prim_color(RGBA32(60, 200, 80, 220));
-        rdpq_fill_rectangle(left + 2, top + 2, fillRight, bottom - 2);
+        rdpq_fill_rectangle(left + 2, top + 2, left + 2 + fillWidth, bottom - 2);
     }
 
     // Light frame (shares its top edge with the health bar's bottom edge)
