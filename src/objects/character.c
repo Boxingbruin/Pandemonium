@@ -72,7 +72,7 @@ static const float ROLL_ANIM_SPEED = 1.0f;
 static const float ATTACK_DURATION = 0.9f; // (legacy, not used directly)
 static const float STRONG_ATTACK_DURATION = 1.2f;
 static const float STRONG_ATTACK_HOLD_THRESHOLD = 0.4f;
-static const float STRONG_ATTACK_DAMAGE = 20.0f;
+static const float STRONG_ATTACK_DAMAGE = 15.0f;
 static const float STRONG_ATTACK_HIT_START = 0.35f;
 static const float STRONG_ATTACK_HIT_END = 0.9f;
 static const float JUMP_DURATION = 0.75f; // unused (jump removed)
@@ -2412,7 +2412,7 @@ void character_update(void)
 
         float hitStart = (characterState == CHAR_STATE_ATTACKING_STRONG) ? STRONG_ATTACK_HIT_START : 0.25f;
         float hitEnd   = (characterState == CHAR_STATE_ATTACKING_STRONG) ? STRONG_ATTACK_HIT_END   : 1.0f;
-        float damage = (characterState == CHAR_STATE_ATTACKING_STRONG) ? STRONG_ATTACK_DAMAGE : 5.0f;
+        float damage = (characterState == CHAR_STATE_ATTACKING_STRONG) ? STRONG_ATTACK_DAMAGE : 4.0f;
 
         if (actionTimer > hitStart && actionTimer < hitEnd) {
             if (!character.currentAttackHasHit && charWeaponCollision) {

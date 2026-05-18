@@ -365,8 +365,8 @@ static void boss_attacks_handle_power_jump(Boss* boss, float dt)
 
             // Sphere radius is now 70
             if (dist <= IMPACT_RADIUS) {
-                character_apply_damage(30.0f);
-                boss_attacks_on_player_hit(30.0f);
+                character_apply_damage(45.0f);
+                boss_attacks_on_player_hit(45.0f);
                 boss->currentAttackHasHit = true;
             }
         }
@@ -476,8 +476,8 @@ static void boss_attacks_handle_combo(Boss* boss, float dt)
     else if (boss->stateTimer >= hitPart2Start && boss->stateTimer < hitPart2End) {
         boss->handAttackColliderActive = true;
         if (!boss->currentAttackHasHit && bossWeaponCollision) {
-            character_apply_damage(25.0f);
-            boss_attacks_on_player_hit(25.0f);
+            character_apply_damage(40.0f);
+            boss_attacks_on_player_hit(40.0f);
             boss->currentAttackHasHit = true;
         }
     }
@@ -667,8 +667,8 @@ static void boss_attacks_handle_tracking_slam(Boss* boss, float dt) {
     {
         boss->handAttackColliderActive  = true;
         if (!boss->currentAttackHasHit && bossWeaponCollision) {
-            character_apply_damage(30.0f);
-            boss_attacks_on_player_hit(30.0f);
+            character_apply_damage(45.0f);
+            boss_attacks_on_player_hit(45.0f);
             boss->currentAttackHasHit = true;
         }
     }
@@ -871,8 +871,8 @@ static void boss_attacks_handle_stomp(Boss* boss, float dt)
         if (dist <= radius) {
             // float damage = 40.0f * (1.0f - (dist / radius)); // falloff
             // if (damage < 6.0f) damage = 6.0f;               // minimum chip
-            character_apply_damage(30.0f);
-            boss_attacks_on_player_hit(30.0f);
+            character_apply_damage(45.0f);
+            boss_attacks_on_player_hit(45.0f);
             boss->currentAttackHasHit = true;
         }
     }
