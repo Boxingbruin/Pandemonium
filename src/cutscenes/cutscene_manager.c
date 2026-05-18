@@ -242,8 +242,12 @@ void cutscene_manager_draw_skip_overlay(void)
     }
 
     surface_t surf = sprite_get_pixels(sprite);
-    int buttonWidth  = surf.width;
-    int buttonHeight = surf.height;
+    // Source sprites are 64×64; scale down to a readable on-screen size.
+    const float kTargetPx = 20.0f;
+    int srcMax = (surf.width > surf.height) ? surf.width : surf.height;
+    float s = (srcMax > 0) ? (kTargetPx / (float)srcMax) : 1.0f;
+    int buttonWidth  = (int)((float)surf.width  * s);
+    int buttonHeight = (int)((float)surf.height * s);
 
     const int marginX = ui_safe_margin_x();
     const int marginY = ui_safe_margin_y();
@@ -254,7 +258,10 @@ void cutscene_manager_draw_skip_overlay(void)
     rdpq_set_mode_standard();
     rdpq_mode_alphacompare(0);
     rdpq_mode_blender(RDPQ_BLENDER_MULTIPLY);
-    rdpq_sprite_blit(sprite, buttonX, buttonY, NULL);
+    rdpq_mode_filter(FILTER_BILINEAR);
+    rdpq_sprite_blit(sprite, buttonX, buttonY, &(rdpq_blitparms_t){
+        .scale_x = s, .scale_y = s,
+    });
 
     const int gap = 6;
     const int textRight = buttonX - gap;

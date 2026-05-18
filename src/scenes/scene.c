@@ -1191,7 +1191,7 @@ void scene_init(void)
     dialog_controller_init();
 
     // Load A button sprite for cutscene skip indicator
-    aButtonSprite = sprite_load("rom:/buttons/WhiteOutlineButtons/a.rgba16.sprite");
+    aButtonSprite = sprite_load("rom:/buttons/A.sprite");
     if (aButtonSprite) {
         aButtonSurf = sprite_get_pixels(aButtonSprite);
     }
@@ -1237,14 +1237,16 @@ void scene_init(void)
         zTargetIconSurf = sprite_get_pixels(zTargetIconSprite);
     }
 
-    // Load C-button HUD icons (white outline set)
-    cUpSprite = sprite_load("rom:/buttons/WhiteOutlineButtons/CUp.sprite");
+    // Load C-button HUD icons.
+    // C-left uses the empty variant because the health potion graphic is drawn over it.
+    // The other three show the arrow icon (unassigned slots), so use the regular variant.
+    cUpSprite = sprite_load("rom:/buttons/CUp.sprite");
     if (cUpSprite) cUpSurf = sprite_get_pixels(cUpSprite);
-    cDownSprite = sprite_load("rom:/buttons/WhiteOutlineButtons/CDown.sprite");
+    cDownSprite = sprite_load("rom:/buttons/CDown.sprite");
     if (cDownSprite) cDownSurf = sprite_get_pixels(cDownSprite);
-    cLeftSprite = sprite_load("rom:/buttons/WhiteOutlineButtons/CLeft.sprite");
+    cLeftSprite = sprite_load("rom:/buttons/CButton_empty.sprite");
     if (cLeftSprite) cLeftSurf = sprite_get_pixels(cLeftSprite);
-    cRightSprite = sprite_load("rom:/buttons/WhiteOutlineButtons/CRight.sprite");
+    cRightSprite = sprite_load("rom:/buttons/CRight.sprite");
     if (cRightSprite) cRightSurf = sprite_get_pixels(cRightSprite);
 
     // Load health potion bottle sprite (IA8)
@@ -1534,57 +1536,84 @@ static void draw_post_boss_a_prompt(T3DViewport *viewport)
         return;
     }
 
-    int w = aButtonSurf.width;
-    int h = aButtonSurf.height;
-    int x = px - (w / 2);
-    int y = py - (h / 2);
+    // Source sprite is 64×64; scale down to a readable on-screen size.
+    const float kTargetPx = 20.0f;
+    int srcMax = (aButtonSurf.width > aButtonSurf.height) ? aButtonSurf.width : aButtonSurf.height;
+    float s = (srcMax > 0) ? (kTargetPx / (float)srcMax) : 1.0f;
+    int drawW = (int)((float)aButtonSurf.width  * s);
+    int drawH = (int)((float)aButtonSurf.height * s);
+    int x = px - (drawW / 2);
+    int y = py - (drawH / 2);
 
     rdpq_sync_pipe();
     rdpq_set_mode_standard();
-    rdpq_mode_alphacompare(1);
+    rdpq_mode_alphacompare(0);
     rdpq_mode_blender(RDPQ_BLENDER_MULTIPLY);
-    rdpq_tex_blit(&aButtonSurf, x, y, NULL);
+    rdpq_mode_filter(FILTER_BILINEAR);
+    rdpq_sprite_blit(aButtonSprite, x, y, &(rdpq_blitparms_t){
+        .scale_x = s, .scale_y = s,
+    });
 }
 
 static void draw_cbutton_hud(void)
 {
-    // Bottom-right C-left icon with a health potion assigned to it.
-    // Drawn during gameplay/victory (same visibility rules as the player health bar).
+    // Bottom-left C-button diamond. C-left holds the health potion (empty button
+    // sprite with the bottle drawn on top); the other three show their arrow icons.
     if (!cLeftSprite) return;
 
-    // Prefer the left icon size as the layout reference.
     int w = (cLeftSurf.width > 0) ? cLeftSurf.width : 24;
     int h = (cLeftSurf.height > 0) ? cLeftSurf.height : 24;
-    const float cScale = 2.0f;
+    // Target on-screen button size — source sprites are 64×64.
+    const float kTargetButtonPx = 20.0f;
+    int srcMax = (w > h) ? w : h;
+    const float cScale = (srcMax > 0) ? (kTargetButtonPx / (float)srcMax) : 1.0f;
     int drawW = (int)((float)w * cScale);
     int drawH = (int)((float)h * cScale);
 
     const int marginX = ui_safe_margin_x();
     const int marginY = ui_safe_margin_y();
 
-    // Anchor C-left near bottom-right while staying fully inside safe bounds.
-    int leftX = SCREEN_WIDTH  - marginX - (drawW / 2) - 8;
-    int leftY = SCREEN_HEIGHT - marginY - (drawH / 2) - 8;
+    // Diamond spacing: the source sprites have transparent padding, so tighten
+    // the centre-to-centre offset to ~half a button so visible edges touch.
+    const float kSpacingFrac = 0.7f;
+    int spacingX = (int)((float)drawW * kSpacingFrac);
+    int spacingY = (int)((float)drawH * kSpacingFrac);
 
-    int minCenterX = marginX + (drawW / 2);
-    int maxCenterX = SCREEN_WIDTH - marginX - (drawW / 2);
-    int minCenterY = marginY + (drawH / 2);
-    int maxCenterY = SCREEN_HEIGHT - marginY - (drawH / 2);
-    if (leftX < minCenterX) leftX = minCenterX;
-    if (leftX > maxCenterX) leftX = maxCenterX;
-    if (leftY < minCenterY) leftY = minCenterY;
-    if (leftY > maxCenterY) leftY = maxCenterY;
+    // Diamond centre: enough room from the safe bounds that the outer C-left
+    // and C-down icons sit flush against the bottom-left corner.
+    int centerX = marginX + spacingX + (drawW / 2);
+    int centerY = SCREEN_HEIGHT - marginY - spacingY - (drawH / 2);
+
+    int leftX  = centerX - spacingX; int leftY  = centerY;
+    int rightX = centerX + spacingX; int rightY = centerY;
+    int upX    = centerX;            int upY    = centerY - spacingY;
+    int downX  = centerX;            int downY  = centerY + spacingY;
 
     rdpq_sync_pipe();
     rdpq_set_mode_standard();
-    // Avoid harsh alpha clipping on soft edges.
     rdpq_mode_alphacompare(0);
     rdpq_mode_blender(RDPQ_BLENDER_MULTIPLY);
-    // Bilinear filtering so the 2x upscale is smooth instead of pixelated.
     rdpq_mode_filter(FILTER_BILINEAR);
 
-    // Draw only the C-left icon.
-    if (cLeftSprite && cLeftSurf.width > 0 && cLeftSurf.height > 0) {
+    if (cUpSprite && cUpSurf.width > 0 && cUpSurf.height > 0) {
+        rdpq_sprite_blit(cUpSprite, upX, upY, &(rdpq_blitparms_t){
+            .scale_x = cScale, .scale_y = cScale,
+            .cx = cUpSurf.width / 2, .cy = cUpSurf.height / 2,
+        });
+    }
+    if (cDownSprite && cDownSurf.width > 0 && cDownSurf.height > 0) {
+        rdpq_sprite_blit(cDownSprite, downX, downY, &(rdpq_blitparms_t){
+            .scale_x = cScale, .scale_y = cScale,
+            .cx = cDownSurf.width / 2, .cy = cDownSurf.height / 2,
+        });
+    }
+    if (cRightSprite && cRightSurf.width > 0 && cRightSurf.height > 0) {
+        rdpq_sprite_blit(cRightSprite, rightX, rightY, &(rdpq_blitparms_t){
+            .scale_x = cScale, .scale_y = cScale,
+            .cx = cRightSurf.width / 2, .cy = cRightSurf.height / 2,
+        });
+    }
+    if (cLeftSurf.width > 0 && cLeftSurf.height > 0) {
         rdpq_sprite_blit(cLeftSprite, leftX, leftY, &(rdpq_blitparms_t){
             .scale_x = cScale, .scale_y = cScale,
             .cx = cLeftSurf.width / 2, .cy = cLeftSurf.height / 2,
@@ -1593,10 +1622,8 @@ static void draw_cbutton_hud(void)
 
     // Only show the potion bottle + count when the player still has potions.
     if (character_get_health_potion_count() > 0) {
-        // Overlay the potion bottle on top of C-left.
-        // Use the *drawn* (scaled) button size so the bottle fills most of the button.
-        if (cLeftSprite && healthBottleSprite && healthBottleSurf.width > 0 && healthBottleSurf.height > 0) {
-            float target = (float)((drawW < drawH) ? drawW : drawH) * 0.60f;
+        if (healthBottleSprite && healthBottleSurf.width > 0 && healthBottleSurf.height > 0) {
+            float target = (float)((drawW < drawH) ? drawW : drawH) * 0.80f;
             float denom = (float)((healthBottleSurf.width > healthBottleSurf.height) ? healthBottleSurf.width : healthBottleSurf.height);
             float s = (denom > 0.0f) ? (target / denom) : 1.0f;
             if (s < 0.05f) s = 0.05f;
@@ -1617,19 +1644,19 @@ static void draw_cbutton_hud(void)
             });
         }
 
-        // Draw potion count near C-left.
         {
             int count = character_get_health_potion_count();
-            const int textX = leftX + (drawW / 5);
-            const int textY = leftY + (drawH / 5) + 10;
+            // Place the count immediately to the right of the potion graphic,
+            // vertically aligned to the button centre.
+            const int textX = leftX + (drawW / 2) + 2;
+            const int textY = leftY + 4;
 
-            // Reset render mode so the font texture draws with the correct prim color.
             rdpq_sync_pipe();
             rdpq_set_mode_standard();
             rdpq_mode_combiner(RDPQ_COMBINER_FLAT);
             rdpq_mode_blender(RDPQ_BLENDER_MULTIPLY);
             rdpq_set_prim_color(RGBA32(0, 0, 0, 255));
-            rdpq_text_printf(NULL, FONT_UNBALANCED, textX, textY, "x%d", count);
+            rdpq_text_printf(NULL, FONT_UNBALANCED, textX, textY, "%d", count);
         }
     }
 }
@@ -3823,8 +3850,19 @@ static void ground_crush_draw(T3DViewport *viewport) {
         if (z3 < 0.0f) z3 = 0.0f;
         if (z3 > 0.9999f) z3 = 0.9999f;
 
-        // Textured, z-buffered triangles. Real per-vertex INV_W enables
-        // perspective-correct S/T interpolation (with rdpq_mode_persp(true)).
+        // Lock the whole decal to the farthest corner's depth via zoverride
+        // (same pattern dust_draw uses). With rdpq_mode_persp(true), per-vertex
+        // Z from rdpq_triangle doesn't line up with what t3d's ucode writes
+        // for 3D meshes, so the decal was winning the depth test against the
+        // boss. One conservative Z per decal makes occlusion match floor depth.
+        float zMax = z0;
+        if (z1 > zMax) zMax = z1;
+        if (z2 > zMax) zMax = z2;
+        if (z3 > zMax) zMax = z3;
+        rdpq_mode_zoverride(true, zMax, 0);
+
+        // Textured triangles. Real per-vertex INV_W enables perspective-correct
+        // S/T interpolation; zoverride above supplies the depth comparison value.
         // Vertex format: { X, Y, Z, S, T, INV_W }
         float v0[6] = { sx0, sy0, z0, 0.0f,        0.0f,        invW0 };
         float v1[6] = { sx1, sy1, z1, (float)texW, 0.0f,        invW1 };
@@ -3835,6 +3873,7 @@ static void ground_crush_draw(T3DViewport *viewport) {
         rdpq_triangle(&TRIFMT_ZBUF_TEX, v1, v3, v2);
     }
 
+    rdpq_mode_zoverride(false, 0.0f, 0);
     rdpq_mode_zbuf(false, false);
 }
 
@@ -4983,9 +5022,14 @@ void scene_draw(T3DViewport *viewport)
                 const int gap = 6;
                 const int y = (SCREEN_HEIGHT / 2) + 20;
 
-                // Draw icon + label as a group slightly left of center (simple + stable; no text-width API used here).
-                int buttonW = aButtonSprite ? aButtonSurf.width : 0;
-                int buttonH = aButtonSprite ? aButtonSurf.height : 0;
+                // Source sprite is 64×64; scale down to match other UI button sizes.
+                const float kTargetPx = 20.0f;
+                int srcMax = aButtonSprite
+                    ? ((aButtonSurf.width > aButtonSurf.height) ? aButtonSurf.width : aButtonSurf.height)
+                    : 0;
+                float s = (srcMax > 0) ? (kTargetPx / (float)srcMax) : 1.0f;
+                int buttonW = aButtonSprite ? (int)((float)aButtonSurf.width  * s) : 0;
+                int buttonH = aButtonSprite ? (int)((float)aButtonSurf.height * s) : 0;
                 int x0 = (SCREEN_WIDTH / 2) - 44;
 
                 if (aButtonSprite) {
@@ -4995,7 +5039,10 @@ void scene_draw(T3DViewport *viewport)
                     rdpq_set_mode_standard();
                     rdpq_mode_alphacompare(0);
                     rdpq_mode_blender(RDPQ_BLENDER_MULTIPLY);
-                    rdpq_sprite_blit(aButtonSprite, buttonX, buttonY, NULL);
+                    rdpq_mode_filter(FILTER_BILINEAR);
+                    rdpq_sprite_blit(aButtonSprite, buttonX, buttonY, &(rdpq_blitparms_t){
+                        .scale_x = s, .scale_y = s,
+                    });
                 }
 
                 // Text baseline aligned to match other UI codepaths (roughly icon vertical center)

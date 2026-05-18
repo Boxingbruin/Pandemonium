@@ -208,16 +208,13 @@ void menu_controller_init(void) {
         pauseMenuBgSurf = sprite_get_pixels(pauseMenuBg);
     }
 
-    // Load button icons for the Controls submenu
-    // NOTE: Prefer black-outline sprites so they're visible on light/busy backgrounds.
-    // A is currently only available as a colored RGBA sprite in the white-outline set.
-    iconA = sprite_load("rom:/buttons/WhiteOutlineButtons/a.rgba16.sprite");
-
-    iconB = sprite_load("rom:/buttons/WhiteOutlineButtons/B.sprite");
-    iconZ = sprite_load("rom:/buttons/WhiteOutlineButtons/Z.sprite");
-    iconStart = sprite_load("rom:/buttons/WhiteOutlineButtons/Start.sprite");
-    iconStick = sprite_load("rom:/buttons/WhiteOutlineButtons/StickTexture.sprite");
-    iconCLeft = sprite_load("rom:/buttons/WhiteOutlineButtons/CLeft.sprite");
+    // Load button icons for the Controls submenu.
+    iconA = sprite_load("rom:/buttons/A.sprite");
+    iconB = sprite_load("rom:/buttons/B.sprite");
+    iconZ = sprite_load("rom:/buttons/Z.sprite");
+    iconStart = sprite_load("rom:/buttons/Start.sprite");
+    iconStick = sprite_load("rom:/buttons/StickTexture.sprite");
+    iconCLeft = sprite_load("rom:/buttons/CLeft.sprite");
 }
 
 void menu_controller_update(void) {
