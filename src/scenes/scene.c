@@ -442,14 +442,20 @@ static bool scene_character_facing_boss_xz(const Boss *boss, float minDot)
     return dot >= minDot;
 }
 
-static bool scene_post_boss_interact_allowed(const Boss *boss)
+// Within prompt distance (XZ). Controls visibility of the "A" prompt above the boss.
+static bool scene_post_boss_in_range(const Boss *boss)
 {
     if (!boss) return false;
-    // Local XZ distance (avoid relying on helper defined later in this TU)
     float dx = boss->pos[0] - character.pos[0];
     float dz = boss->pos[2] - character.pos[2];
     float d = sqrtf(dx*dx + dz*dz);
-    if (d > POST_BOSS_PROMPT_DIST) return false;
+    return d <= POST_BOSS_PROMPT_DIST;
+}
+
+// In range AND facing the boss. Required for the A press to actually start the dialog.
+static bool scene_post_boss_interact_allowed(const Boss *boss)
+{
+    if (!scene_post_boss_in_range(boss)) return false;
     return scene_character_facing_boss_xz(boss, 0.5f); // ~60° cone in front
 }
 
@@ -1502,8 +1508,9 @@ static void draw_post_boss_a_prompt(T3DViewport *viewport)
     if (scene_is_cutscene_active() || !scene_is_boss_active() || !g_boss) return;
     if (g_boss->state != BOSS_STATE_DEAD) return;
 
-    // Only show when the interaction is actually allowed (distance + character facing)
-    if (!scene_post_boss_interact_allowed(g_boss)) return;
+    // Show whenever we're near the boss, regardless of facing. The A press itself
+    // still requires the character to be facing the boss (see interact gate).
+    if (!scene_post_boss_in_range(g_boss)) return;
 
     // Anchor to the boss head bone (true attachment). Fall back to lock-focus if head bone isn't available.
     T3DVec3 worldPos;
