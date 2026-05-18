@@ -2058,6 +2058,57 @@ static inline float ease_in_out(float x) {
     return x * x * (3.0f - 2.0f * x);
 }
 
+// End-of-phase-2-cutscene teardown: drop cutscene-only effects and hand control
+// back to the fight at phase 2. Used both when the cutscene completes naturally
+// and when the player skips it via the A-button overlay.
+static void scene_finish_phase2_cutscene(void)
+{
+    lightning_fx_system_ring_enable(false);
+    animation_utility_set_screen_shake_mag(0.0f);
+    dialog_controller_stop_speaking();
+    cutsceneDialogActive = false;
+
+    if (g_boss) {
+        g_boss->phaseIndex = 2;
+        g_boss->handAttackColliderActive = false;
+        g_boss->sphereAttackColliderActive = false;
+        g_boss->velX = 0.0f;
+        g_boss->velZ = 0.0f;
+
+        // Phase 2 opens with the aerial sword barrage. The handler
+        // lifts the boss to hoverCenterPos.y + hoverHeight and brings
+        // him back down at the end (no gravity in this game).
+        boss_ai_start_aerial_sword_barrage(g_boss);
+    }
+
+    // Phase 2 cutscene music was started non-looping; arm the boss loop to take over.
+    s_pendingBossLoopMusic = true;
+
+    // Long camera blend so the cinematic angle holds while the boss
+    // lifts ~80 units for the aerial sword barrage. With a short
+    // (1s) blend the player-follow camera snaps to the player
+    // while the boss is mid-lift and he ends up off-screen — the
+    // visible result is "swords fall, boss never moved."
+    camera_mode_smooth(CAMERA_CHARACTER, 5.0f);
+    cameraLockOnActive = true;
+
+    cutsceneTimer = 0.0f;
+    cutsceneCameraTimer = 0.0f;
+    cutsceneState = CUTSCENE_NONE;
+    skipButtonVisible = false;
+
+    // HUD was hidden the whole cutscene — snap intro + trail so it
+    // reappears at the current value instead of animating back in.
+    bossUiIntro = 1.0f;
+    display_utility_set_boss_ui_intro(1.0f);
+    if (g_boss && g_boss->maxHealth > 0.0f) {
+        display_utility_snap_boss_health_trail(g_boss->health / g_boss->maxHealth);
+    }
+
+    character_reset_button_state();
+    scene_sync_input_edge_state();
+}
+
 void scene_cutscene_update()
 {
     // Update cutscene state
@@ -2533,40 +2584,7 @@ void scene_cutscene_update()
 
             if(cutsceneTimer >= 10.0f)
             {
-                // Drop cutscene-only effects and hand control back to the fight at phase 2.
-                lightning_fx_system_ring_enable(false);
-                animation_utility_set_screen_shake_mag(0.0f);
-                dialog_controller_stop_speaking();
-                cutsceneDialogActive = false;
-
-                g_boss->phaseIndex = 2;
-                g_boss->handAttackColliderActive = false;
-                g_boss->sphereAttackColliderActive = false;
-                g_boss->velX = 0.0f;
-                g_boss->velZ = 0.0f;
-
-                // Phase 2 opens with the aerial sword barrage. The handler
-                // lifts the boss to hoverCenterPos.y + hoverHeight and brings
-                // him back down at the end (no gravity in this game).
-                boss_ai_start_aerial_sword_barrage(g_boss);
-
-                // Phase 2 cutscene music was started non-looping; arm the boss loop to take over.
-                s_pendingBossLoopMusic = true;
-
-                // Long camera blend so the cinematic angle holds while the boss
-                // lifts ~80 units for the aerial sword barrage. With a short
-                // (1s) blend the player-follow camera snaps to the player
-                // while the boss is mid-lift and he ends up off-screen — the
-                // visible result is "swords fall, boss never moved."
-                camera_mode_smooth(CAMERA_CHARACTER, 5.0f);
-                cameraLockOnActive = true;
-
-                cutsceneTimer = 0.0f;
-                cutsceneCameraTimer = 0.0f;
-                cutsceneState = CUTSCENE_NONE;
-
-                character_reset_button_state();
-                scene_sync_input_edge_state();
+                scene_finish_phase2_cutscene();
                 return;
             }
         } break;
@@ -2622,17 +2640,22 @@ void scene_cutscene_update()
             break;
     }
 
-    // Handle cutscene skip (intro cinematics only). Phase 2 and post-boss dialog are not skippable via this mechanic.
-    bool isPhase2Cutscene = (cutsceneState == CUTSCENE_PHASE2_KNEEL
+    // Handle cutscene skip. Post-boss dialog is not skippable via this mechanic;
+    // phase 1 intro skips back to the start of gameplay, phase 2 cutscenes skip
+    // straight into the start of the phase 2 fight.
+    bool isPhase2Cutscene = (cutsceneState == CUTSCENE_PHASE2_INTRO
+                          || cutsceneState == CUTSCENE_PHASE2_KNEEL
+                          || cutsceneState == CUTSCENE_PHASE2_BLURB
                           || cutsceneState == CUTSCENE_PHASE2_MIND
                           || cutsceneState == CUTSCENE_PHASE2_SHACKLED_SUN
+                          || cutsceneState == CUTSCENE_PHASE2_BURN
                           || cutsceneState == CUTSCENE_PHASE2_BNW
                           || cutsceneState == CUTSCENE_PHASE2_END);
-    if (cutsceneState != CUTSCENE_POST_BOSS_RESTORED && !isPhase2Cutscene) {
+    if (cutsceneState != CUTSCENE_POST_BOSS_RESTORED) {
         // toggle button on first A press, skip on second
         bool aCurrentlyPressed = btn.a;
         bool aJustPressed = aCurrentlyPressed && !lastCutsceneAPressed;
-        
+
         if (aJustPressed)
         {
             if (!skipButtonVisible)
@@ -2643,18 +2666,22 @@ void scene_cutscene_update()
             else
             {
                 // Second press - skip the cutscene
-                skipButtonVisible = false;
-                cutsceneTimer = 0.0f;
-                cutsceneCameraTimer = 0.0f;
-                scene_init_playing(true);
+                if (isPhase2Cutscene) {
+                    scene_finish_phase2_cutscene();
+                } else {
+                    skipButtonVisible = false;
+                    cutsceneTimer = 0.0f;
+                    cutsceneCameraTimer = 0.0f;
+                    scene_init_playing(true);
+                }
                 return;
             }
         }
-        
+
         // Update last state for next frame
         lastCutsceneAPressed = aCurrentlyPressed;
     } else {
-        // Keep skip state hidden during post-boss dialog and phase 2 cutscene
+        // Keep skip state hidden during post-boss dialog
         skipButtonVisible = false;
         lastCutsceneAPressed = btn.a;
     }
