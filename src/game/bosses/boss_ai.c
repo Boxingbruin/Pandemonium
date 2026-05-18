@@ -92,8 +92,7 @@ static bool boss_ai_state_is_attack(BossState state) {
         || state == BOSS_STATE_FLIP_ATTACK
         || state == BOSS_STATE_STOMP
         || state == BOSS_STATE_ATTACK1
-        || state == BOSS_STATE_AERIAL_SWORD_BARRAGE
-        || state == BOSS_STATE_GROUND_SWEEP;
+        || state == BOSS_STATE_AERIAL_SWORD_BARRAGE;
 }
 
 static inline float desired_yaw_to_player(const Boss* boss) {
@@ -322,30 +321,27 @@ static void boss_ai_select_attack(Boss* boss, float dist) {
     // selection below issues `return` for almost every branch.
     // ------------------------------------------------------------
     if (boss->phaseIndex == 2) {
+        // Ground Sweep: passive — kick off the MSA cycle and let the boss
+        // keep choosing other attacks while swords drop. Aerial Sword Barrage
+        // shares the MSA system, so it's gated below when ground sweep is active.
+        if (dist >= 100.0f && dist <= 350.0f
+            && boss->groundSweepCooldown <= 0.0f
+            && !msa_ground_sweep_is_active()) {
+            msa_set_floor_y(boss->pos[1]);
+            msa_set_sword_count(5);
+            msa_ground_sweep_start();
+            boss->groundSweepCooldown = 25.0f;
+            // Fall through so the boss can immediately pick an active attack
+            // to layer on top of the ground sweep.
+        }
+
         // Aerial Sword Barrage: any range. The attack lifts the boss above
         // the arena and rains swords at the predicted player position, so
         // there's no minimum-distance requirement.
-        if (boss->swordBarrageCooldown <= 0.0f && boss->consecutiveSwordRingUses < 2) {
+        if (boss->swordBarrageCooldown <= 0.0f
+            && boss->consecutiveSwordRingUses < 2
+            && !msa_ground_sweep_is_active()) {
             boss_ai_start_aerial_sword_barrage(boss);
-            return;
-        }
-
-        // Ground Sweep: mid-range, boss stays grounded while MSA drops swords.
-        if (dist >= 100.0f && dist <= 350.0f && boss->groundSweepCooldown <= 0.0f) {
-            boss->state = BOSS_STATE_GROUND_SWEEP;
-            boss->stateTimer = 0.0f;
-            boss->groundSweepCooldown = 25.0f;
-            boss->attackCooldown = 1.0f;
-            boss->groundSweepStarted = false;
-
-            boss->isAttacking = true;
-            boss->attackAnimTimer = 0.0f;
-            boss->animationTransitionTimer = 0.0f;
-            boss->currentAttackHasHit = false;
-
-            boss->currentAttackName = "Ground Sweep";
-            boss->attackNameDisplayTimer = 2.0f;
-            boss->currentAttackId = BOSS_ATTACK_GROUND_SWEEP;
             return;
         }
     }
@@ -1262,13 +1258,7 @@ void boss_ai_update(Boss* boss, BossIntent* out_intent) {
                 break;
 
             case BOSS_STATE_GROUND_SWEEP:
-                // The attack handler drives MSA; exit once MSA signals done.
-                if (msa_ground_sweep_is_done()) {
-                    boss->groundSweepStarted = false;
-                    if (dist < 50.0f) boss_ai_select_attack(boss, dist);
-                    else boss->state = BOSS_STATE_STRAFE;
-                    boss->stateTimer = 0.0f;
-                }
+                // Ground sweep is fire-and-forget — the boss never sits in this state.
                 break;
     }
     

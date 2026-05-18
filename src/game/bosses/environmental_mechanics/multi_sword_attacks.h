@@ -44,7 +44,10 @@ void msa_cleanup_aerial_swords(void);
 
 // Ground sweep attack support (single-cycle, boss-driven)
 // Call msa_ground_sweep_start() once to begin; poll msa_ground_sweep_is_done() each frame.
+// msa_ground_sweep_is_active() reports whether a cycle is currently running, which the
+// boss AI uses to avoid kicking off the aerial sword barrage on top of it (they share MSA).
 void msa_ground_sweep_start(void);
 bool msa_ground_sweep_is_done(void);
+bool msa_ground_sweep_is_active(void);
 
 #endif
