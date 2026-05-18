@@ -13,6 +13,8 @@ static int fadeBlackAlpha = 255; // Default alpha value for the rectangle
 bool startScreenFade = false;
 static sprite_t* bossHealthBarBackgroundSprite = NULL;
 static bool bossHealthBarBackgroundLoadAttempted = false;
+static sprite_t* bossHealthBarNameSprite = NULL;
+static bool bossHealthBarNameLoadAttempted = false;
 //static sprite_t* playerShieldHealthSprites[5] = { NULL, NULL, NULL, NULL, NULL };
 //static bool playerShieldHealthSpritesLoadAttempted = false;
 //static float playerShieldDeathAnimTime = 0.0f;
@@ -141,7 +143,7 @@ void draw_boss_health_bar(const char *name, float ratio, float flash)
 	}
 
 	// Taller red/dark fill only; frame sprite scale/position below is unchanged.
-	const int fillHeight = 12;
+	const int fillHeight = 8;
 	float frameScale = 1.0f;
 	int frameY = SCREEN_HEIGHT - marginY - 24;
 	int fillCenterY = frameY + 12;
@@ -151,7 +153,8 @@ void draw_boss_health_bar(const char *name, float ratio, float flash)
 		frameY = SCREEN_HEIGHT - marginY - frameHeight;
 		fillCenterY = frameY + frameHeight / 2;
 	}
-	int top = fillCenterY - fillHeight / 2;
+	// const int fillOffsetY = 2;
+	int top = fillCenterY - fillHeight / 2 + 2;
 	int bottom = top + fillHeight;
 
 	// center-out growth only (no vertical slide)
@@ -217,17 +220,28 @@ void draw_boss_health_bar(const char *name, float ratio, float flash)
 			.scale_y = frameScale,
 		});
 	}
-	
-	// Center the boss name text
-	//const char* displayName = name ? name : "Enemy";
-	//float barCenter = (left + right) * 0.5f;
 
-	// Estimate character width (approximately 6 pixels for debug font)
-	// float estimatedTextWidth = strlen(displayName) * 6.0f;
-	// float textX = barCenter - (estimatedTextWidth * 0.5f);
-	
-	// // Use rdpq_text_printf with proper text rendering setup
-	// rdpq_text_printf(NULL, FONT_UNBALANCED, (int)textX, (int)(bottom + 12.0f), "%s", displayName);
+	// Boss name plate hidden for now — needs art/layout work.
+	// #if 0
+	if (!bossHealthBarNameLoadAttempted) {
+		bossHealthBarNameLoadAttempted = true;
+		bossHealthBarNameSprite = sprite_load("rom:/ui/healthbars/boss/guardian_of_the_shackled_sun.sprite");
+	}
+	if (bossHealthBarNameSprite) {
+		rdpq_sync_pipe();
+		rdpq_set_mode_standard();
+		rdpq_mode_alphacompare(1);
+		rdpq_mode_blender(RDPQ_BLENDER_MULTIPLY);
+
+		const float nameScale = 0.5f;
+		int nameHeight = (int)((float)bossHealthBarNameSprite->height * nameScale);
+		int nameY = frameY - nameHeight;
+		rdpq_sprite_blit(bossHealthBarNameSprite, left + 12, nameY + 12, &(rdpq_blitparms_t){
+			.scale_x = nameScale,
+			.scale_y = nameScale,
+		});
+	}
+	// #endif
 }
 
 void draw_player_health_bar(const char *name, float ratio, float flash)
