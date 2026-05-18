@@ -238,11 +238,14 @@ void boss_render_draw(Boss* boss) {
 
     boss_flash_cache_init((const T3DModel*)boss->model);
     if (boss->damageFlashTimer > 0.0f) {
-        // 0.25s window: solid red for the first half, then fade out over the second.
+        // 0.25s window: hold peak tint for the first half, then fade out.
+        // Peak is intentionally well below 1.0 so the boss reads as "hurt"
+        // without being repainted solid red.
+        const float kMaxTint = 0.35f;
         float f = boss->damageFlashTimer / 0.25f;
         if (f < 0.0f) f = 0.0f;
         if (f > 1.0f) f = 1.0f;
-        float tint = (f >= 0.5f) ? 1.0f : (f * 2.0f);
+        float tint = (f >= 0.5f) ? kMaxTint : (f * 2.0f * kMaxTint);
         boss_flash_apply_tint(tint);
     } else if (s_flashTintApplied) {
         boss_flash_restore();
