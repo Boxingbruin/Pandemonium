@@ -21,6 +21,59 @@ static bool bossHealthBarBackgroundLoadAttempted = false;
 static float boss_ui_intro = 1.0f;
 static float player_ui_intro = 1.0f;
 
+// Trailing indicators for each bar. After a change, the "loss" trail lingers
+// above the current ratio (recent damage/use, shown yellow) and the "gain"
+// trail lingers below it (recent heal/regen, shown as a white highlight).
+#define TRAIL_HOLD_TIME 0.35f
+#define TRAIL_DECAY_RATE 0.6f // ratio per second
+
+typedef struct {
+    float lossTrail;
+    float gainTrail;
+    float lastRatio;
+    float lossHold;
+    float gainHold;
+} BarTrailState;
+
+static BarTrailState playerHealthBarState  = { 1.0f, 1.0f, 1.0f, 0.0f, 0.0f };
+static BarTrailState playerStaminaBarState = { 1.0f, 1.0f, 1.0f, 0.0f, 0.0f };
+static BarTrailState bossHealthBarState    = { 1.0f, 1.0f, 1.0f, 0.0f, 0.0f };
+
+static void update_bar_trails(float ratio, BarTrailState *s)
+{
+    if (ratio < s->lastRatio) {
+        // Just lost — refresh loss hold, snap gain trail forward so a stale
+        // healing highlight doesn't reappear behind new damage.
+        s->lossHold = TRAIL_HOLD_TIME;
+        if (s->gainTrail < ratio) s->gainTrail = ratio;
+    } else if (ratio > s->lastRatio) {
+        // Just gained — refresh gain hold, snap loss trail up to current.
+        s->gainHold = TRAIL_HOLD_TIME;
+        if (s->lossTrail < ratio) s->lossTrail = ratio;
+    }
+    s->lastRatio = ratio;
+
+    // Clamp trails to valid sides of the current ratio.
+    if (s->lossTrail < ratio) s->lossTrail = ratio;
+    if (s->gainTrail > ratio) s->gainTrail = ratio;
+
+    if (s->lossHold > 0.0f) {
+        s->lossHold -= deltaTime;
+        if (s->lossHold < 0.0f) s->lossHold = 0.0f;
+    } else if (s->lossTrail > ratio) {
+        s->lossTrail -= TRAIL_DECAY_RATE * deltaTime;
+        if (s->lossTrail < ratio) s->lossTrail = ratio;
+    }
+
+    if (s->gainHold > 0.0f) {
+        s->gainHold -= deltaTime;
+        if (s->gainHold < 0.0f) s->gainHold = 0.0f;
+    } else if (s->gainTrail < ratio) {
+        s->gainTrail += TRAIL_DECAY_RATE * deltaTime;
+        if (s->gainTrail > ratio) s->gainTrail = ratio;
+    }
+}
+
 void display_utility_set_boss_ui_intro(float progress)
 {
 	if (progress < 0.0f) progress = 0.0f;
@@ -33,6 +86,17 @@ void display_utility_set_player_ui_intro(float progress)
 	if (progress < 0.0f) progress = 0.0f;
 	if (progress > 1.0f) progress = 1.0f;
 	player_ui_intro = progress;
+}
+
+void display_utility_snap_boss_health_trail(float ratio)
+{
+	if (ratio < 0.0f) ratio = 0.0f;
+	if (ratio > 1.0f) ratio = 1.0f;
+	bossHealthBarState.lossTrail = ratio;
+	bossHealthBarState.gainTrail = ratio;
+	bossHealthBarState.lastRatio = ratio;
+	bossHealthBarState.lossHold  = 0.0f;
+	bossHealthBarState.gainHold  = 0.0f;
 }
 
 void draw_boss_health_bar(const char *name, float ratio, float flash)
@@ -104,18 +168,40 @@ void draw_boss_health_bar(const char *name, float ratio, float flash)
 		rdpq_fill_rectangle(revealLeft, top, revealRight, bottom);
 	}
 	
+	update_bar_trails(ratio, &bossHealthBarState);
+
+	int fillEnd  = barLeft + (int)((barRight - barLeft) * ratio);
+	int lossEnd  = barLeft + (int)((barRight - barLeft) * bossHealthBarState.lossTrail);
+	int gainEnd  = barLeft + (int)((barRight - barLeft) * bossHealthBarState.gainTrail);
+
+	// Clip everything to the revealed width region used by the intro animation.
+	int clipLeft = (revealLeft > barLeft) ? revealLeft : barLeft;
+	int clipRight = (revealRight < barRight) ? revealRight : barRight;
+
+	// Recent-damage segment (yellow) between the live fill and the previous value.
+	int lossClipLeft = (fillEnd > clipLeft) ? fillEnd : clipLeft;
+	int lossClipRight = (lossEnd < clipRight) ? lossEnd : clipRight;
+	if (lossClipRight > lossClipLeft) {
+		rdpq_set_prim_color(RGBA32(230, 200, 60, alpha));
+		rdpq_fill_rectangle(lossClipLeft, top, lossClipRight, bottom);
+	}
+
 	// Health fill (solid red; no debug markers)
 	int red = 200 + (int)(55.0f * flash);
 	int green = 30 + (int)(20.0f * flash);
 	int blue = 30 + (int)(20.0f * flash);
 	rdpq_set_prim_color(RGBA32(red, green, blue, alpha));
-	int fillEnd = barLeft + (int)((barRight - barLeft) * ratio);
-	// Clip fill to revealed width region
-	int clipLeft = (revealLeft > barLeft) ? revealLeft : barLeft;
-	int clipRight = (revealRight < barRight) ? revealRight : barRight;
 	int fillClipRight = (fillEnd < clipRight) ? fillEnd : clipRight;
 	if (fillClipRight > clipLeft) {
 		rdpq_fill_rectangle(clipLeft, top, fillClipRight, bottom);
+	}
+
+	// Recent-heal segment (white highlight) overlaid on top of the fill.
+	int gainClipLeft = (gainEnd > clipLeft) ? gainEnd : clipLeft;
+	int gainClipRight = (fillEnd < clipRight) ? fillEnd : clipRight;
+	if (gainClipRight > gainClipLeft) {
+		rdpq_set_prim_color(RGBA32(240, 240, 240, alpha));
+		rdpq_fill_rectangle(gainClipLeft, top, gainClipRight, bottom);
 	}
 
 	// Decorative frame overlay
@@ -188,16 +274,32 @@ void draw_player_health_bar(const char *name, float ratio, float flash)
     rdpq_set_prim_color(RGBA32(10, 10, 10, 190));
     rdpq_fill_rectangle(left + 1, top + 1, right - 1, bottom - 1);
 
+    update_bar_trails(ratio, &playerHealthBarState);
+
     // Health fill
     int red = 200 + (int)(55.0f * flash);
     int green = 35 + (int)(45.0f * flash);
     int blue = 35 + (int)(45.0f * flash);
 
-    int fillRight = left + 2 + (int)((barWidth - 4) * ratio);
+    int fillRight  = left + 2 + (int)((barWidth - 4) * ratio);
+    int lossRight  = left + 2 + (int)((barWidth - 4) * playerHealthBarState.lossTrail);
+    int gainLeft   = left + 2 + (int)((barWidth - 4) * playerHealthBarState.gainTrail);
+
+    // Recent-damage segment (yellow) between the live fill and the previous value.
+    if (lossRight > fillRight) {
+        rdpq_set_prim_color(RGBA32(230, 200, 60, 220));
+        rdpq_fill_rectangle(fillRight, top + 2, lossRight, bottom - 2);
+    }
 
     if (fillRight > left + 2) {
         rdpq_set_prim_color(RGBA32(red, green, blue, 220));
         rdpq_fill_rectangle(left + 2, top + 2, fillRight, bottom - 2);
+    }
+
+    // Recent-heal segment (white highlight) overlaid on the top of the fill.
+    if (gainLeft < fillRight) {
+        rdpq_set_prim_color(RGBA32(240, 240, 240, 220));
+        rdpq_fill_rectangle(gainLeft, top + 2, fillRight, bottom - 2);
     }
 
     // Light frame
@@ -253,12 +355,29 @@ void draw_player_stamina_bar(float ratio)
     rdpq_set_prim_color(RGBA32(10, 10, 10, 190));
     rdpq_fill_rectangle(left + 1, top + 1, right - 1, bottom - 1);
 
+    update_bar_trails(ratio, &playerStaminaBarState);
+
+    int fillWidth = (int)((barWidth - 4) * ratio);
+    int lossWidth = (int)((barWidth - 4) * playerStaminaBarState.lossTrail);
+    int gainWidth = (int)((barWidth - 4) * playerStaminaBarState.gainTrail);
+
+    // Recently-used segment (yellow) between live fill and previous value.
+    if (lossWidth > fillWidth) {
+        rdpq_set_prim_color(RGBA32(230, 200, 60, 220));
+        rdpq_fill_rectangle(left + 2 + fillWidth, top + 2, left + 2 + lossWidth, bottom - 2);
+    }
+
     // Green fill — require at least 2px before rendering so sub-pixel residue
     // doesn't leave a sliver when the bar is empty.
-    int fillWidth = (int)((barWidth - 4) * ratio);
     if (fillWidth >= 2) {
         rdpq_set_prim_color(RGBA32(60, 200, 80, 220));
         rdpq_fill_rectangle(left + 2, top + 2, left + 2 + fillWidth, bottom - 2);
+    }
+
+    // Recently-regenerated segment (white highlight) overlaid on top of the fill.
+    if (gainWidth < fillWidth) {
+        rdpq_set_prim_color(RGBA32(240, 240, 240, 220));
+        rdpq_fill_rectangle(left + 2 + gainWidth, top + 2, left + 2 + fillWidth, bottom - 2);
     }
 
     // Light frame (shares its top edge with the health bar's bottom edge)
