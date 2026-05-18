@@ -127,6 +127,19 @@ static void save_set_rumble_enabled(SaveData *d, bool enabled)
     d->_pad[2] = enabled ? 1 : 0;
 }
 
+static bool saved_hd_aspect(const SaveData *d)
+{
+    if (!d) return false;
+    // Stored in padding to keep save size stable across versions.
+    return d->_pad[3] != 0;
+}
+
+static void save_set_hd_aspect(SaveData *d, bool enabled)
+{
+    if (!d) return;
+    d->_pad[3] = enabled ? 1 : 0;
+}
+
 static void save_defaults_for_slot(SaveData *d, int slot) {
     memset(d, 0, sizeof(*d));
 
@@ -144,6 +157,7 @@ static void save_defaults_for_slot(SaveData *d, int slot) {
     // UI overscan defaults: minimum extra padding (widest UI in calibrated range)
     save_set_overscan(d, UI_OVERSCAN_MIN, UI_OVERSCAN_MIN);
     save_set_rumble_enabled(d, true);
+    save_set_hd_aspect(d, false);
 
     d->checksum = compute_slot_checksum(d);
 }
@@ -330,6 +344,7 @@ bool save_controller_load_settings(void) {
     uiOverscanY = saved_overscan_y(d);
 
     joypad_set_rumble_enabled(saved_rumble_enabled(d));
+    hdAspect = saved_hd_aspect(d);
     return true;
 }
 
@@ -346,6 +361,7 @@ bool save_controller_save_settings(void) {
     // Persist current UI overscan values
     save_set_overscan(d, uiOverscanX, uiOverscanY);
     save_set_rumble_enabled(d, joypad_is_rumble_enabled());
+    save_set_hd_aspect(d, hdAspect);
 
     d->checksum     = compute_slot_checksum(d);
 

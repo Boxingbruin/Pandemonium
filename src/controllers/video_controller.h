@@ -8,8 +8,7 @@
  * Video/UI-related user settings.
  *
  * Persistence:
- * - `uiOverscanX/Y` are persisted in EEPROM via `save_controller.*`.
- * - `hdAspect` is currently runtime-only (not persisted yet).
+ * - `uiOverscanX/Y` and `hdAspect` are persisted in EEPROM via `save_controller.*`.
  */
 
 // Render aspect toggle used by camera/projection and menu setting.
