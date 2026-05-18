@@ -112,7 +112,6 @@ static void boss_attacks_handle_lunge_starter(Boss* boss, float dt);
 static void boss_attacks_handle_stomp(Boss* boss, float dt);
 static void boss_attacks_handle_attack1(Boss* boss, float dt);
 static void boss_attacks_handle_aerial_sword_barrage(Boss* boss, float dt);
-static void boss_attacks_handle_ground_sweep(Boss* boss, float dt);
 
 void boss_attacks_update(Boss* boss, float dt) {
     if (!boss) return;
@@ -127,8 +126,7 @@ void boss_attacks_update(Boss* boss, float dt) {
                         boss->state == BOSS_STATE_LUNGE_STARTER ||
                         boss->state == BOSS_STATE_STOMP ||
                         boss->state == BOSS_STATE_ATTACK1 ||
-                        boss->state == BOSS_STATE_AERIAL_SWORD_BARRAGE ||
-                        boss->state == BOSS_STATE_GROUND_SWEEP);
+                        boss->state == BOSS_STATE_AERIAL_SWORD_BARRAGE);
 
     if (!isAttackState) {
         boss->handAttackColliderActive = false;
@@ -175,10 +173,6 @@ void boss_attacks_update(Boss* boss, float dt) {
             boss_attacks_handle_aerial_sword_barrage(boss, dt);
             break;
 
-        case BOSS_STATE_GROUND_SWEEP:
-            boss_attacks_handle_ground_sweep(boss, dt);
-            break;
-            
         default:
             // Not an attack state, nothing to do
             break;
@@ -1106,30 +1100,6 @@ static void boss_attacks_handle_flip_attack(Boss* boss, float dt)
             boss->rot[1] = -atan2f(-mdz, mdx) + T3D_PI;
         }
     }
-}
-
-// Ground Sweep Attack Implementation
-// ====================================
-// Boss stays on the ground while MSA spawns swords above the player (CEILING_SETUP),
-// drops them (DROPPING → POST_LAND → SCURVE → DESCEND), then signals done.
-
-static void boss_attacks_handle_ground_sweep(Boss* boss, float dt) {
-    if (!boss) return;
-
-    if (!boss->groundSweepStarted) {
-        boss->groundSweepStarted = true;
-        msa_set_floor_y(boss->pos[1]);
-        msa_set_sword_count(5);
-        msa_ground_sweep_start();
-    }
-
-    // Boss faces the player slowly while swords do their work.
-    boss_turn_towards_player(boss, dt, 0.4f);
-
-    // No attack colliders — damage is handled by MSA sword collision.
-    boss->handAttackColliderActive   = false;
-    boss->sphereAttackColliderActive = false;
-    // (AI transition is handled in boss_ai.c once msa_ground_sweep_is_done() is true)
 }
 
 // Aerial Sword Barrage Attack Implementation

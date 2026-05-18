@@ -743,6 +743,10 @@ bool msa_ground_sweep_is_done(void) {
     return gGroundSweepDone;
 }
 
+bool msa_ground_sweep_is_active(void) {
+    return gGroundSweepActive;
+}
+
 // ============================================================
 // INIT / SHUTDOWN
 // ============================================================
