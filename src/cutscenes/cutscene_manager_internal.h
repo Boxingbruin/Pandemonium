@@ -29,6 +29,7 @@ extern bool skipButtonVisible;
 extern bool lastCutsceneAPressed;
 
 extern int  bossPostDefeatDialogStep;
+extern int  bossPostDefeatChatIndex;
 
 // PHASE1_BREAK_CHAINS asset.
 extern T3DModel*     cutsceneChainBreakModel;

@@ -76,4 +76,15 @@ void cutscene_manager_chain_break_draw(void);
 const char *cutscene_manager_get_phase1_dialog(int idx);
 const char *cutscene_manager_get_phase2_dialog(int idx);
 
+// Post-boss dialog (escalating frustration). One entry per chat; chat 0 has a
+// two-line opener, the rest are single-line.
+typedef struct {
+    const char *line1;
+    const char *line2;   // NULL when single-line
+    float       holdSec; // dialog_controller_speak activeTime
+} PostBossChat;
+
+int                 cutscene_manager_post_boss_chat_count(void);
+const PostBossChat *cutscene_manager_get_post_boss_chat(int idx);
+
 #endif

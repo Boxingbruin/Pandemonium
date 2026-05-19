@@ -34,6 +34,7 @@ bool skipButtonVisible       = false;
 bool lastCutsceneAPressed    = false;
 
 int  bossPostDefeatDialogStep = 0;
+int  bossPostDefeatChatIndex  = 0;
 
 T3DModel*     cutsceneChainBreakModel      = NULL;
 rspq_block_t* cutsceneChainBreakDpl        = NULL;
@@ -59,6 +60,20 @@ static const char *s_phase2Dialogs[] = {
     "<BURN MY MORTAL FLESH!!",
 };
 
+// Post-boss "escalating frustration" sequence. The chat index persists across
+// re-entries to CUTSCENE_POST_BOSS_RESTORED, so each A-press on the corpse
+// advances one step. The last entry is the Phase 3 trigger line — currently
+// dialog-only; see the TODO in scene.c.
+static const PostBossChat s_postBossChats[] = {
+    { "<Released... ^I am no longer\nbound by the kings will.~ ",
+      "^Restore these shattered\nlands... The king must fall...~ ", 4.0f },
+    { "^Go now",                  NULL, 3.0f },
+    { "^Do you ~mock^ me?",         NULL, 3.0f },
+    { "<Why are you still here",  NULL, 3.5f },
+    { ">You did not heed my call\nLet the king deal with you...~", NULL, 4.0f },
+    { ">Leave~...",                   NULL, 2.5f },
+};
+
 const char *cutscene_manager_get_phase1_dialog(int idx) {
     int count = (int)(sizeof(s_phase1Dialogs) / sizeof(s_phase1Dialogs[0]));
     if (idx < 0 || idx >= count) return "";
@@ -69,6 +84,17 @@ const char *cutscene_manager_get_phase2_dialog(int idx) {
     int count = (int)(sizeof(s_phase2Dialogs) / sizeof(s_phase2Dialogs[0]));
     if (idx < 0 || idx >= count) return "";
     return s_phase2Dialogs[idx];
+}
+
+int cutscene_manager_post_boss_chat_count(void) {
+    return (int)(sizeof(s_postBossChats) / sizeof(s_postBossChats[0]));
+}
+
+const PostBossChat *cutscene_manager_get_post_boss_chat(int idx) {
+    int count = cutscene_manager_post_boss_chat_count();
+    if (idx < 0) idx = 0;
+    if (idx >= count) idx = count - 1;
+    return &s_postBossChats[idx];
 }
 
 // ----------------------------------------------------------------------------
@@ -144,6 +170,7 @@ void cutscene_manager_reset(void)
     skipButtonVisible       = false;
     lastCutsceneAPressed    = false;
     bossPostDefeatDialogStep = 0;
+    bossPostDefeatChatIndex  = 0;
     phase2CutsceneTriggered = false;
 }
 
