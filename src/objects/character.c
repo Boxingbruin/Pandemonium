@@ -2718,18 +2718,46 @@ void character_update_camera(void)
         float extra = pull * 0.25f;
         if (extra > scaledDistance * 0.60f) extra = scaledDistance * 0.60f;
 
+        // Orbital sink: when the target is above the character, drop the camera
+        // vertically so it can pitch up at the target without losing the boss
+        // off the top of the screen. XZ distance is unchanged — no pullback.
+        // Camera is allowed to drop below the character's feet (and even below
+        // the floor mesh) at extreme apex — there is no camera-vs-geometry
+        // collision, so this is purely a virtual orbit sphere.
+        float dy = cameraLockOnTarget.v[1] - character.pos[1];
+
         float desiredDist = (scaledDistance * 0.90f) + extra;
 
         desiredCamPos.v[0] = character.pos[0] - dirX * desiredDist;
-        // Lower the lock-on camera so the character stays visible while aiming at the lock point.
-        // Add a small amount of vertical response to the target height, but keep it subtle.
-        float dy = cameraLockOnTarget.v[1] - character.pos[1];
-        float yResponse = dy * 0.15f;
-        if (yResponse < -6.0f) yResponse = -6.0f;
-        if (yResponse >  12.0f) yResponse =  12.0f;
-        // Keep the lock-on camera lower than follow mode so the character reads better.
-        desiredCamPos.v[1] = character.pos[1] + (scaledHeight * 0.35f) + yResponse;
+        const float baseAboveFeet = scaledHeight * 0.5f;
+        float yResponse;
+        // Deadzone: the lock target naturally sits well above the character's
+        // feet (boss torso/center bone) even when the boss is on the same
+        // floor. Only sink the camera once the target is meaningfully
+        // elevated — i.e. the boss is mid-air / above us.
+        const float sinkStartDy = 80.0f;
+        if (dy > sinkStartDy) {
+            const float sinkFactor = 0.65f;
+            float sink = (dy - sinkStartDy) * sinkFactor;
+            const float maxBelowFeet = 22.0f;
+            const float maxSink = baseAboveFeet + maxBelowFeet;
+            if (sink > maxSink) sink = maxSink;
+            yResponse = -sink;
+        } else if (dy < 0.0f) {
+            // Target below: small upward adjustment so we can see past the floor.
+            yResponse = -dy * 0.10f;
+            if (yResponse > 8.0f) yResponse = 8.0f;
+        } else {
+            yResponse = 0.0f;
+        }
+        desiredCamPos.v[1] = character.pos[1] + baseAboveFeet + yResponse;
         desiredCamPos.v[2] = character.pos[2] - dirZ * desiredDist;
+
+        // Never let the camera dip below the floor mesh, even when the boss
+        // is mid-air. If the sink would push it through the ground, hold it
+        // just above the floor and let the FOV clamp below decide framing.
+        const float camYFloor = SHADOW_GROUND_Y + 2.0f;
+        if (desiredCamPos.v[1] < camYFloor) desiredCamPos.v[1] = camYFloor;
     }
 
     if (deltaTime > 0.0f) {
@@ -2766,8 +2794,66 @@ void character_update_camera(void)
 
     T3DVec3 desiredTarget;
     if (cameraLockOnActive) {
-        // When locked-on, the camera should be centered on the selected lock point.
+        // Look-at composition:
+        //  1. Blend from "look at lock target" toward "look at midpoint of
+        //     character head and lock target" as vertical separation grows —
+        //     this is the half-character / half-boss framing.
+        //  2. Then geometrically clamp the resulting Y so the character's head
+        //     stays inside the FOV cone (and feet stay inside if the target is
+        //     below). This is the safety net for extreme separations where
+        //     even the midpoint would crop the character.
         desiredTarget = cameraLockOnTarget;
+
+        float dyT = cameraLockOnTarget.v[1] - followTarget.v[1];
+        float absDyT = (dyT < 0.0f) ? -dyT : dyT;
+        const float vertBlendStart = 30.0f;
+        const float vertBlendFull  = 130.0f;
+        float blendT = (absDyT - vertBlendStart) / (vertBlendFull - vertBlendStart);
+        if (blendT < 0.0f) blendT = 0.0f;
+        if (blendT > 1.0f) blendT = 1.0f;
+        float midY = (followTarget.v[1] + cameraLockOnTarget.v[1]) * 0.5f;
+        desiredTarget.v[1] = cameraLockOnTarget.v[1] * (1.0f - blendT) + midY * blendT;
+
+        // FOV-derived clamp.
+        //   Priority order:
+        //     1. Lock target (boss) must stay in view — even mid-air apex.
+        //     2. Character should stay in view when geometry allows.
+        //   When both can be kept in the FOV cone, narrow to the intersection.
+        //   When they can't (extreme separation that even max sink doesn't fix),
+        //   keep the boss in view and let the character briefly drop off-screen.
+        float dxCam = desiredCamPos.v[0] - character.pos[0];
+        float dzCam = desiredCamPos.v[2] - character.pos[2];
+        float horizDist = sqrtf(dxCam * dxCam + dzCam * dzCam);
+        if (horizDist < 1.0f) horizDist = 1.0f;
+
+        const float DEG = T3D_PI / 180.0f;
+        float halfFovRad   = (FOV * 0.5f) * DEG;
+        float fovMarginRad = 4.0f * DEG;
+        float availPitch   = halfFovRad - fovMarginRad;
+
+        float headPitch = atan2f(followTarget.v[1]     - desiredCamPos.v[1], horizDist);
+        float feetPitch = atan2f(character.pos[1]      - desiredCamPos.v[1], horizDist);
+        float bossPitch = atan2f(cameraLockOnTarget.v[1] - desiredCamPos.v[1], horizDist);
+        float lookPitch = atan2f(desiredTarget.v[1]    - desiredCamPos.v[1], horizDist);
+
+        float bossLo = bossPitch - availPitch;
+        float bossHi = bossPitch + availPitch;
+        float charLo = feetPitch - availPitch;
+        float charHi = headPitch + availPitch;
+
+        float allLo = (bossLo > charLo) ? bossLo : charLo;
+        float allHi = (bossHi < charHi) ? bossHi : charHi;
+
+        if (allLo <= allHi) {
+            if (lookPitch < allLo) lookPitch = allLo;
+            if (lookPitch > allHi) lookPitch = allHi;
+        } else {
+            // Both can't fit — keep the boss visible.
+            if (lookPitch < bossLo) lookPitch = bossLo;
+            if (lookPitch > bossHi) lookPitch = bossHi;
+        }
+
+        desiredTarget.v[1] = desiredCamPos.v[1] + horizDist * tanf(lookPitch);
     } else {
         (void)forwardTarget; // currently unused in follow mode; kept for future tuning
         vec3_lerp(&desiredTarget, &followTarget, &cameraLockOnTarget, cameraLockBlend);
