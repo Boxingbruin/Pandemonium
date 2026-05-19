@@ -20,6 +20,8 @@
 #define PAL_MODE false
 #define DRAW_CRT_SAFE_AREA false
 
+#define PHASE_2_ENABLED false
+
 #define DITHER_ENABLED false
 #define ARES_AA_ENABLED false
 
