@@ -1265,7 +1265,7 @@ void menu_controller_draw(void) {
         // Credits (requested)
         rdpq_set_prim_color(RGBA32(255, 255, 255, 255));
         rdpq_text_printf(&(rdpq_textparms_t){ .align = ALIGN_CENTER, .width = contentW, .height = contentH, .wrap = WRAP_WORD },
-                         FONT_UNBALANCED, x, y, "Zero Cool");
+                         FONT_UNBALANCED, x, y, "FROMSCRATCH");
         y += lineHeight + 8;
         rdpq_text_printf(&(rdpq_textparms_t){ .align = ALIGN_CENTER, .width = contentW, .height = contentH, .wrap = WRAP_WORD },
                          FONT_UNBALANCED, x, y, "BoxingBruin");
