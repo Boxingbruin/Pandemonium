@@ -2068,11 +2068,10 @@ void scene_init_cutscene()
             customCamTarget = get_boss_lock_focus_point();
             camera_mode_smooth(CAMERA_CUSTOM, 0.25f);
 
-            // Start first line (auto-ends after a short hold)
-            dialog_controller_speak(
-                "<Released... ^I am no longer\nbound by the kings will.~ ",
-                0, 4.0f, false, true
-            );
+            // Start the current chat's first line. bossPostDefeatChatIndex persists
+            // across cutscene entries so each A-press advances the sequence.
+            const PostBossChat *chat = cutscene_manager_get_post_boss_chat(bossPostDefeatChatIndex);
+            dialog_controller_speak(chat->line1, 0, chat->holdSec, false, true);
         } break;
         default:
             break;
@@ -2637,13 +2636,22 @@ void scene_cutscene_update()
             dialog_controller_update();
 
             if (!dialog_controller_speaking()) {
-                if (bossPostDefeatDialogStep == 0) {
+                const PostBossChat *chat = cutscene_manager_get_post_boss_chat(bossPostDefeatChatIndex);
+
+                if (bossPostDefeatDialogStep == 0 && chat->line2) {
+                    // Multi-line chat: play the second line.
                     bossPostDefeatDialogStep = 1;
-                    dialog_controller_speak(
-                        "^Restore these shattered\nlands... The king must fall...~ ",
-                        0, 4.0f, false, true
-                    );
+                    dialog_controller_speak(chat->line2, 0, chat->holdSec, false, true);
                 } else {
+                    // Chat finished — advance index for the next A-press, capped at the last entry.
+                    // TODO: when Phase 3 is implemented, fire it here on the transition into the
+                    // final chat (e.g. when bossPostDefeatChatIndex reaches count - 1). For now
+                    // the final line is dialog-only and replays if the player keeps pressing A.
+                    int count = cutscene_manager_post_boss_chat_count();
+                    if (bossPostDefeatChatIndex < count - 1) {
+                        bossPostDefeatChatIndex++;
+                    }
+
                     // Finish: return to gameplay.
                     cutsceneDialogActive = false;
                     cutsceneState = CUTSCENE_NONE;
@@ -2957,6 +2965,7 @@ void scene_update(void)
             // The boss will play its collapse and remain still; the player can keep moving.
 
             // Phase 2 transition: trigger cutscene when boss health drops to 40%.
+#if PHASE_2_ENABLED
             if (!phase2CutsceneTriggered && g_boss->phaseIndex == 1
                 && g_boss->health <= g_boss->maxHealth * 0.4f
                 && g_boss->health > 0.0f) {
@@ -2968,6 +2977,7 @@ void scene_update(void)
                 scene_init_cutscene();
                 return;
             }
+#endif
         }
 
         collision_update();
