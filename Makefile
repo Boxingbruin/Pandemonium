@@ -38,6 +38,7 @@ assets_wav = $(filter %.wav,$(asset_files))
 assets_ttf = $(filter %.ttf,$(asset_files))
 assets_bin = $(filter %.bin,$(asset_files))
 assets_h264 = $(filter %.h264,$(asset_files))
+assets_mp4 = $(filter %.mp4,$(asset_files))
 
 # Convert asset paths to filesystem output paths, preserving subdirs
 ASSETSCONV = $(patsubst $(ASSDIR)/%.png,$(FILESYSTEMDIR)/%.sprite,$(assets_png)) \
@@ -46,13 +47,10 @@ ASSETSCONV = $(patsubst $(ASSDIR)/%.png,$(FILESYSTEMDIR)/%.sprite,$(assets_png))
 	$(patsubst $(ASSDIR)/%.glb,$(FILESYSTEMDIR)/%.t3dm,$(assets_gltf)) \
 	$(patsubst $(ASSDIR)/%.wav,$(FILESYSTEMDIR)/%.wav64,$(assets_wav)) \
 	$(patsubst $(ASSDIR)/%.bin,$(FILESYSTEMDIR)/%.bin,$(assets_bin)) \
-	$(patsubst $(ASSDIR)/%.h264,$(FILESYSTEMDIR)/%.h264,$(assets_h264))
+	$(patsubst $(ASSDIR)/%.h264,$(FILESYSTEMDIR)/%.h264,$(assets_h264)) \
+	$(patsubst $(ASSDIR)/%.mp4,$(FILESYSTEMDIR)/%.h264,$(assets_mp4))
 
-# Collision export (single-file workflow):
-# - Put an Object named "COLLISION" inside assets/bossroom.glb
-# - This rule exports only that node into filesystem/bossroom.collision (uncompressed)
-# ASSETSCONV += $(FILESYSTEMDIR)/bossroom/bossroom.collision
-
+# TODO:
 CODEFILES   =  $(shell find $(SRCDIR) -name "*.c" ! -path "$(SRCDIR)/objects/boss.c")
 CODEOBJECTS = $(patsubst $(SRCDIR)/%.c,$(OBJDIR)/%.o,$(CODEFILES))
 
@@ -109,22 +107,15 @@ $(COLLISION_STAMP): $(COLLISION_DEPS)
 	@$(COLLISION_PY) -m pip install -r $(COLLISION_DEPS)
 	@touch $(COLLISION_STAMP)
 
+$(FILESYSTEMDIR)/%.h264: $(ASSDIR)/%.mp4
+	@mkdir -p $(dir $@)
+	@echo "    [VIDEO-H264] $@"
+	$(N64_BINDIR)/videoconv64 -c h264 -w 320 -r 24 -q 60 --no-audio -o $(dir $@) "$<"
+
 $(FILESYSTEMDIR)/%.h264: $(ASSDIR)/%.h264
 	@mkdir -p $(dir $@)
 	@echo "    [H264] $@"
 	cp $< $@
-
-# $(FILESYSTEMDIR)/bossroom/bossroom.collision: $(ASSDIR)/bossroom/bossroom.glb tools/export_collision.py
-# 	@mkdir -p $(dir $@)
-# 	@echo "    [COLLISION] $@"
-# 	@$(MAKE) $(COLLISION_STAMP)
-# 	@$(COLLISION_PY) tools/export_collision.py "$<" "$@" || ( \
-# 		echo "    [COLLISION] WARNING: No COLLISION node found in $< (or exporter failed)."; \
-# 		echo "    [COLLISION] Writing placeholder $@ so the build can continue."; \
-# 		echo "# exported collision mesh" > "$@"; \
-# 		echo "# EMPTY - add an Object named COLLISION to assets/bossroom/bossroom.glb" >> "$@"; \
-# 		true \
-# 	)
 
 $(FILESYSTEMDIR)/%.wav64: $(ASSDIR)/%.wav
 	@mkdir -p $(dir $@)
