@@ -1920,6 +1920,7 @@ void scene_init_cutscene()
             screenTransition = false;
             cutsceneDialogActive = false;
             scene_set_cinematic_camera((T3DVec3){{-22.31f, 1.7f, 0.65f}}, (T3DVec3){{-42.31f, 1.7f, 0.65f}}, (T3DVec3){{-12.31f, 1.7f, 0.65f}});
+            joypad_rumble_pulse_seconds(0.5f);
             break;
         case CUTSCENE_PHASE1_INTRO_END:
             camera_mode(CAMERA_CUSTOM);
@@ -2033,6 +2034,8 @@ void scene_init_cutscene()
             cutsceneDialogActive = true;
             dialog_controller_speak(cutscene_manager_get_phase2_dialog(5), 0, 0.0f, false, false);
 
+            joypad_rumble_pulse_seconds(15.0f);
+
             screenTransition = true;
             startScreenFade = true;
 
@@ -2091,6 +2094,7 @@ static void scene_finish_phase2_cutscene(void)
 {
     lightning_fx_system_ring_enable(false);
     animation_utility_set_screen_shake_mag(0.0f);
+    joypad_rumble_stop();
     dialog_controller_stop_speaking();
     cutsceneDialogActive = false;
 
