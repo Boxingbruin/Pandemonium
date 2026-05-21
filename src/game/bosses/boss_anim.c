@@ -46,7 +46,7 @@ void boss_anim_init(Boss* boss) {
     }
     
     // Initialize animation state
-    boss->currentAnimation = 10;
+    boss->currentAnimation = BOSS_ANIM_KNEEL;
     boss->previousAnimation = -1;
     boss->currentAnimState = BOSS_ANIM_KNEEL;
     boss->currentPriority = BOSS_ANIM_PRIORITY_NORMAL;
