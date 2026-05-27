@@ -963,27 +963,27 @@ void scene_load_environment(){
     );
 
     // ===== LOAD Boss Chains =====
-    // bossChainsModel = t3d_model_load("rom:/boss/boss_chains2.t3dm"); 
-    // bossChainsSkeleton = malloc_uncached(sizeof(T3DSkeleton)); 
-    // *bossChainsSkeleton = t3d_skeleton_create(bossChainsModel); 
-    // const char* bossChainsAnimationNames[] = {"Phase2RevealChains4"}; 
-    // const int bossChainsAnimationCount = 1;
+    bossChainsModel = t3d_model_load("rom:/boss/boss_chains_v2.t3dm");
+    bossChainsSkeleton = malloc_uncached(sizeof(T3DSkeleton));
+    *bossChainsSkeleton = t3d_skeleton_create(bossChainsModel);
+    const char* bossChainsAnimationNames[] = {"Phase2RevealChains4", "ChainsIdle"};
+    const int bossChainsAnimationCount = 2;
 
-    // bossChainsAnimations = malloc_uncached(bossChainsAnimationCount * sizeof(T3DAnim*)); 
-    // for (int i = 0; i < bossChainsAnimationCount; i++) { 
-    //     bossChainsAnimations[i] = malloc_uncached(sizeof(T3DAnim)); 
-    //     *bossChainsAnimations[i] = t3d_anim_create(bossChainsModel, bossChainsAnimationNames[i]); 
-    //     t3d_anim_attach(bossChainsAnimations[i], bossChainsSkeleton); 
-    // }
+    bossChainsAnimations = malloc_uncached(bossChainsAnimationCount * sizeof(T3DAnim*));
+    for (int i = 0; i < bossChainsAnimationCount; i++) {
+        bossChainsAnimations[i] = malloc_uncached(sizeof(T3DAnim));
+        *bossChainsAnimations[i] = t3d_anim_create(bossChainsModel, bossChainsAnimationNames[i]);
+        t3d_anim_attach(bossChainsAnimations[i], bossChainsSkeleton);
+    }
 
-    // t3d_anim_set_looping(bossChainsAnimations[currentBossChainsAnimation], true); 
-    // t3d_anim_set_playing(bossChainsAnimations[currentBossChainsAnimation], true); 
+    t3d_anim_set_looping(bossChainsAnimations[currentBossChainsAnimation], true);
+    t3d_anim_set_playing(bossChainsAnimations[currentBossChainsAnimation], true);
 
-    // rspq_block_begin(); 
-    // t3d_model_draw_skinned(bossChainsModel, bossChainsSkeleton); 
-    // bossChainsDpl = rspq_block_end(); 
-    // bossChainsMatrix = malloc_uncached(sizeof(T3DMat4FP)); 
-    // t3d_mat4fp_from_srt_euler(bossChainsMatrix, (float[3]){MODEL_SCALE * 1.25f, MODEL_SCALE* 1.25f, MODEL_SCALE* 1.25f}, (float[3]){0.0f, 0.0f, 0.0f}, (float[3]){0.0f, 0.0f, 0.0f});
+    rspq_block_begin();
+    t3d_model_draw_skinned(bossChainsModel, bossChainsSkeleton);
+    bossChainsDpl = rspq_block_end();
+    bossChainsMatrix = malloc_uncached(sizeof(T3DMat4FP));
+    t3d_mat4fp_from_srt_euler(bossChainsMatrix, (float[3]){MODEL_SCALE * 1.25f, MODEL_SCALE* 1.25f, MODEL_SCALE* 1.25f}, (float[3]){0.0f, 0.0f, 0.0f}, (float[3]){0.0f, 0.0f, 0.0f});
 
     // ===== LOAD SHACKLED SUN =====
     shackledSunModel = t3d_model_load("rom:/shackled_sun/shackled_sun.t3dm");
@@ -2049,8 +2049,8 @@ void scene_init_cutscene()
             g_boss->currentAnimation = BOSS_ANIM_PHASE2_REVEAL;
             g_boss->currentAnimState = BOSS_ANIM_PHASE2_REVEAL;
 
-            // t3d_anim_set_looping(bossChainsAnimations[currentBossChainsAnimation], false); 
-            // t3d_anim_set_playing(bossChainsAnimations[currentBossChainsAnimation], true); 
+            t3d_anim_set_looping(bossChainsAnimations[currentBossChainsAnimation], false);
+            t3d_anim_set_playing(bossChainsAnimations[currentBossChainsAnimation], true);
             
             cutsceneDialogActive = false;
             scene_set_cinematic_camera((T3DVec3){{-92.38f, 32.0f, 4.65f}}, (T3DVec3){{-149.0f, 28.58f, 3.7f}}, (T3DVec3){{g_boss->pos[0], g_boss->pos[1] + 21.35f, g_boss->pos[2]}});
@@ -2585,8 +2585,8 @@ void scene_cutscene_update()
             }
         }break;
         case CUTSCENE_PHASE2_END: {
-            //t3d_anim_update(bossChainsAnimations[currentBossChainsAnimation], deltaTime);
-            //t3d_skeleton_update(bossChainsSkeleton);
+            t3d_anim_update(bossChainsAnimations[currentBossChainsAnimation], deltaTime);
+            t3d_skeleton_update(bossChainsSkeleton);
 
             float cameraMoveDuration = 10.0f;
             float t = cutsceneCameraTimer / cameraMoveDuration;
@@ -4359,8 +4359,8 @@ void scene_draw_cutscene(){
                     boss_draw(g_boss);
                 }
 
-                //t3d_matrix_set(bossChainsMatrix, true);
-                //rspq_block_run(bossChainsDpl);
+                t3d_matrix_set(bossChainsMatrix, true);
+                rspq_block_run(bossChainsDpl);
 
             t3d_matrix_pop(1);
 
