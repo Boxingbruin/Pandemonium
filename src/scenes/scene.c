@@ -2885,12 +2885,12 @@ void scene_update(void)
 
     // Check if pause menu was just closed - if so, reset character button state
     // NOTE: during victory, the pause menu overlays without switching GAME_STATE to MENU.
-    bool pauseMenuBlocking = scene_is_menu_active() || menu_controller_is_pause_menu_active();
-    if (lastMenuActive && !pauseMenuBlocking) {
+    bool menuOverlayActive = scene_is_menu_active() || menu_controller_is_pause_menu_active();
+    if (lastMenuActive && !menuOverlayActive) {
         // Menu was just closed - reset character button state to prevent false "just pressed"
         character_reset_button_state();
     }
-    lastMenuActive = pauseMenuBlocking;
+    lastMenuActive = menuOverlayActive;
 
     // If player is dead, disable player control but keep boss/UI moving
     // NOTE: Victory should NOT early-return here; we still want full gameplay updates
@@ -2918,9 +2918,19 @@ void scene_update(void)
         return;
     }
     
-    // Don't update game logic when pause menu is active (including victory overlay case)
-    if (pauseMenuBlocking) {
-        return;
+    // The menu opens as an overlay and does NOT pause the game in time: the world
+    // (boss AI, timers, physics) keeps updating while it is open. We only freeze the
+    // player's input so navigating the menu doesn't also drive the character.
+    // menu_controller_update() already consumed this frame's input before scene_update()
+    // ran, so it's safe to clear the input globals here and restore them after the
+    // player has been updated below.
+    joypad_buttons_t savedBtn = btn;
+    joypad_buttons_t savedRel = rel;
+    joypad_inputs_t  savedJoypad = joypad;
+    if (menuOverlayActive) {
+        btn = (joypad_buttons_t){0};
+        rel = (joypad_buttons_t){0};
+        joypad = (joypad_inputs_t){0};
     }
 
     // Debug hotkey: L-trigger skips to boss defeated (dead + fully stopped)
@@ -2962,7 +2972,15 @@ void scene_update(void)
         scene_resolve_character_room_obbs();
         // Update character transform after constraint
         character_update_position();
-        
+
+        // Restore real input now that the player update (which reads it) is done, so
+        // the rest of the world update sees actual controller state.
+        if (menuOverlayActive) {
+            btn = savedBtn;
+            rel = savedRel;
+            joypad = savedJoypad;
+        }
+
         if (bossActivated && g_boss) {
             boss_update(g_boss);
             // Boss death no longer forces GAME_STATE_VICTORY.

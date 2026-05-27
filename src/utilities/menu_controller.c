@@ -16,9 +16,7 @@ static MenuState parentMenu = MENU_MAIN;
 static int selectedOption = 0;
 static int parentSelectedOption = 0;
 static bool menuActive = false;
-static bool musicWasPaused = false;
 static bool menuIsTitleMenu = false;
-static GameState menuReturnState = GAME_STATE_PLAYING;
 
 // Settings hub "return to" target (since parentMenu is reused for submenus).
 static MenuState settingsHubReturnMenu = MENU_MAIN;
@@ -220,8 +218,14 @@ void menu_controller_init(void) {
 void menu_controller_update(void) {
     GameState state = scene_get_game_state();
     // Allow pause menu during victory (eg. after defeating the boss).
-    // Still disable during death screen.
+    // Still disable during death screen. Because the menu is now a non-pausing overlay,
+    // the player can die while it is open (boss keeps attacking) - close it so we don't
+    // leave a frozen, unresponsive overlay drawn over the death screen.
     if (state == GAME_STATE_DEAD) {
+        if (menuActive && !menuIsTitleMenu) {
+            menuActive = false;
+            joypad_rumble_stop();
+        }
         return;
     }
 
@@ -1248,7 +1252,7 @@ void menu_controller_draw(void) {
         y += lineHeight + 6;
         draw_icon_line(iconZ, listX, y, lineHeight, listW, "Target");
         y += lineHeight + 6;
-        draw_icon_line(iconStart, listX, y, lineHeight, listW, "Pause Menu");
+        draw_icon_line(iconStart, listX, y, lineHeight, listW, "Menu");
         y += lineHeight + 6;
         // Use one C-button sprite to represent the cluster
         draw_icon_line(iconCLeft, listX, y, lineHeight, listW, "Move Camera");
@@ -1318,39 +1322,19 @@ void menu_controller_toggle(void) {
         if (menuIsTitleMenu) {
             currentMenu = MENU_TITLE;
         } else {
-            // Remember which game state to return to when closing the pause menu.
-            menuReturnState = state;
-            // IMPORTANT: if we're on the victory screen, do NOT transition out of VICTORY.
-            // Otherwise, scene_set_game_state() will reset the victory title-card timer when
-            // we re-enter VICTORY, causing "Enemy restored" to replay after closing the menu.
-            if (state != GAME_STATE_VICTORY) {
-                scene_set_game_state(GAME_STATE_MENU);
-            }
+            // The in-game menu is a non-pausing overlay: the game keeps running while it
+            // is open, so we intentionally do NOT switch to GAME_STATE_MENU here. Player
+            // input is frozen by scene_update() while the overlay is active.
             currentMenu = MENU_MAIN;
         }
 
         selectedOption = 0;
-        
-        // Pause/Resume music only for in-game pause menu.
-        if (!menuIsTitleMenu) {
-            musicWasPaused = !audio_is_music_playing();
-            if (!musicWasPaused) {
-                audio_pause_music();
-            }
-        }
     } else {
         joypad_rumble_stop();
 
         // Ensure we don't get stuck in calibration overlay when reopening.
         overscanCalibrating = false;
-        if (!menuIsTitleMenu) {
-            scene_set_game_state(menuReturnState);
-
-            // Unmute audio when menu closes (if it was playing)
-            if (!musicWasPaused) {
-                audio_resume_music();
-            }
-        }
+        // Nothing to restore: the overlay never paused the game or the music.
     }
 }
 
@@ -1359,12 +1343,6 @@ void menu_controller_close(void) {
     joypad_rumble_stop();
     overscanCalibrating = false;
 
-    if (!menuIsTitleMenu) {
-        scene_set_game_state(menuReturnState);
-
-        // Unmute audio when menu closes (if it was playing)
-        if (!musicWasPaused) {
-            audio_resume_music();
-        }
-    }
+    // The in-game menu is a non-pausing overlay, so there is no game state or music
+    // to restore when it closes.
 }
