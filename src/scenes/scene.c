@@ -34,11 +34,11 @@
 #include "game/bosses/boss_ai.h"
 #include "game/bosses/boss_anim.h"
 #include "game/bosses/boss_render.h"
+#include "game/bosses/environmental_effects/boss_ground_crush.h"
 #include "dialog_controller.h"
 #include "display_utility.h"
 #include "menu_controller.h"
 #include "save_controller.h"
-//#include "collision_mesh.h"
 #include "collision_system.h"
 #include "letterbox_utility.h"
 #include "utilities/sword_trail.h"
@@ -1169,6 +1169,8 @@ void scene_init(void)
         return;
     }
 
+    boss_ground_crush_init();
+
     // Transform will be updated in boss_update()
     
     // Make character face the boss
@@ -1411,7 +1413,7 @@ void scene_reset(void)
     s_bossRunStartS = 0.0;
 
     dust_reset();
-    ground_crush_reset();
+    boss_ground_crush_reset();
     blood_reset();
 }
 
@@ -2962,6 +2964,8 @@ void scene_update(void)
         scene_resolve_character_room_obbs();
         // Update character transform after constraint
         character_update_position();
+
+        boss_ground_crush_update(deltaTime);
         
         if (bossActivated && g_boss) {
             boss_update(g_boss);
@@ -3681,225 +3685,6 @@ static void blood_draw(T3DViewport *viewport) {
     rdpq_mode_zoverride(false, 0.0f, 0);
     rdpq_mode_zbuf(false, false);
 }
-
-// ---------------------------------------------------------------
-// ---------------------------------------------------------------
-// ---------------------------------------------------------------
-// ---------------------------------------------------------------
-
-// WE BE KILLING THIS
-/* -----------------------------------------------------------------------------
- * Ground crushed decal (world-space quad on the floor)
- * -------------------------------------------------------------------------- */
-
-typedef struct {
-    bool  active;
-    float pos[3];   // world
-    float age;      // sec
-    float life;     // sec
-} GroundCrushDecal;
-
-enum { GROUND_CRUSH_MAX = 8 };
-static GroundCrushDecal s_groundCrush[GROUND_CRUSH_MAX];
-
-static void ground_crush_reset(void) {
-    memset(s_groundCrush, 0, sizeof(s_groundCrush));
-}
-
-static int ground_crush_alloc_slot(void) {
-    for (int i = 0; i < GROUND_CRUSH_MAX; i++) {
-        if (!s_groundCrush[i].active) return i;
-    }
-    // No free slot; evict the oldest.
-    int oldest = 0;
-    float bestAge = s_groundCrush[0].age;
-    for (int i = 1; i < GROUND_CRUSH_MAX; i++) {
-        if (s_groundCrush[i].age > bestAge) {
-            bestAge = s_groundCrush[i].age;
-            oldest = i;
-        }
-    }
-    return oldest;
-}
-
-void scene_spawn_ground_crushed(float x, float z)
-{
-    int idx = ground_crush_alloc_slot();
-    GroundCrushDecal *d = &s_groundCrush[idx];
-
-    d->active = true;
-    d->age = 0.0f;
-    d->life = 3.0f;
-
-    d->pos[0] = x;
-    d->pos[1] = roomY + 0.25f; // slightly above the floor to avoid z-fighting
-    d->pos[2] = z;
-}
-
-static void ground_crush_update(float dt) {
-    if (dt < 0.0f) dt = 0.0f;
-    if (dt > 0.25f) dt = 0.25f;
-
-    for (int i = 0; i < GROUND_CRUSH_MAX; i++) {
-        GroundCrushDecal *d = &s_groundCrush[i];
-        if (!d->active) continue;
-
-        d->age += dt;
-        if (d->age >= d->life) {
-            d->active = false;
-        }
-    }
-}
-
-static void ground_crush_draw(T3DViewport *viewport) {
-    if (!viewport) return;
-    if (!groundCrushedSprite || groundCrushedSurf.width <= 0 || groundCrushedSurf.height <= 0) return;
-
-    // 2D render state. We'll project a world-space quad into screen-space and draw it
-    // with z-buffered textured triangles so it can sit *under* the boss correctly.
-    rdpq_sync_pipe();
-    rdpq_set_mode_standard();
-    rdpq_mode_zbuf(true, false);
-
-    // Use the IA8 alpha channel; avoid alpha-compare clipping on soft edges.
-    rdpq_mode_alphacompare(0);
-    rdpq_mode_combiner(RDPQ_COMBINER_TEX_FLAT);
-    rdpq_mode_blender(RDPQ_BLENDER_MULTIPLY);
-    // Perspective-correct texturing: required so the decal doesn't shear
-    // when the projected quad becomes a strong trapezoid (camera tilt/orbit).
-    rdpq_mode_persp(true);
-
-    // Upload texture once; tile=0 is what TRIFMT_ZBUF_TEX expects by default.
-    rdpq_tex_upload(TILE0, &groundCrushedSurf, NULL);
-
-    // Size tuning: reduced slightly so it doesn't overpower the landing.
-    const float SIZE_MUL = 2.0f;
-    const float HALF_SIZE_BASE = 30.0f; // world units (before SIZE_MUL)
-    const float half = HALF_SIZE_BASE * SIZE_MUL;
-    const int texW = groundCrushedSurf.width;
-    const int texH = groundCrushedSurf.height;
-
-    // Preserve sprite aspect ratio in world space.
-    float halfX = half;
-    float halfZ = half;
-    if (texW > 0 && texH > 0) {
-        if (texW >= texH) {
-            halfZ = half * ((float)texH / (float)texW);
-        } else {
-            halfX = half * ((float)texW / (float)texH);
-        }
-    }
-
-    for (int i = 0; i < GROUND_CRUSH_MAX; i++) {
-        const GroundCrushDecal *d = &s_groundCrush[i];
-        if (!d->active) continue;
-
-        // Fade out over the last ~0.5s.
-        float t = (d->life > 0.0f) ? (d->age / d->life) : 1.0f;
-        if (t < 0.0f) t = 0.0f;
-        if (t > 1.0f) t = 1.0f;
-
-        float a01 = 1.0f;
-        const float fadeStart = 1.0f - (0.5f / 3.0f);
-        if (t >= fadeStart) {
-            float u = (t - fadeStart) / (1.0f - fadeStart);
-            if (u < 0.0f) u = 0.0f;
-            if (u > 1.0f) u = 1.0f;
-            a01 = 1.0f - u;
-        }
-
-        uint8_t a = (uint8_t)(a01 * 220.0f);
-        if (a == 0) continue;
-
-        // Slightly warm grey so it reads on the floor.
-        rdpq_set_prim_color(RGBA32(235, 232, 226, a));
-
-        // Build a world-space quad on the floor (facing +Y).
-        const float cx = d->pos[0];
-        const float cy = d->pos[1];
-        const float cz = d->pos[2];
-
-        T3DVec3 w0 = {{ cx - halfX, cy, cz - halfZ }};
-        T3DVec3 w1 = {{ cx + halfX, cy, cz - halfZ }};
-        T3DVec3 w2 = {{ cx - halfX, cy, cz + halfZ }};
-        T3DVec3 w3 = {{ cx + halfX, cy, cz + halfZ }};
-
-        // Project to clip space ourselves so we keep W per vertex; without
-        // real 1/W, RDP texture interpolation is affine and the decal shears
-        // as the camera tilts/orbits.
-        T3DVec4 c0, c1, c2, c3;
-        t3d_mat4_mul_vec3(&c0, &viewport->matCamProj, &w0);
-        t3d_mat4_mul_vec3(&c1, &viewport->matCamProj, &w1);
-        t3d_mat4_mul_vec3(&c2, &viewport->matCamProj, &w2);
-        t3d_mat4_mul_vec3(&c3, &viewport->matCamProj, &w3);
-
-        // Reject if any corner is at/behind the near plane.
-        if (c0.v[3] <= 0.001f || c1.v[3] <= 0.001f ||
-            c2.v[3] <= 0.001f || c3.v[3] <= 0.001f) continue;
-
-        const float halfW = viewport->size[0] * 0.5f;
-        const float halfH = viewport->size[1] * 0.5f;
-        const float ox = (float)viewport->offset[0] + halfW;
-        const float oy = (float)viewport->offset[1] + halfH;
-
-        float invW0 = 1.0f / c0.v[3];
-        float invW1 = 1.0f / c1.v[3];
-        float invW2 = 1.0f / c2.v[3];
-        float invW3 = 1.0f / c3.v[3];
-
-        float sx0 = c0.v[0] * invW0 * halfW + ox;
-        float sy0 = -c0.v[1] * invW0 * halfH + oy;
-        float sx1 = c1.v[0] * invW1 * halfW + ox;
-        float sy1 = -c1.v[1] * invW1 * halfH + oy;
-        float sx2 = c2.v[0] * invW2 * halfW + ox;
-        float sy2 = -c2.v[1] * invW2 * halfH + oy;
-        float sx3 = c3.v[0] * invW3 * halfW + ox;
-        float sy3 = -c3.v[1] * invW3 * halfH + oy;
-
-        float z0 = c0.v[2] * invW0;
-        float z1 = c1.v[2] * invW1;
-        float z2 = c2.v[2] * invW2;
-        float z3 = c3.v[2] * invW3;
-        if (z0 >= 1.0f || z1 >= 1.0f || z2 >= 1.0f || z3 >= 1.0f) continue;
-        if (z0 < 0.0f) z0 = 0.0f;
-        if (z0 > 0.9999f) z0 = 0.9999f;
-        if (z1 < 0.0f) z1 = 0.0f;
-        if (z1 > 0.9999f) z1 = 0.9999f;
-        if (z2 < 0.0f) z2 = 0.0f;
-        if (z2 > 0.9999f) z2 = 0.9999f;
-        if (z3 < 0.0f) z3 = 0.0f;
-        if (z3 > 0.9999f) z3 = 0.9999f;
-
-        // Lock the whole decal to the farthest corner's depth via zoverride
-        // (same pattern dust_draw uses). With rdpq_mode_persp(true), per-vertex
-        // Z from rdpq_triangle doesn't line up with what t3d's ucode writes
-        // for 3D meshes, so the decal was winning the depth test against the
-        // boss. One conservative Z per decal makes occlusion match floor depth.
-        float zMax = z0;
-        if (z1 > zMax) zMax = z1;
-        if (z2 > zMax) zMax = z2;
-        if (z3 > zMax) zMax = z3;
-        rdpq_mode_zoverride(true, zMax, 0);
-
-        // Textured triangles. Real per-vertex INV_W enables perspective-correct
-        // S/T interpolation; zoverride above supplies the depth comparison value.
-        // Vertex format: { X, Y, Z, S, T, INV_W }
-        float v0[6] = { sx0, sy0, z0, 0.0f,        0.0f,        invW0 };
-        float v1[6] = { sx1, sy1, z1, (float)texW, 0.0f,        invW1 };
-        float v2[6] = { sx2, sy2, z2, 0.0f,        (float)texH, invW2 };
-        float v3[6] = { sx3, sy3, z3, (float)texW, (float)texH, invW3 };
-
-        rdpq_triangle(&TRIFMT_ZBUF_TEX, v0, v1, v2);
-        rdpq_triangle(&TRIFMT_ZBUF_TEX, v1, v3, v2);
-    }
-
-    rdpq_mode_zoverride(false, 0.0f, 0);
-    rdpq_mode_zbuf(false, false);
-}
-// ---------------------------------------------------------------
-// ---------------------------------------------------------------
-// ---------------------------------------------------------------
-// ---------------------------------------------------------------
 
 void scene_draw_title(T3DViewport *viewport)
 {
@@ -4838,7 +4623,9 @@ void scene_draw(T3DViewport *viewport)
     rdpq_sync_pipe();
     rdpq_mode_zbuf(false, false);
 
-    t3d_matrix_push_pos(1);   
+    t3d_matrix_push_pos(1);
+        // projection effects
+        boss_ground_crush_draw();
         // blob shadows
         character_draw_shadow();
         if (g_boss) {
@@ -4939,8 +4726,6 @@ void scene_draw(T3DViewport *viewport)
     sword_trail_draw_all(viewport);
 
     // Dust puffs (boss landings/impacts)
-    ground_crush_update(deltaTime);
-    ground_crush_draw(viewport);
     dust_update(deltaTime);
     dust_draw(viewport);
 
@@ -5221,6 +5006,7 @@ void scene_cleanup(void) // Realistically we never want to call this for the jam
 {
     //collision_mesh_cleanup();
     scene_delete_environment();
+    boss_ground_crush_cleanup();
     camera_reset();
     
     character_delete();

@@ -5,8 +5,7 @@
 
 #include <libdragon.h>
 #include <t3d/t3d.h>
-#include <rdpq.h>
-#include <rspq.h>
+#include <t3d/t3dmodel.h>
 
 typedef struct {
     bool active;
@@ -30,7 +29,7 @@ void boss_ground_crush_init(void)
 
     groundCrush.mat = malloc_uncached(sizeof(T3DMat4FP));
 
-    groundCrushModel = t3d_model_load("rom:/ground_crush/ground_crush.t3dm");
+    groundCrushModel = t3d_model_load("rom:/boss/ground_crush.t3dm");
 
     rspq_block_begin();
         t3d_model_draw(groundCrushModel);
