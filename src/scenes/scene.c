@@ -244,117 +244,6 @@ static const float VIDEO_BLACK_HOLD_S = 0.5f;
 static const float VIDEO_FADE_SPEED   = 200.0f; // same scale you already use
 static bool bossDeathMusicFadeStarted = false;
 
-// ------------------------------------------------------------
-// Walls OBB (world space)
-// ------------------------------------------------------------
-
-#define WALL_THICKNESS 20.0f
-#define WALL_HEIGHT   200.0f
-
-static SCU_OBB g_roomOBBs[] = {
-
-    // -------------------------------------------------
-    // right wall
-    // (345, 595) -> (-430, 595)
-    // -------------------------------------------------
-    {
-        .center = { (-430.0f + 345.0f) * 0.5f, 0.0f, 595.0f },                 // x=-42.5, z=595
-        .half   = { (345.0f - (-430.0f)) * 0.5f, WALL_HEIGHT * 0.5f, WALL_THICKNESS * 0.5f }, // hx=387.5
-        .yaw    = 3.1415926f
-    },
-
-    // -------------------------------------------------
-    // front wall
-    // (-430, 595) -> (-430, -595)
-    // -------------------------------------------------
-    {
-        .center = { -430.0f, 0.0f, (595.0f + -595.0f) * 0.5f },                // x=-430, z=0
-        .half   = { (595.0f - (-595.0f)) * 0.5f, WALL_HEIGHT * 0.5f, WALL_THICKNESS * 0.5f }, // hx=595
-        .yaw    = -1.5707963f
-    },
-
-    // -------------------------------------------------
-    // left wall
-    // (-458, -595) -> (345, -595)
-    // -------------------------------------------------
-    {
-        .center = { (-458.0f + 345.0f) * 0.5f, 0.0f, -595.0f },                // x=-56.5, z=-595
-        .half   = { (345.0f - (-458.0f)) * 0.5f, WALL_HEIGHT * 0.5f, WALL_THICKNESS * 0.5f }, // hx=401.5
-        .yaw    = 0.0f
-    },
-
-    // -------------------------------------------------
-    // left wall bend in
-    // (345, -595) -> (420, -420)
-    // -------------------------------------------------
-    {
-        .center = { (345.0f + 420.0f) * 0.5f, 0.0f, (-595.0f + -420.0f) * 0.5f }, // x=382.5, z=-507.5
-        .half   = { 95.52f, WALL_HEIGHT * 0.5f, WALL_THICKNESS * 0.5f },          // half length ≈ sqrt(75^2+175^2)/2
-        .yaw    = 1.1659045f
-    },
-
-    // -------------------------------------------------
-    // right wall bend in
-    // (345, 595) -> (420, 420)
-    // -------------------------------------------------
-    {
-        .center = { (345.0f + 420.0f) * 0.5f, 0.0f, (595.0f + 420.0f) * 0.5f },  // x=382.5, z=507.5
-        .half   = { 95.52f, WALL_HEIGHT * 0.5f, WALL_THICKNESS * 0.5f },
-        .yaw    = -1.1659045f
-    },
-
-    // -------------------------------------------------
-    // left wall continued
-    // (420, -415) -> (600, -415)
-    // -------------------------------------------------
-    {
-        .center = { (420.0f + 600.0f) * 0.5f, 0.0f, -415.0f },                 // x=510, z=-415
-        .half   = { (600.0f - 420.0f) * 0.5f, WALL_HEIGHT * 0.5f, WALL_THICKNESS * 0.5f }, // hx=90
-        .yaw    = 0.0f
-    },
-
-    // -------------------------------------------------
-    // right wall continued
-    // (420, 415) -> (600, 415)
-    // -------------------------------------------------
-    {
-        .center = { (420.0f + 600.0f) * 0.5f, 0.0f, 415.0f },                  // x=510, z=415
-        .half   = { (600.0f - 420.0f) * 0.5f, WALL_HEIGHT * 0.5f, WALL_THICKNESS * 0.5f }, // hx=90
-        .yaw    = 0.0f
-    },
-
-    // -------------------------------------------------
-    // back wall
-    // (600, 420) -> (600, -420)
-    // -------------------------------------------------
-    {
-        .center = { 600.0f, 0.0f, (420.0f + -420.0f) * 0.5f },                 // x=600, z=0
-        .half   = { (420.0f - (-420.0f)) * 0.5f, WALL_HEIGHT * 0.5f, WALL_THICKNESS * 0.5f }, // hx=420
-        .yaw    = -1.5707963f
-    },
-    // -------------------------------------------------
-    // pillar 1 (depth X=100, width Z=80), keep front face, extend only +X
-    // center (x=553, z=-238)
-    // -------------------------------------------------
-    {
-        .center = { 553.0f, 0.0f, -238.0f },
-        .half   = { 50.0f, WALL_HEIGHT * 0.5f, 40.0f },
-        .yaw    = 0.0f
-    },
-
-    // -------------------------------------------------
-    // pillar 2 (depth X=100, width Z=80), keep front face, extend only +X
-    // center (x=553, z=238)
-    // -------------------------------------------------
-    {
-        .center = { 553.0f, 0.0f, 238.0f },
-        .half   = { 50.0f, WALL_HEIGHT * 0.5f, 40.0f },
-        .yaw    = 0.0f
-    },
-};
-
-static const int g_roomOBBCount = sizeof(g_roomOBBs) / sizeof(g_roomOBBs[0]);
-
 #define TITLE_DIALOG_COUNT (sizeof(titleDialogs) / sizeof(titleDialogs[0]))
 
 static const char *titleDialogs[] = {
@@ -568,62 +457,6 @@ static const char *SCENE1_SFX_PATHS[SCENE1_SFX_COUNT] = {
     [SCENE1_SFX_CHAR_UMPH] = "rom:/audio/sfx/character/umph_22k.wav64",
 };
 
-static void scene_get_character_world_capsule(float capA[3], float capB[3], float *radius)
-{
-    capA[0] = character.pos[0] + character.capsuleCollider.localCapA.v[0] * character.scale[0];
-    capA[1] = character.pos[1] + character.capsuleCollider.localCapA.v[1] * character.scale[1];
-    capA[2] = character.pos[2] + character.capsuleCollider.localCapA.v[2] * character.scale[2];
-
-    capB[0] = character.pos[0] + character.capsuleCollider.localCapB.v[0] * character.scale[0];
-    capB[1] = character.pos[1] + character.capsuleCollider.localCapB.v[1] * character.scale[1];
-    capB[2] = character.pos[2] + character.capsuleCollider.localCapB.v[2] * character.scale[2];
-
-    *radius = character.capsuleCollider.radius * character.scale[0];
-}
-
-void scene_resolve_character_room_obbs(void)
-{
-    // more iterations => less corner tunneling / less “elastic”
-    for (int iter = 0; iter < 8; iter++) {
-        float capA[3], capB[3], r;
-        scene_get_character_world_capsule(capA, capB, &r);
-
-        float vx, vz;
-        character_get_velocity(&vx, &vz);
-
-        bool any = false;
-
-        for (int i = 0; i < g_roomOBBCount; i++) {
-            float push[3];
-            float n[3];
-
-            if (scu_capsule_vs_obb_push_xz_f(capA, capB, r, &g_roomOBBs[i], push, n)) {
-
-                // push out (world)
-                character.pos[0] += push[0];
-                character.pos[2] += push[2];
-
-                // IMPORTANT: keep capsule in sync for subsequent OBB checks THIS iter
-                capA[0] += push[0]; capA[2] += push[2];
-                capB[0] += push[0]; capB[2] += push[2];
-
-                // slide: remove inward velocity component (vn < 0 means into the surface)
-                float vn = vx * n[0] + vz * n[2];
-                if (vn < 0.0f) {
-                    vx -= vn * n[0];
-                    vz -= vn * n[2];
-                }
-
-                any = true;
-            }
-        }
-
-        character_set_velocity_xz(vx, vz);
-
-        if (!any) break;
-    }
-}
-
 static void scene_begin_video_preroll(void)
 {
     if (videoTrigFired) return;
@@ -643,7 +476,7 @@ static void scene_update_video_trigger(void)
     if (videoTrigFired) return;
 
     float capA[3], capB[3], r;
-    scene_get_character_world_capsule(capA, capB, &r);
+    collision_get_character_capsule_world(capA, capB, &r);
 
     if (scu_capsule_vs_rect_f(capA, capB, r, videoTrigMin, videoTrigMax)) {
         scene_begin_video_preroll();
@@ -676,37 +509,6 @@ static void scene_update_video_preroll(void)
 
         videoPreroll = VIDEO_PREROLL_NONE;
     }
-}
-
-static void debug_draw_obb_xz(
-    T3DViewport *vp,
-    const SCU_OBB *o,
-    float y,
-    uint16_t color)
-{
-    float c = cosf(o->yaw);
-    float s = sinf(o->yaw);
-
-    float hx = o->half[0];
-    float hz = o->half[2];
-
-    // 4 corners in local space (XZ)
-    float lx[4] = { -hx,  hx,  hx, -hx };
-    float lz[4] = { -hz, -hz,  hz,  hz };
-
-    T3DVec3 p[4];
-
-    for (int i = 0; i < 4; i++) {
-        // local -> world (rotate + translate)
-        float wx = o->center[0] + (c * lx[i] - s * lz[i]);
-        float wz = o->center[2] + (s * lx[i] + c * lz[i]);
-
-        p[i] = (T3DVec3){{ wx, y, wz }};
-    }
-
-    // Draw rectangle as two wire triangles
-    debug_draw_tri_wire(vp, &p[0], &p[1], &p[2], color);
-    debug_draw_tri_wire(vp, &p[0], &p[2], &p[3], color);
 }
 
 void scene_load_environment(){
@@ -2581,8 +2383,6 @@ void scene_cutscene_update()
             // Post-boss dialog runs while gameplay continues to animate (no "paused time" feel).
             // Player input stays disabled by `character_update()` while a cutscene is active.
             character_update();
-            // Keep constraints/collision up to date so the world stays consistent during dialog.
-            scene_resolve_character_room_obbs();
             character_update_position();
 
             if (bossActivated && g_boss) {
@@ -2917,8 +2717,6 @@ void scene_update(void)
         }
 
         character_update();
-        // Constrain player inside obbs
-        scene_resolve_character_room_obbs();
         // Update character transform after constraint
         character_update_position();
 
@@ -4696,21 +4494,6 @@ void scene_draw(T3DViewport *viewport)
     // Overlay lock-on marker above the boss
     if(DEV_MODE)
         draw_lockon_indicator(viewport);
-
-    // Debug draw room colliders in gameplay
-    // NOTE: The 3D debug draw path renders into `offscreenBuffer` (RGBA16). If DEV_MODE is off,
-    // that buffer isn't allocated/used, so avoid calling these routines to prevent invalid writes.
-    if (DEV_MODE && cutsceneState == CUTSCENE_NONE && debugDraw) {
-        float capA[3], capB[3], r;
-        scene_get_character_world_capsule(capA, capB, &r);
-
-        for (int i = 0; i < g_roomOBBCount; i++) {
-            float push[3], n[3];
-            bool hit = scu_capsule_vs_obb_push_xz_f(capA, capB, r, &g_roomOBBs[i], push, n);
-
-            debug_draw_obb_xz(viewport, &g_roomOBBs[i], 0.0f, hit ? DEBUG_COLORS[0] : DEBUG_COLORS[2]);
-        }
-    }
 
     scene_draw_video_trigger(viewport);
     
