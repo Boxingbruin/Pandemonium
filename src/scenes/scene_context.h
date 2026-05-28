@@ -1,5 +1,3 @@
-// scene_context.h
-
 // TODO: This is temporary until we port over the model manager + scene controller, we also need memory management.
 // Cutscenes need to be their own scenes.
 // We dont currently have memory management because up until this point we rushed it all into one scene file.
@@ -9,29 +7,33 @@
 #ifndef SCENE_CONTEXT_H
 #define SCENE_CONTEXT_H
 
+#include <stdbool.h>
+
 #include <libdragon.h>
 #include <t3d/t3d.h>
 #include <t3d/t3dmodel.h>
 
 #include "scene.h"
 #include "../game/bosses/boss.h"
+#include "../utilities/general_utility.h"
 
 typedef struct SceneContext {
     Boss *boss;
 
-    GameState *gameState;
-    bool *bossActivated;
-
     float roomY;
 
-    // Core room assets borrowed from scene.
-    T3DModel *mapModel;
-    rspq_block_t *mapDpl;
-    T3DMat4FP *mapMatrix;
+    GameState *gameState;
+    bool *screenTransition;
+
+    // Main room assets.
 
     T3DModel *windowsModel;
     rspq_block_t *windowsDpl;
     T3DMat4FP *windowsMatrix;
+
+    T3DModel *mapModel;
+    rspq_block_t *mapDpl;
+    T3DMat4FP *mapMatrix;
 
     T3DModel *roomFloorModel;
     rspq_block_t *roomFloorDpl;
@@ -49,20 +51,25 @@ typedef struct SceneContext {
     rspq_block_t *pillarsFrontDpl;
     T3DMat4FP *pillarsFrontMatrix;
 
+    T3DModel *sunshaftsModel;
+    rspq_block_t *sunshaftsDpl;
+    T3DMat4FP *sunshaftsMatrix;
+
     T3DModel *chainsModel;
     rspq_block_t *chainsDpl;
     T3DMat4FP *chainsMatrix;
 
-    // Shared UI/runtime flags owned by scene.
-    bool *screenTransition;
-    bool *cutsceneDialogActive;
-    bool *skipButtonVisible;
+    // TODO: should be moved into the boss.c
+    T3DModel *bossChainsGlowModel;
+    rspq_block_t *bossChainsGlowDpl;
+    T3DMat4FP *bossChainsGlowMatrix;
+    ScrollParams *bossChainsGlowScrollParams;
 
-    float *bossUiIntro;
-    float *playerUiIntro;
+    // Callbacks into scene.c.
 
-    bool *cameraLockOnActive;
-    bool *pendingBossLoopMusic;
+    void (*set_cinematic_camera)(T3DVec3 start, T3DVec3 end, T3DVec3 target);
+    void (*init_playing)(bool skippedCutscene);
+    void (*finish_phase2_cutscene)(void);
 } SceneContext;
 
 #endif

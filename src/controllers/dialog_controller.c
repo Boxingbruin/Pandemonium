@@ -1,9 +1,9 @@
 #include <libdragon.h>
 #include <ctype.h>
-#include "dialog_controller.h"
-#include "game_time.h"
-#include "globals.h"
-#include "general_utility.h"
+#include "../utilities/dialog_controller.h"
+#include "../utilities/game_time.h"
+#include "../utilities/globals.h"
+#include "../utilities/general_utility.h"
 
 #define MAX_TEXT_LENGTH 256
 #define SLOW_SPEED 0.2f

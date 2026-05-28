@@ -26,16 +26,19 @@
 #include "globals.h"
 #include "video_layout.h"
 
-#include "cutscene_manager.h"
-#include "cutscene_manager_internal.h"
+#include "../managers/cutscene_manager.h"
+#include "../managers/cutscene_manager_internal.h"
+#include "cutscene_guardian_phase1.h"
+#include "cutscene_guardian_phase2.h"
+#include "scene_context.h"
 
 #include "character.h"
-#include "game/bosses/boss.h"
-#include "game/bosses/boss_ai.h"
-#include "game/bosses/boss_anim.h"
-#include "game/bosses/boss_render.h"
-#include "game/bosses/environmental_effects/boss_ground_crush.h"
-#include "dialog_controller.h"
+#include "../game/bosses/boss.h"
+#include "../game/bosses/boss_ai.h"
+#include "../game/bosses/boss_anim.h"
+#include "../game/bosses/boss_render.h"
+#include "../game/bosses/environmental_effects/boss_ground_crush.h"
+#include "../controllers/dialog_controller.h"
 #include "display_utility.h"
 #include "menu_controller.h"
 #include "save_controller.h"
@@ -50,7 +53,6 @@
 #include "utilities/simple_collision_utility.h"
 
 #include "video_player_utility.h"
-#include "logo.h"
 
 #include "multi_sword_attacks.h" // TODO: call only from boss
 #include "fx/lightning_fx.h" 
@@ -117,60 +119,6 @@ ScrollParams floorGlowScrollParams = {
 };
 
 //======== PHASE 2 ========
-T3DModel* bnwBossModel;
-rspq_block_t* bnwBossDpl;
-T3DMat4FP* bnwBossMatrix;
-
-static T3DModel* bnwChainsModel; 
-static rspq_block_t* bnwChainsDpl; 
-static T3DMat4FP* bnwChainsMatrix; 
-static T3DSkeleton* bnwChainsSkeleton; 
-static T3DAnim** bnwChainsAnimations = NULL;
-static int currentBnwChainsAnimation = 0;
-static bool bnwChainsVisible = true;
-
-T3DModel* floorGlowBnwModel;
-rspq_block_t* floorGlowBnwDpl;
-T3DMat4FP* floorGlowBnwMatrix;
-ScrollParams floorGlowBnwScrollParams = {
-    .xSpeed = -300.0f,
-    .ySpeed = 0.0f,
-    .scale  = 64
-};
-
-T3DModel* floorSpinBnwModel;
-rspq_block_t* floorSpinBnwDpl;
-T3DMat4FP* floorSpinBnwMatrix;
-
-static float floorSpinBnwYaw = 0.0f;
-
-T3DModel* shackledSunModel;
-rspq_block_t* shackledSunDpl;
-T3DMat4FP* shackledSunMatrix;
-
-T3DModel* shackledSunGlowModel;
-rspq_block_t* shackledSunGlowDpl;
-T3DMat4FP* shackledSunGlowMatrix;
-ScrollParams shackledSunGlowScrollParams = {
-    .xSpeed = 30.0f,
-    .ySpeed = 0.0f,
-    .scale  = 64
-};
-
-T3DModel* shacklesModel;
-rspq_block_t* shacklesDpl;
-T3DMat4FP* shacklesMatrix;
-T3DMat4FP* shackles2Matrix;
-ScrollParams shacklesScrollParams = {
-    .xSpeed = 50.0f,
-    .ySpeed = 0.0f,
-    .scale  = 64
-};
-ScrollParams shackles2ScrollParams = {
-    .xSpeed = -50.0f,
-    .ySpeed = 0.0f,
-    .scale  = 64
-};
 
 static T3DModel* bossChainsModel; 
 static rspq_block_t* bossChainsDpl; 
@@ -179,7 +127,6 @@ static T3DSkeleton* bossChainsSkeleton;
 static T3DAnim** bossChainsAnimations = NULL;
 static int currentBossChainsAnimation = 0;
 static bool bossChainsVisible = true;
-
 
 T3DModel* bossChainsGlowModel;
 rspq_block_t* bossChainsGlowDpl;
@@ -198,17 +145,6 @@ static rspq_block_t* dynamicBannerDpl;
 static T3DMat4FP* dynamicBannerMatrix; 
 static T3DSkeleton* dynamicBannerSkeleton; 
 static T3DAnim** dynamicBannerAnimations = NULL;
-
-// Cinematic Chains
-static T3DModel* cinematicChainsModel; 
-static rspq_block_t* cinematicChainsDpl; 
-static T3DMat4FP* cinematicChainsMatrix; 
-static T3DSkeleton* cinematicChainsSkeleton; 
-static T3DAnim** cinematicChainsAnimations = NULL;
-static int currentCinematicChainsAnimation = 0;
-static bool cinematicChainsVisible = true;
-// (PHASE1_BREAK_CHAINS model lives in cutscene_manager.c — accessed via the
-// internal header above; rendered by cutscene_manager_chain_break_draw().)
 
 static int currentTitleDialog = 0;
 static float titleTextActivationTimer = 0.0f;
@@ -511,30 +447,31 @@ static void scene_update_video_preroll(void)
     }
 }
 
-void scene_load_environment(){
-
+void scene_load_environment(void)
+{
     // ===== LOAD MAP =====
     mapModel = t3d_model_load("rom:/boss_room/room.t3dm");
     rspq_block_begin();
-    t3d_model_draw(mapModel);
+        t3d_model_draw(mapModel);
     mapDpl = rspq_block_end();
-    
-    // Create map matrix
+
     mapMatrix = malloc_uncached(sizeof(T3DMat4FP));
-    t3d_mat4fp_from_srt_euler(mapMatrix, 
-        (float[3]){MODEL_SCALE, MODEL_SCALE, MODEL_SCALE},    // scale to match character
-        (float[3]){0.0f, 0.0f, 0.0f},    // rotation
-        (float[3]){0.0f, roomY, 0.0f}    // ground level position
+    t3d_mat4fp_from_srt_euler(
+        mapMatrix,
+        (float[3]){MODEL_SCALE, MODEL_SCALE, MODEL_SCALE},
+        (float[3]){0.0f, 0.0f, 0.0f},
+        (float[3]){0.0f, roomY, 0.0f}
     );
 
     // ===== LOAD PILLARS =====
     pillarsModel = t3d_model_load("rom:/boss_room/pillars.t3dm");
     rspq_block_begin();
-    t3d_model_draw(pillarsModel);
+        t3d_model_draw(pillarsModel);
     pillarsDpl = rspq_block_end();
-    
+
     pillarsMatrix = malloc_uncached(sizeof(T3DMat4FP));
-    t3d_mat4fp_from_srt_euler(pillarsMatrix, 
+    t3d_mat4fp_from_srt_euler(
+        pillarsMatrix,
         (float[3]){MODEL_SCALE, MODEL_SCALE, MODEL_SCALE},
         (float[3]){0.0f, 0.0f, 0.0f},
         (float[3]){0.0f, roomY, 0.0f}
@@ -542,11 +479,12 @@ void scene_load_environment(){
 
     pillarsFrontModel = t3d_model_load("rom:/boss_room/pillars_front.t3dm");
     rspq_block_begin();
-    t3d_model_draw(pillarsFrontModel);
+        t3d_model_draw(pillarsFrontModel);
     pillarsFrontDpl = rspq_block_end();
-    
+
     pillarsFrontMatrix = malloc_uncached(sizeof(T3DMat4FP));
-    t3d_mat4fp_from_srt_euler(pillarsFrontMatrix, 
+    t3d_mat4fp_from_srt_euler(
+        pillarsFrontMatrix,
         (float[3]){MODEL_SCALE, MODEL_SCALE, MODEL_SCALE},
         (float[3]){0.0f, 0.0f, 0.0f},
         (float[3]){0.0f, roomY, 0.0f}
@@ -555,11 +493,12 @@ void scene_load_environment(){
     // ===== LOAD LEDGE =====
     roomLedgeModel = t3d_model_load("rom:/boss_room/room_ledge_walls.t3dm");
     rspq_block_begin();
-    t3d_model_draw(roomLedgeModel);
+        t3d_model_draw(roomLedgeModel);
     roomLedgeDpl = rspq_block_end();
-    
+
     roomLedgeMatrix = malloc_uncached(sizeof(T3DMat4FP));
-    t3d_mat4fp_from_srt_euler(roomLedgeMatrix, 
+    t3d_mat4fp_from_srt_euler(
+        roomLedgeMatrix,
         (float[3]){MODEL_SCALE, MODEL_SCALE, MODEL_SCALE},
         (float[3]){0.0f, 0.0f, 0.0f},
         (float[3]){0.0f, roomY, 0.0f}
@@ -568,24 +507,26 @@ void scene_load_environment(){
     // ===== LOAD WINDOWS =====
     windowsModel = t3d_model_load("rom:/boss_room/windows.t3dm");
     rspq_block_begin();
-    t3d_model_draw(windowsModel);
+        t3d_model_draw(windowsModel);
     windowsDpl = rspq_block_end();
-    
+
     windowsMatrix = malloc_uncached(sizeof(T3DMat4FP));
-    t3d_mat4fp_from_srt_euler(windowsMatrix, 
+    t3d_mat4fp_from_srt_euler(
+        windowsMatrix,
         (float[3]){MODEL_SCALE, MODEL_SCALE, MODEL_SCALE},
         (float[3]){0.0f, 0.0f, 0.0f},
         (float[3]){0.0f, roomY, 0.0f}
     );
 
-    // ===== LOAD CHAINS =====
+    // ===== LOAD PERSISTENT CEILING CHAINS =====
     chainsModel = t3d_model_load("rom:/boss_room/ceiling_chains.t3dm");
     rspq_block_begin();
-    t3d_model_draw(chainsModel);
+        t3d_model_draw(chainsModel);
     chainsDpl = rspq_block_end();
-    
+
     chainsMatrix = malloc_uncached(sizeof(T3DMat4FP));
-    t3d_mat4fp_from_srt_euler(chainsMatrix, 
+    t3d_mat4fp_from_srt_euler(
+        chainsMatrix,
         (float[3]){MODEL_SCALE, MODEL_SCALE, MODEL_SCALE},
         (float[3]){0.0f, 0.0f, 0.0f},
         (float[3]){0.0f, roomY, 0.0f}
@@ -594,11 +535,12 @@ void scene_load_environment(){
     // ===== LOAD SUN SHAFTS =====
     sunshaftsModel = t3d_model_load("rom:/boss_room/sunshafts.t3dm");
     rspq_block_begin();
-    t3d_model_draw(sunshaftsModel);
+        t3d_model_draw(sunshaftsModel);
     sunshaftsDpl = rspq_block_end();
-    
+
     sunshaftsMatrix = malloc_uncached(sizeof(T3DMat4FP));
-    t3d_mat4fp_from_srt_euler(sunshaftsMatrix, 
+    t3d_mat4fp_from_srt_euler(
+        sunshaftsMatrix,
         (float[3]){MODEL_SCALE, MODEL_SCALE, MODEL_SCALE},
         (float[3]){0.0f, 0.0f, 0.0f},
         (float[3]){0.0f, roomY, 0.0f}
@@ -607,11 +549,12 @@ void scene_load_environment(){
     // ===== LOAD FOG DOOR =====
     fogDoorModel = t3d_model_load("rom:/boss_room/fog.t3dm");
     rspq_block_begin();
-    t3d_model_draw(fogDoorModel);
+        t3d_model_draw(fogDoorModel);
     fogDoorDpl = rspq_block_end();
 
     fogDoorMatrix = malloc_uncached(sizeof(T3DMat4FP));
-    t3d_mat4fp_from_srt_euler(fogDoorMatrix, 
+    t3d_mat4fp_from_srt_euler(
+        fogDoorMatrix,
         (float[3]){MODEL_SCALE, MODEL_SCALE, MODEL_SCALE},
         (float[3]){0.0f, 0.0f, 0.0f},
         (float[3]){0.0f, roomY, 0.0f}
@@ -620,11 +563,12 @@ void scene_load_environment(){
     // ===== LOAD FLOOR GLOW =====
     floorGlowModel = t3d_model_load("rom:/boss_room/floor_glow.t3dm");
     rspq_block_begin();
-    t3d_model_draw(floorGlowModel);
+        t3d_model_draw(floorGlowModel);
     floorGlowDpl = rspq_block_end();
 
     floorGlowMatrix = malloc_uncached(sizeof(T3DMat4FP));
-    t3d_mat4fp_from_srt_euler(floorGlowMatrix, 
+    t3d_mat4fp_from_srt_euler(
+        floorGlowMatrix,
         (float[3]){MODEL_SCALE, MODEL_SCALE, MODEL_SCALE},
         (float[3]){0.0f, 0.0f, 0.0f},
         (float[3]){0.0f, roomY, 0.0f}
@@ -633,193 +577,37 @@ void scene_load_environment(){
     // ===== LOAD FLOOR =====
     roomFloorModel = t3d_model_load("rom:/boss_room/floor.t3dm");
     rspq_block_begin();
-    t3d_model_draw(roomFloorModel);
+        t3d_model_draw(roomFloorModel);
     roomFloorDpl = rspq_block_end();
 
     roomFloorMatrix = malloc_uncached(sizeof(T3DMat4FP));
-    t3d_mat4fp_from_srt_euler(roomFloorMatrix, 
+    t3d_mat4fp_from_srt_euler(
+        roomFloorMatrix,
         (float[3]){MODEL_SCALE, MODEL_SCALE, MODEL_SCALE},
         (float[3]){0.0f, 0.0f, 0.0f},
         (float[3]){0.0f, roomY, 0.0f}
-    );
-   
-    // ===== LOAD Cinematic Chains =====
-    cinematicChainsModel = t3d_model_load("rom:/boss_room/chains.t3dm"); 
-    cinematicChainsSkeleton = malloc_uncached(sizeof(T3DSkeleton)); 
-    *cinematicChainsSkeleton = t3d_skeleton_create(cinematicChainsModel); 
-    const char* cinematicChainsAnimationNames[] = {"ChainsInitial", "ChainsSeparate"}; 
-    const int cinematicChainsAnimationCount = 2;
-
-    cinematicChainsAnimations = malloc_uncached(cinematicChainsAnimationCount * sizeof(T3DAnim*)); 
-    for (int i = 0; i < cinematicChainsAnimationCount; i++) { 
-        cinematicChainsAnimations[i] = malloc_uncached(sizeof(T3DAnim)); 
-        *cinematicChainsAnimations[i] = t3d_anim_create(cinematicChainsModel, cinematicChainsAnimationNames[i]); 
-        t3d_anim_attach(cinematicChainsAnimations[i], cinematicChainsSkeleton); 
-    }
-
-    t3d_anim_set_looping(cinematicChainsAnimations[currentCinematicChainsAnimation], true); 
-    t3d_anim_set_playing(cinematicChainsAnimations[currentCinematicChainsAnimation], true); 
-
-    rspq_block_begin(); 
-    t3d_model_draw_skinned(cinematicChainsModel, cinematicChainsSkeleton); 
-    cinematicChainsDpl = rspq_block_end(); 
-    cinematicChainsMatrix = malloc_uncached(sizeof(T3DMat4FP)); 
-    t3d_mat4fp_from_srt_euler(cinematicChainsMatrix, (float[3]){MODEL_SCALE, MODEL_SCALE, MODEL_SCALE}, (float[3]){0.0f, 0.0f, 0.0f}, (float[3]){0.0f, 0.0f, 0.0f} );
-
-    // ===== LOAD Bnw Chains =====
-    bnwChainsModel = t3d_model_load("rom:/boss/boss_bnw_chains2.t3dm"); 
-    bnwChainsSkeleton = malloc_uncached(sizeof(T3DSkeleton)); 
-    *bnwChainsSkeleton = t3d_skeleton_create(bnwChainsModel); 
-    const char* bnwChainsAnimationNames[] = {"Molting"}; 
-    const int bnwChainsAnimationCount = 1;
-
-    bnwChainsAnimations = malloc_uncached(bnwChainsAnimationCount * sizeof(T3DAnim*)); 
-    for (int i = 0; i < bnwChainsAnimationCount; i++) { 
-        bnwChainsAnimations[i] = malloc_uncached(sizeof(T3DAnim)); 
-        *bnwChainsAnimations[i] = t3d_anim_create(bnwChainsModel, bnwChainsAnimationNames[i]); 
-        t3d_anim_attach(bnwChainsAnimations[i], bnwChainsSkeleton); 
-    }
-
-    t3d_anim_set_looping(bnwChainsAnimations[currentBnwChainsAnimation], true); 
-    t3d_anim_set_playing(bnwChainsAnimations[currentBnwChainsAnimation], true); 
-
-    rspq_block_begin(); 
-    t3d_model_draw_skinned(bnwChainsModel, bnwChainsSkeleton); 
-    bnwChainsDpl = rspq_block_end(); 
-    bnwChainsMatrix = malloc_uncached(sizeof(T3DMat4FP)); 
-    t3d_mat4fp_from_srt_euler(bnwChainsMatrix, (float[3]){MODEL_SCALE, MODEL_SCALE, MODEL_SCALE}, (float[3]){0.0f, 0.0f, 0.0f}, (float[3]){0.0f, 0.0f, 0.0f} );
-
-    // ===== Bnw Boss ===== 
-    bnwBossModel = t3d_model_load("rom:/boss/boss_bnw.t3dm");
-    rspq_block_begin();
-    t3d_model_draw(bnwBossModel);
-    bnwBossDpl = rspq_block_end();
-
-    bnwBossMatrix = malloc_uncached(sizeof(T3DMat4FP));
-    t3d_mat4fp_from_srt_euler(bnwBossMatrix, 
-        (float[3]){MODEL_SCALE, MODEL_SCALE, MODEL_SCALE},
-        (float[3]){0.0f, 0.0f, 0.0f},
-        (float[3]){0.0f, roomY, 0.0f}
-    );
-
-    // ===== LOAD Bnw FLOOR GLOW =====
-    floorGlowBnwModel = t3d_model_load("rom:/boss/boss_bnw_floor_glow1.t3dm");
-    rspq_block_begin();
-    t3d_model_draw(floorGlowBnwModel);
-    floorGlowBnwDpl = rspq_block_end();
-
-    floorGlowBnwMatrix = malloc_uncached(sizeof(T3DMat4FP));
-    t3d_mat4fp_from_srt_euler(floorGlowBnwMatrix, 
-        (float[3]){MODEL_SCALE, MODEL_SCALE, MODEL_SCALE},
-        (float[3]){0.0f, 0.0f, 0.0f},
-        (float[3]){0.0f, roomY, 0.0f}
-    );
-
-    // ===== Bnw Boss FLOOR GLOW SPINNING ===== 
-    floorSpinBnwModel = t3d_model_load("rom:/boss/boss_bnw_floor_spin_glow.t3dm");
-    rspq_block_begin();
-    t3d_model_draw(floorSpinBnwModel);
-    floorSpinBnwDpl = rspq_block_end();
-
-    floorSpinBnwMatrix = malloc_uncached(sizeof(T3DMat4FP));
-    t3d_mat4fp_from_srt_euler(floorSpinBnwMatrix, 
-        (float[3]){MODEL_SCALE, MODEL_SCALE, MODEL_SCALE},
-        (float[3]){0.0f, 0.0f, 0.0f},
-        (float[3]){0.0f, roomY, 0.0f}
-    );
-
-    // ===== LOAD Boss Chains =====
-    // bossChainsModel = t3d_model_load("rom:/boss/boss_chains2.t3dm"); 
-    // bossChainsSkeleton = malloc_uncached(sizeof(T3DSkeleton)); 
-    // *bossChainsSkeleton = t3d_skeleton_create(bossChainsModel); 
-    // const char* bossChainsAnimationNames[] = {"Phase2RevealChains4"}; 
-    // const int bossChainsAnimationCount = 1;
-
-    // bossChainsAnimations = malloc_uncached(bossChainsAnimationCount * sizeof(T3DAnim*)); 
-    // for (int i = 0; i < bossChainsAnimationCount; i++) { 
-    //     bossChainsAnimations[i] = malloc_uncached(sizeof(T3DAnim)); 
-    //     *bossChainsAnimations[i] = t3d_anim_create(bossChainsModel, bossChainsAnimationNames[i]); 
-    //     t3d_anim_attach(bossChainsAnimations[i], bossChainsSkeleton); 
-    // }
-
-    // t3d_anim_set_looping(bossChainsAnimations[currentBossChainsAnimation], true); 
-    // t3d_anim_set_playing(bossChainsAnimations[currentBossChainsAnimation], true); 
-
-    // rspq_block_begin(); 
-    // t3d_model_draw_skinned(bossChainsModel, bossChainsSkeleton); 
-    // bossChainsDpl = rspq_block_end(); 
-    // bossChainsMatrix = malloc_uncached(sizeof(T3DMat4FP)); 
-    // t3d_mat4fp_from_srt_euler(bossChainsMatrix, (float[3]){MODEL_SCALE * 1.25f, MODEL_SCALE* 1.25f, MODEL_SCALE* 1.25f}, (float[3]){0.0f, 0.0f, 0.0f}, (float[3]){0.0f, 0.0f, 0.0f});
-
-    // ===== LOAD SHACKLED SUN =====
-    shackledSunModel = t3d_model_load("rom:/shackled_sun/shackled_sun.t3dm");
-    rspq_block_begin();
-    t3d_model_draw(shackledSunModel);
-    shackledSunDpl = rspq_block_end();
-
-    shackledSunMatrix = malloc_uncached(sizeof(T3DMat4FP));
-    t3d_mat4fp_from_srt_euler(shackledSunMatrix, 
-        (float[3]){MODEL_SCALE, MODEL_SCALE, MODEL_SCALE},
-        (float[3]){0.0f, 0.0f, 0.0f},
-        (float[3]){0.0f, 0.0f, 0.0f}
-    );
-
-    // ===== LOAD SHACKLED SUN GLOW =====
-    shackledSunGlowModel = t3d_model_load("rom:/shackled_sun/shackled_sun_rays.t3dm");
-    rspq_block_begin();
-    t3d_model_draw(shackledSunGlowModel);
-    shackledSunGlowDpl = rspq_block_end();
-
-    shackledSunGlowMatrix = malloc_uncached(sizeof(T3DMat4FP));
-    t3d_mat4fp_from_srt_euler(shackledSunGlowMatrix, 
-        (float[3]){MODEL_SCALE, MODEL_SCALE, MODEL_SCALE},
-        (float[3]){0.0f, 0.0f, 0.0f},
-        (float[3]){0.0f, 0.0f, 0.0f}
-    );
-
-    // ===== LOAD SHACKLED SUN SHACKLES =====
-    shacklesModel = t3d_model_load("rom:/shackled_sun/shackles.t3dm");
-    rspq_block_begin();
-    t3d_model_draw(shacklesModel);
-    shacklesDpl = rspq_block_end();
-
-    shacklesMatrix = malloc_uncached(sizeof(T3DMat4FP));
-    t3d_mat4fp_from_srt_euler(shacklesMatrix, 
-        (float[3]){MODEL_SCALE, MODEL_SCALE, MODEL_SCALE},
-        (float[3]){0.0f, 0.0f, 0.0f},
-        (float[3]){0.0f, 0.0f, 0.0f}
-    );
-
-    shackles2Matrix = malloc_uncached(sizeof(T3DMat4FP));
-    t3d_mat4fp_from_srt_euler(shackles2Matrix, 
-        (float[3]){-MODEL_SCALE, -MODEL_SCALE, -MODEL_SCALE},
-        (float[3]){0.0f, 0.0f, 0.0f},
-        (float[3]){0.0f, 0.0f, 0.0f}
     );
 
     // ===== LOAD BOSS CHAINS GLOW =====
+    // Keep this here only if it is visible after the phase-2 cutscene / during gameplay.
+    // If it is phase-2-cutscene-only, move it into cutscene_guardian_phase2.c instead.
     bossChainsGlowModel = t3d_model_load("rom:/boss/boss_chain_glow.t3dm");
     rspq_block_begin();
-    t3d_model_draw(bossChainsGlowModel);
+        t3d_model_draw(bossChainsGlowModel);
     bossChainsGlowDpl = rspq_block_end();
 
     bossChainsGlowMatrix = malloc_uncached(sizeof(T3DMat4FP));
-    t3d_mat4fp_from_srt_euler(bossChainsGlowMatrix, 
+    t3d_mat4fp_from_srt_euler(
+        bossChainsGlowMatrix,
         (float[3]){MODEL_SCALE, MODEL_SCALE, MODEL_SCALE},
         (float[3]){0.0f, 0.0f, 0.0f},
         (float[3]){0.0f, roomY, 0.0f}
     );
 
-
-    // Chain-break asset for the PHASE1_BREAK_CHAINS cutscene is owned by the
-    // cutscene manager.
-    cutscene_manager_init();
-
+    // Global/system-level effect. Keep loaded if it is used outside one cutscene,
+    // or move it later if it is phase-2-only.
     lightning_fx_system_init("rom:/boss/boss_back_sword_lightning2.t3dm");
-
 }
-
-
 
 static void scene_title_init_dynamic_banner_assets(void)
 {
@@ -957,6 +745,9 @@ void scene_init(void)
 
     // Initialize dialog controller
     dialog_controller_init();
+
+    // Initialize cutscene manager
+    cutscene_manager_init();
 
     // Load A button sprite for cutscene skip indicator
     aButtonSprite = sprite_load("rom:/buttons/A.sprite");
@@ -1571,9 +1362,6 @@ void scene_init_playing(bool skippedCutscene)
     camera_mode_smooth(CAMERA_CHARACTER, 1.0f);
     cameraLockOnActive = true;
 
-    // Hide cinematic chains once gameplay starts
-    cinematicChainsVisible = false;
-
     // Start boss title fully visible so it slides up on gameplay start
     bossTitleFade = 1.0f;
 
@@ -1636,218 +1424,6 @@ void scene_set_cinematic_camera(T3DVec3 posStart, T3DVec3 posEnd, T3DVec3 posTar
     customCamTarget = posTarget;  // Look at boss center/chest area
 }
 
-void scene_init_cutscene()
-{
-    skipButtonVisible = false;
-
-    switch (cutsceneState) 
-    {
-        case CUTSCENE_PHASE1_INTRO:
-            scene_set_cinematic_camera((T3DVec3){{-700.0f, 120.4f, 0.0f}}, (T3DVec3){{-600.0f, 120.4f, 0.0f}}, (T3DVec3){{g_boss->pos[0], g_boss->pos[1] + 100.0f, g_boss->pos[2]}});
-
-            camera_mode(CAMERA_CUSTOM);
-
-            screenTransition = true;
-            startScreenFade = true;
-            gameState = GAME_STATE_PLAYING;
-            character_reset();
-            audio_stop_music();
-            audio_play_music("rom:/audio/music/boss_phase1_cutscene1-22k.wav64", false);
-            break;
-        case CUTSCENE_PHASE1_CHAIN_CLOSEUP:
-            screenTransition = false;
-            scene_set_cinematic_camera((T3DVec3){{-239.0f, 239.4f, -133.7f}}, (T3DVec3){{-239.0f, 239.4f, -133.7f}}, (T3DVec3){{-151.9f, 208.0f, -96.0f}});
-            break;
-        case CUTSCENE_PHASE1_SWORDS_CLOSEUP:
-            scene_set_cinematic_camera((T3DVec3){{-197.86f, 20.0f, 191.45f}}, (T3DVec3){{-220.97f, 20.0f, 190.0f}}, (T3DVec3){{-142.32f, 55.14f, 114.76f}});
-            break;
-        case CUTSCENE_PHASE1_FILLER:
-            cutsceneDialogActive = true;
-            scene_set_cinematic_camera((T3DVec3){{-0.47f, 6.89f,  70.0f}}, (T3DVec3){{-0.15f, 22.99f, 32.26f}}, (T3DVec3){{0.476f, 55.54f, -71.29f}});
-            dialog_controller_speak(cutscene_manager_get_phase1_dialog(0), 0, 0.0f, false, false);
-            break;
-        case CUTSCENE_PHASE1_LOYALTY:
-            cutsceneDialogActive = true;
-            scene_set_cinematic_camera((T3DVec3){{-18.28f, 11.45f,  2.0f}}, (T3DVec3){{-18.28f, 11.45f,  -2.0f}}, (T3DVec3){{80.4f, -1.0f, -11.0f}});
-            dialog_controller_speak(cutscene_manager_get_phase1_dialog(1), 0, 0.0f, false, false);
-            break;
-        case CUTSCENE_PHASE1_FEAR:
-            cutsceneDialogActive = true;
-            scene_set_cinematic_camera((T3DVec3){{-13.454f, 13.41f,  -24.27f}}, (T3DVec3){{-13.454f, 25.41f,  -24.27f}}, (T3DVec3){{400.0f, 43.41f, -29.67f}});
-            dialog_controller_speak(cutscene_manager_get_phase1_dialog(2), 0, 0.0f, false, false);
-
-            break;
-        case CUTSCENE_PHASE1_BREAK_CHAINS:
-            screenTransition = false;
-            cutsceneDialogActive = false;
-            scene_set_cinematic_camera((T3DVec3){{-22.31f, 1.7f, 0.65f}}, (T3DVec3){{-42.31f, 1.7f, 0.65f}}, (T3DVec3){{-12.31f, 1.7f, 0.65f}});
-            joypad_rumble_pulse_seconds(0.5f);
-            break;
-        case CUTSCENE_PHASE1_INTRO_END:
-            camera_mode(CAMERA_CUSTOM);
-            T3DAnim** anims = (T3DAnim**)g_boss->animations;
-            t3d_anim_set_playing(anims[BOSS_ANIM_KNEEL], true);
-            g_boss->currentAnimation = BOSS_ANIM_KNEEL;
-            g_boss->currentAnimState = BOSS_ANIM_KNEEL;
-
-            currentCinematicChainsAnimation = 1;
-            t3d_anim_set_looping(cinematicChainsAnimations[currentCinematicChainsAnimation], false); 
-            t3d_anim_set_playing(cinematicChainsAnimations[currentCinematicChainsAnimation], true); 
-
-            screenTransition = true;
-            startScreenFade = true;
-            // Start hiding letterbox bars before gameplay begins
-            letterbox_hide();
-            cutsceneDialogActive = false;
-            scene_set_cinematic_camera((T3DVec3){{-22.0f, 29.0f, -10.0f}}, (T3DVec3){{-150.0f, 29.0f, -10.0f}}, (T3DVec3){{100.0f, 29.0f, 0.0f}});
-            break;
-        case CUTSCENE_PHASE2_INTRO: {
-            // Force boss into kneel animation.
-            g_boss->pos[0] = 0.0f;
-            g_boss->pos[1] = 1.0f;
-            g_boss->pos[2] = 0.0f;
-            g_boss->rot[0] = 0.0f;
-            g_boss->rot[1] = 0.0f;
-            g_boss->rot[2] = 0.0f;
-
-            g_boss->state = BOSS_STATE_INTRO;  // Neutral state so AI doesn't act
-            g_boss->stateTimer = 0.0f;
-            g_boss->isAttacking = false;
-            g_boss->handAttackColliderActive = false;
-            g_boss->sphereAttackColliderActive = false;
-            g_boss->velX = 0.0f;
-            g_boss->velZ = 0.0f;
-            T3DAnim** anims = (T3DAnim**)g_boss->animations;
-            t3d_anim_set_playing(anims[BOSS_ANIM_PHASE2_COLLAPSE], true);
-            g_boss->currentAnimation = BOSS_ANIM_PHASE2_COLLAPSE;
-            g_boss->currentAnimState = BOSS_ANIM_PHASE2_COLLAPSE;
-
-            camera_mode(CAMERA_CUSTOM);
-
-            screenTransition = true;
-            startScreenFade = true;
-            gameState = GAME_STATE_PLAYING;
-            //character_reset();
-            audio_stop_music();
-            audio_play_music("rom:/audio/music/boss_phase2_cutscene2-22k.wav64", false);
-            audio_set_music_volume(10);
-
-            scene_set_cinematic_camera((T3DVec3){{-20.87f, 6.37f, -39.34f}}, (T3DVec3){{-15.44f, 23.37f, -23.00f}}, (T3DVec3){{1.91f, 50.14f, 71.61f}});
-
-        } break;
-        case CUTSCENE_PHASE2_KNEEL: {
-            T3DAnim** anims = (T3DAnim**)g_boss->animations;
-            t3d_anim_set_playing(anims[BOSS_ANIM_PHASE2_COLLAPSE_IDLE], true);
-            g_boss->currentAnimation = BOSS_ANIM_PHASE2_COLLAPSE_IDLE;
-            g_boss->currentAnimState = BOSS_ANIM_PHASE2_COLLAPSE_IDLE;
-            
-            cutsceneDialogActive = true;
-            dialog_controller_speak(cutscene_manager_get_phase2_dialog(0), 0, 0.0f, false, false);
-        } break;
-        case CUTSCENE_PHASE2_BLURB: {
-            T3DAnim** anims = (T3DAnim**)g_boss->animations;
-            t3d_anim_set_playing(anims[BOSS_ANIM_PHASE2_COLLAPSE_IDLE], true);
-            g_boss->currentAnimation = BOSS_ANIM_PHASE2_COLLAPSE_IDLE;
-            g_boss->currentAnimState = BOSS_ANIM_PHASE2_COLLAPSE_IDLE;
-            
-            cutsceneDialogActive = true;
-            dialog_controller_speak(cutscene_manager_get_phase2_dialog(1), 0, 0.0f, false, false);
-            scene_set_cinematic_camera((T3DVec3){{-15.44f, 23.37f, -23.00f}}, (T3DVec3){{-36.95f, 18.85f, -1.9f}}, (T3DVec3){{g_boss->pos[0] - 10.0f, g_boss->pos[1] + 30.0f, g_boss->pos[2]}});
-        } break;
-        case CUTSCENE_PHASE2_MIND: {
-            cutsceneDialogActive = true;
-            screenTransition = true;
-            startScreenFade = true;
-            dialog_controller_speak(cutscene_manager_get_phase2_dialog(2), 0, 0.0f, false, false);
-            scene_set_cinematic_camera((T3DVec3){{-36.95f, 18.85f, -1.9f}}, (T3DVec3){{-16.97f, 28.0f, -1.6f}}, (T3DVec3){{53.87f, 60.67f, 0.0f}});
-        } break;
-        case CUTSCENE_PHASE2_SHACKLED_SUN: {
-            screenTransition = true;
-            startScreenFade = true;
-            cutsceneDialogActive = true;
-            dialog_controller_speak(cutscene_manager_get_phase2_dialog(3), 0, 0.0f, false, false);
-            scene_set_cinematic_camera((T3DVec3){{-35.0f, 0.0f, 0.0f}}, (T3DVec3){{-25.0f, 0.0f, 0.0f}}, (T3DVec3){{100.0f, 0.0f, 0.0f}});
-        } break;
-        case CUTSCENE_PHASE2_BURN: {
-            T3DAnim** anims = (T3DAnim**)g_boss->animations;
-            t3d_anim_set_playing(anims[BOSS_ANIM_PHASE2_WIN_KNEEL], true);
-            g_boss->currentAnimation = BOSS_ANIM_PHASE2_WIN_KNEEL;
-            g_boss->currentAnimState = BOSS_ANIM_PHASE2_WIN_KNEEL;
-            
-            cutsceneDialogActive = true;
-            dialog_controller_speak(cutscene_manager_get_phase2_dialog(4), 0, 0.0f, false, false);
-            scene_set_cinematic_camera((T3DVec3){{-50.0f, 20.0f, -10.0f}}, (T3DVec3){{-40.0f, 20.0f, -10.0f}}, (T3DVec3){{100.0f, 50.0f, 0.0f}});
-        } break;
-        case CUTSCENE_PHASE2_BNW: {
-            currentBnwChainsAnimation = 0;
-            t3d_anim_set_looping(bnwChainsAnimations[currentBnwChainsAnimation], true); 
-            t3d_anim_set_playing(bnwChainsAnimations[currentBnwChainsAnimation], true); 
-
-            scene_set_cinematic_camera((T3DVec3){{-40.0f, 20.0f, -10.0f}}, (T3DVec3){{-90.0f, 10.0f, -10.0f}}, (T3DVec3){{100.0f, 50.0f, 0.0f}});
-
-            lightning_fx_system_ring_config(
-                40.0f, 100.0f,   // rMin, rMax (distance from 0,0,0 in XZ)
-                0.0f,            // y
-                0.15f, 0.60f     // min/max interval seconds
-            );
-            lightning_fx_system_ring_enable(true);
-
-            cutsceneDialogActive = true;
-            dialog_controller_speak(cutscene_manager_get_phase2_dialog(5), 0, 0.0f, false, false);
-
-            joypad_rumble_pulse_seconds(15.0f);
-
-            screenTransition = true;
-            startScreenFade = true;
-
-        } break;
-        case CUTSCENE_PHASE2_END: {
-            screenTransition = true;
-            startScreenFade = true;
-
-            T3DAnim** anims = (T3DAnim**)g_boss->animations;
-            t3d_anim_set_playing(anims[BOSS_ANIM_PHASE2_REVEAL], true);
-            g_boss->currentAnimation = BOSS_ANIM_PHASE2_REVEAL;
-            g_boss->currentAnimState = BOSS_ANIM_PHASE2_REVEAL;
-
-            // t3d_anim_set_looping(bossChainsAnimations[currentBossChainsAnimation], false); 
-            // t3d_anim_set_playing(bossChainsAnimations[currentBossChainsAnimation], true); 
-            
-            cutsceneDialogActive = false;
-            scene_set_cinematic_camera((T3DVec3){{-92.38f, 32.0f, 4.65f}}, (T3DVec3){{-149.0f, 28.58f, 3.7f}}, (T3DVec3){{g_boss->pos[0], g_boss->pos[1] + 21.35f, g_boss->pos[2]}});
-        } break;
-        case CUTSCENE_POST_BOSS_RESTORED: {
-            // Post-boss dialog: keep the current gameplay camera position (so we don't yank the view),
-            // but retarget it to face the boss.
-            cutsceneDialogActive = true;
-            bossPostDefeatDialogStep = 0;
-            skipButtonVisible = false;
-            lastCutsceneAPressed = false;
-
-            // Freeze character motion for the duration of this dialog so we don't "coast" afterward.
-            character_set_velocity_xz(0.0f, 0.0f);
-
-            // Keep current camera position and smoothly rotate to face the boss.
-            customCamPos = camPos;
-            customCamTarget = get_boss_lock_focus_point();
-            camera_mode_smooth(CAMERA_CUSTOM, 0.25f);
-
-            // Start the current chat's first line. bossPostDefeatChatIndex persists
-            // across cutscene entries so each A-press advances the sequence.
-            const PostBossChat *chat = cutscene_manager_get_post_boss_chat(bossPostDefeatChatIndex);
-            dialog_controller_speak(chat->line1, 0, chat->holdSec, false, true);
-        } break;
-        default:
-            break;
-    }
-}
-
-static inline float ease_in_out(float x) {
-    if (x < 0.0f) x = 0.0f;
-    if (x > 1.0f) x = 1.0f;
-    return x * x * (3.0f - 2.0f * x);
-}
-
 // End-of-phase-2-cutscene teardown: drop cutscene-only effects and hand control
 // back to the fight at phase 2. Used both when the cutscene completes naturally
 // and when the player skips it via the A-button overlay.
@@ -1900,488 +1476,159 @@ static void scene_finish_phase2_cutscene(void)
     scene_sync_input_edge_state();
 }
 
-void scene_cutscene_update()
+// Temporary scene context until memory management is added and cutscenes become their own scenes.
+static SceneContext sceneContext;
+static void scene_update_context(void)
 {
-    // Update cutscene state
-    cutsceneTimer += deltaTime;
-    // Update camera timer separately (doesn't reset when transitioning states)
-    if (cutsceneState != CUTSCENE_NONE) {
-        cutsceneCameraTimer += deltaTime;
-    }
-    
-    t3d_anim_update(cinematicChainsAnimations[currentCinematicChainsAnimation], deltaTime);
-    t3d_skeleton_update(cinematicChainsSkeleton);
+    sceneContext.boss = g_boss;
 
-    if(cutsceneState == CUTSCENE_PHASE1_BREAK_CHAINS)
-    {
-        cutscene_manager_chain_break_tick(deltaTime);
+    sceneContext.roomY = roomY;
+
+    sceneContext.gameState = &gameState;
+    sceneContext.screenTransition = &screenTransition;
+
+    sceneContext.windowsModel = windowsModel;
+    sceneContext.windowsDpl = windowsDpl;
+    sceneContext.windowsMatrix = windowsMatrix;
+
+    sceneContext.mapModel = mapModel;
+    sceneContext.mapDpl = mapDpl;
+    sceneContext.mapMatrix = mapMatrix;
+
+    sceneContext.roomFloorModel = roomFloorModel;
+    sceneContext.roomFloorDpl = roomFloorDpl;
+    sceneContext.roomFloorMatrix = roomFloorMatrix;
+
+    sceneContext.roomLedgeModel = roomLedgeModel;
+    sceneContext.roomLedgeDpl = roomLedgeDpl;
+    sceneContext.roomLedgeMatrix = roomLedgeMatrix;
+
+    sceneContext.pillarsModel = pillarsModel;
+    sceneContext.pillarsDpl = pillarsDpl;
+    sceneContext.pillarsMatrix = pillarsMatrix;
+
+    sceneContext.pillarsFrontModel = pillarsFrontModel;
+    sceneContext.pillarsFrontDpl = pillarsFrontDpl;
+    sceneContext.pillarsFrontMatrix = pillarsFrontMatrix;
+
+    sceneContext.sunshaftsModel = sunshaftsModel;
+    sceneContext.sunshaftsDpl = sunshaftsDpl;
+    sceneContext.sunshaftsMatrix = sunshaftsMatrix;
+
+    sceneContext.chainsModel = chainsModel;
+    sceneContext.chainsDpl = chainsDpl;
+    sceneContext.chainsMatrix = chainsMatrix;
+
+    sceneContext.bossChainsGlowModel = bossChainsGlowModel;
+    sceneContext.bossChainsGlowDpl = bossChainsGlowDpl;
+    sceneContext.bossChainsGlowMatrix = bossChainsGlowMatrix;
+    sceneContext.bossChainsGlowScrollParams = &bossChainsGlowScrollParams;
+
+    sceneContext.set_cinematic_camera = scene_set_cinematic_camera;
+    sceneContext.init_playing = scene_init_playing;
+    sceneContext.finish_phase2_cutscene = scene_finish_phase2_cutscene;
+}
+
+void scene_init_cutscene(void)
+{
+    scene_update_context();
+
+    skipButtonVisible = false;
+
+    if (cutscene_guardian_phase1_handles(cutsceneState)) {
+        cutscene_guardian_phase1_enter(&sceneContext, cutsceneState);
+        return;
     }
 
-    if (g_boss) {
-        boss_anim_update(g_boss);
-        // Update transforms for rendering
-        T3DMat4FP* mat = (T3DMat4FP*)g_boss->modelMat;
-        if (mat) {
-            t3d_mat4fp_from_srt_euler(mat, g_boss->scale, g_boss->rot, g_boss->pos);
-        }
+    if (cutscene_guardian_phase2_handles(cutsceneState)) {
+        cutscene_guardian_phase2_enter(&sceneContext, cutsceneState);
+        return;
     }
 
     switch (cutsceneState) {
-        case CUTSCENE_PHASE1_INTRO: {
-
-            //dialog_controller_update();
-            
-            // Slowly move camera towards boss during cutscene
-            // Use a smooth interpolation over ~5 seconds
-
-            float cameraMoveDuration = 9.0f;
-            float t = cutsceneCameraTimer / cameraMoveDuration;
-            if (t > 1.0f) t = 1.0f;  // Clamp to 1.0
-            
-            // Smooth interpolation (ease-in-out)
-            float easeT = t * t * (3.0f - 2.0f * t);
-
-            // Update camera position
-            customCamPos.v[0] = cutsceneCamPosStart.v[0] + (cutsceneCamPosEnd.v[0] - cutsceneCamPosStart.v[0]) * easeT;
-            customCamPos.v[1] = cutsceneCamPosStart.v[1] + (cutsceneCamPosEnd.v[1] - cutsceneCamPosStart.v[1]) * easeT;
-            customCamPos.v[2] = cutsceneCamPosStart.v[2] + (cutsceneCamPosEnd.v[2] - cutsceneCamPosStart.v[2]) * easeT;
-            
-            // Wait for dialog to finish
-            // if (!dialog_controller_speaking()) {
-            //     cutsceneState = CUTSCENE_BOSS_INTRO_WAIT;
-            //     cutsceneTimer = 0.0f;
-            // }
-
-            // End state of the segment
-            if(cutsceneTimer >= 9.0f)
-            {
-                cutsceneTimer = 0.0f;
-                cutsceneState = CUTSCENE_PHASE1_CHAIN_CLOSEUP;
-                scene_init_cutscene();
-                return;
-            }
-
-        } break;
-        
-        case CUTSCENE_PHASE1_CHAIN_CLOSEUP: {
-            float cameraMoveDuration = 6.0f;
-            float t = cutsceneCameraTimer / cameraMoveDuration;
-            if (t > 1.0f) t = 1.0f;  // Clamp to 1.0
-            
-            // Smooth interpolation (ease-in-out)
-            float easeT = t * t * (3.0f - 2.0f * t);
-
-            // Update camera position
-            customCamPos.v[0] = cutsceneCamPosStart.v[0] + (cutsceneCamPosEnd.v[0] - cutsceneCamPosStart.v[0]) * easeT;
-            customCamPos.v[1] = cutsceneCamPosStart.v[1] + (cutsceneCamPosEnd.v[1] - cutsceneCamPosStart.v[1]) * easeT;
-            customCamPos.v[2] = cutsceneCamPosStart.v[2] + (cutsceneCamPosEnd.v[2] - cutsceneCamPosStart.v[2]) * easeT;
-
-            // End state of the segment
-            if(cutsceneTimer >= 6.0f)
-            {
-                cutsceneTimer = 0.0f;
-                cutsceneCameraTimer = 0.0f;
-                cutsceneState = CUTSCENE_PHASE1_SWORDS_CLOSEUP;
-                scene_init_cutscene();
-                return;
-            }
-
-        } break;
-        
-        case CUTSCENE_PHASE1_SWORDS_CLOSEUP:  {
-
-            float cameraMoveDuration = 4.0f;
-            float t = cutsceneCameraTimer / cameraMoveDuration;
-            if (t > 1.0f) t = 1.0f;  // Clamp to 1.0
-            
-            // Smooth interpolation (ease-in-out)
-            float easeT = t * t * (3.0f - 2.0f * t);
-            // Update camera position
-            customCamPos.v[0] = cutsceneCamPosStart.v[0] + (cutsceneCamPosEnd.v[0] - cutsceneCamPosStart.v[0]) * easeT;
-            customCamPos.v[1] = cutsceneCamPosStart.v[1] + (cutsceneCamPosEnd.v[1] - cutsceneCamPosStart.v[1]) * easeT;
-            customCamPos.v[2] = cutsceneCamPosStart.v[2] + (cutsceneCamPosEnd.v[2] - cutsceneCamPosStart.v[2]) * easeT;
-
-            // End state of the segment
-            if(cutsceneTimer >= 5.0f)
-            {
-                cutsceneTimer = 0.0f;
-                cutsceneCameraTimer = 0.0f;
-                cutsceneState = CUTSCENE_PHASE1_FILLER;
-                scene_init_cutscene();
-                return;
-            }
-
-        } break;
-
-        case CUTSCENE_PHASE1_FILLER:  {
-            float cameraMoveDuration = 13.0f;
-            float t = cutsceneCameraTimer / cameraMoveDuration;
-            if (t > 1.0f) t = 1.0f;  // Clamp to 1.0
-            
-            // Smooth interpolation (ease-in-out)
-            float easeT = t * t * (3.0f - 2.0f * t);
-            // Update camera position
-            customCamPos.v[0] = cutsceneCamPosStart.v[0] + (cutsceneCamPosEnd.v[0] - cutsceneCamPosStart.v[0]) * easeT;
-            customCamPos.v[1] = cutsceneCamPosStart.v[1] + (cutsceneCamPosEnd.v[1] - cutsceneCamPosStart.v[1]) * easeT;
-            customCamPos.v[2] = cutsceneCamPosStart.v[2] + (cutsceneCamPosEnd.v[2] - cutsceneCamPosStart.v[2]) * easeT;
-
-            dialog_controller_update();
-
-            // End state of the segment
-            if(cutsceneTimer >= 10.0f)
-            {
-                cutsceneTimer = 0.0f;
-                cutsceneCameraTimer = 0.0f;
-                cutsceneState = CUTSCENE_PHASE1_LOYALTY;
-                scene_init_cutscene();
-                return;
-            }
-
-        } break;
-
-        case CUTSCENE_PHASE1_LOYALTY:  {
-
-            float cameraMoveDuration = 5.0f;
-            float t = cutsceneCameraTimer / cameraMoveDuration;
-            if (t > 1.0f) t = 1.0f;  // Clamp to 1.0
-            
-            // Smooth interpolation (ease-in-out)
-            float easeT = t * t * (3.0f - 2.0f * t);
-            // Update camera position
-            customCamPos.v[0] = cutsceneCamPosStart.v[0] + (cutsceneCamPosEnd.v[0] - cutsceneCamPosStart.v[0]) * easeT;
-            customCamPos.v[1] = cutsceneCamPosStart.v[1] + (cutsceneCamPosEnd.v[1] - cutsceneCamPosStart.v[1]) * easeT;
-            customCamPos.v[2] = cutsceneCamPosStart.v[2] + (cutsceneCamPosEnd.v[2] - cutsceneCamPosStart.v[2]) * easeT;
-
-            dialog_controller_update();
-
-            // End state of the segment
-            if(cutsceneTimer >= 5.0f)
-            {
-                cutsceneTimer = 0.0f;
-                cutsceneCameraTimer = 0.0f;
-                cutsceneState = CUTSCENE_PHASE1_FEAR;
-                scene_init_cutscene();
-                return;
-            }
-
-        } break;
-
-        case CUTSCENE_PHASE1_FEAR:  {
-
-            float cameraMoveDuration = 7.5f;
-            float t = cutsceneCameraTimer / cameraMoveDuration;
-            if (t > 1.0f) t = 1.0f;  // Clamp to 1.0
-            
-            // Smooth interpolation (ease-in-out)
-            float easeT = t * t * (3.0f - 2.0f * t);
-            // Update camera position
-            customCamPos.v[0] = cutsceneCamPosStart.v[0] + (cutsceneCamPosEnd.v[0] - cutsceneCamPosStart.v[0]) * easeT;
-            customCamPos.v[1] = cutsceneCamPosStart.v[1] + (cutsceneCamPosEnd.v[1] - cutsceneCamPosStart.v[1]) * easeT;
-            customCamPos.v[2] = cutsceneCamPosStart.v[2] + (cutsceneCamPosEnd.v[2] - cutsceneCamPosStart.v[2]) * easeT;
-
-            dialog_controller_update();
-
-            // Play grab sword anim
-            if(cutsceneTimer >= 6.5f && g_boss->currentAnimation != BOSS_ANIM_KNEEL_CUTSCENE)
-            {
-                T3DAnim** anims = (T3DAnim**)g_boss->animations;
-                t3d_anim_set_playing(anims[BOSS_ANIM_KNEEL_CUTSCENE], true);
-                g_boss->currentAnimation = BOSS_ANIM_KNEEL_CUTSCENE;
-                g_boss->currentAnimState = BOSS_ANIM_KNEEL_CUTSCENE;
-            }
-
-            if(cutsceneTimer >= 7.5f)
-            {
-                if(!screenTransition)
-                {
-                    screenTransition = true;
-                    startScreenFade = true;
-                }
-            }
-
-            // End state of the segment
-            if(cutsceneTimer >= 10.5f)
-            {
-                cutsceneTimer = 0.0f;
-                cutsceneCameraTimer = 0.0f;
-                cutsceneState = CUTSCENE_PHASE1_BREAK_CHAINS;
-                scene_init_cutscene();
-                return;
-            }
-
-        } break;
-        case CUTSCENE_PHASE1_BREAK_CHAINS:  {
-
-            float cameraMoveDuration = 5.0f;
-            float t = cutsceneCameraTimer / cameraMoveDuration;
-            if (t > 1.0f) t = 1.0f;  // Clamp to 1.0
-            
-            // Smooth interpolation (ease-in-out)
-            float easeT = t * t * (3.0f - 2.0f * t);
-            // Update camera position
-            customCamPos.v[0] = cutsceneCamPosStart.v[0] + (cutsceneCamPosEnd.v[0] - cutsceneCamPosStart.v[0]) * easeT;
-            customCamPos.v[1] = cutsceneCamPosStart.v[1] + (cutsceneCamPosEnd.v[1] - cutsceneCamPosStart.v[1]) * easeT;
-            customCamPos.v[2] = cutsceneCamPosStart.v[2] + (cutsceneCamPosEnd.v[2] - cutsceneCamPosStart.v[2]) * easeT;
-
-            //dialog_controller_update();
-
-
-            if(cutsceneTimer >= 3.0f)
-            {
-                if(!screenTransition)
-                {
-                    screenTransition = true;
-                    startScreenFade = true;
-                }
-            }
-
-            // End state of the segment
-            if(cutsceneTimer >= 5.0f)
-            {
-                cutsceneTimer = 0.0f;
-                cutsceneCameraTimer = 0.0f;
-                cutsceneState = CUTSCENE_PHASE1_INTRO_END;
-                scene_init_cutscene();
-                return;
-            }
-
-        } break;
-        // Wait for boss to be activated before moving to the next state
-        case CUTSCENE_PHASE1_INTRO_END:{
-            float cameraMoveDuration = 10.0f;
-            float t = cutsceneCameraTimer / cameraMoveDuration;
-            if (t > 1.0f) t = 1.0f;  // Clamp to 1.0
-            
-            // Smooth interpolation (ease-in-out)
-            float easeT = t * t * (3.0f - 2.0f * t);
-            // Update camera position
-            customCamPos.v[0] = cutsceneCamPosStart.v[0] + (cutsceneCamPosEnd.v[0] - cutsceneCamPosStart.v[0]) * easeT;
-            customCamPos.v[1] = cutsceneCamPosStart.v[1] + (cutsceneCamPosEnd.v[1] - cutsceneCamPosStart.v[1]) * easeT;
-            customCamPos.v[2] = cutsceneCamPosStart.v[2] + (cutsceneCamPosEnd.v[2] - cutsceneCamPosStart.v[2]) * easeT;
-
-            //dialog_controller_update();
-
-            // End state of the segment
-            if(cutsceneTimer >= 10.0f)
-            {
-                cutsceneTimer = 0.0f;
-                cutsceneCameraTimer = 0.0f;
-                scene_init_playing(false);
-                return;
-            }
-
-
-        } break;
-        case CUTSCENE_PHASE2_INTRO: {
-            float cameraMoveDuration = 4.0f;
-            float t = cutsceneCameraTimer / cameraMoveDuration;
-            if (t > 1.0f) t = 1.0f;  // Clamp to 1.0
-            
-            // Smooth interpolation (ease-in-out)
-            float easeT = t * t * (3.0f - 2.0f * t);
-
-            // Update camera position
-            customCamPos.v[0] = cutsceneCamPosStart.v[0] + (cutsceneCamPosEnd.v[0] - cutsceneCamPosStart.v[0]) * easeT;
-            customCamPos.v[1] = cutsceneCamPosStart.v[1] + (cutsceneCamPosEnd.v[1] - cutsceneCamPosStart.v[1]) * easeT;
-            customCamPos.v[2] = cutsceneCamPosStart.v[2] + (cutsceneCamPosEnd.v[2] - cutsceneCamPosStart.v[2]) * easeT;
-
-            if(cutsceneTimer >= 7.0f)
-            {
-                cutsceneTimer = 0.0f;
-                cutsceneCameraTimer = 0.0f;
-                cutsceneState = CUTSCENE_PHASE2_KNEEL;
-                scene_init_cutscene();
-                return;
-            }
-
-        }break;
-        case CUTSCENE_PHASE2_KNEEL: {
-            //boss_anim_update(g_boss);
-            dialog_controller_update();
-            if(cutsceneTimer >= 7.0f)
-            {
-                cutsceneTimer = 0.0f;
-                cutsceneCameraTimer = 0.0f;
-                cutsceneState = CUTSCENE_PHASE2_BLURB;
-                scene_init_cutscene();
-                return;
-            }
-        } break;
-        case CUTSCENE_PHASE2_BLURB: {
-            float cameraMoveDuration = 5.0f;
-            float t = cutsceneCameraTimer / cameraMoveDuration;
-            if (t > 1.0f) t = 1.0f;  // Clamp to 1.0
-            
-            // Smooth interpolation (ease-in-out)
-            float easeT = t * t * (3.0f - 2.0f * t);
-
-            // Update camera position
-            customCamPos.v[0] = cutsceneCamPosStart.v[0] + (cutsceneCamPosEnd.v[0] - cutsceneCamPosStart.v[0]) * easeT;
-            customCamPos.v[1] = cutsceneCamPosStart.v[1] + (cutsceneCamPosEnd.v[1] - cutsceneCamPosStart.v[1]) * easeT;
-            customCamPos.v[2] = cutsceneCamPosStart.v[2] + (cutsceneCamPosEnd.v[2] - cutsceneCamPosStart.v[2]) * easeT;
-
-            dialog_controller_update();
-            if(cutsceneTimer >= 5.0f)
-            {
-                cutsceneTimer = 0.0f;
-                cutsceneCameraTimer = 0.0f;
-                cutsceneState = CUTSCENE_PHASE2_MIND;
-                scene_init_cutscene();
-                return;
-            }
-        }break;
-        case CUTSCENE_PHASE2_MIND: {
-            float cameraMoveDuration = 4.0f;
-            float t = cutsceneCameraTimer / cameraMoveDuration;
-            if (t > 1.0f) t = 1.0f;  // Clamp to 1.0
-            
-            // Smooth interpolation (ease-in-out)
-            float easeT = t * t * (3.0f - 2.0f * t);
-
-            // Update camera position
-            customCamPos.v[0] = cutsceneCamPosStart.v[0] + (cutsceneCamPosEnd.v[0] - cutsceneCamPosStart.v[0]) * easeT;
-            customCamPos.v[1] = cutsceneCamPosStart.v[1] + (cutsceneCamPosEnd.v[1] - cutsceneCamPosStart.v[1]) * easeT;
-            customCamPos.v[2] = cutsceneCamPosStart.v[2] + (cutsceneCamPosEnd.v[2] - cutsceneCamPosStart.v[2]) * easeT;
-
-            dialog_controller_update();
-            if(cutsceneTimer >= 4.0f)
-            {
-                cutsceneTimer = 0.0f;
-                cutsceneCameraTimer = 0.0f;
-                cutsceneState = CUTSCENE_PHASE2_SHACKLED_SUN;
-                scene_init_cutscene();
-                return;
-            }
-        }break;
-        case CUTSCENE_PHASE2_SHACKLED_SUN: {
-            float cameraMoveDuration = 8.0f;
-            float t = cutsceneCameraTimer / cameraMoveDuration;
-            if (t > 1.0f) t = 1.0f;  // Clamp to 1.0
-            
-            // Smooth interpolation (ease-in-out)
-            float easeT = t * t * (3.0f - 2.0f * t);
-
-            // Update camera position
-            customCamPos.v[0] = cutsceneCamPosStart.v[0] + (cutsceneCamPosEnd.v[0] - cutsceneCamPosStart.v[0]) * easeT;
-            customCamPos.v[1] = cutsceneCamPosStart.v[1] + (cutsceneCamPosEnd.v[1] - cutsceneCamPosStart.v[1]) * easeT;
-            customCamPos.v[2] = cutsceneCamPosStart.v[2] + (cutsceneCamPosEnd.v[2] - cutsceneCamPosStart.v[2]) * easeT;
-            
-            dialog_controller_update();
-            animation_utility_set_screen_shake_mag(0.1f);
-
-            if(cutsceneTimer >= 10.0f)
-            {
-                cutsceneTimer = 0.0f;
-                cutsceneCameraTimer = 0.0f;
-                cutsceneState = CUTSCENE_PHASE2_BURN;
-                scene_init_cutscene();
-                return;
-            }
-
-        } break;
-        case CUTSCENE_PHASE2_BURN: {
-            float cameraMoveDuration = 2.8f;
-            float t = cutsceneCameraTimer / cameraMoveDuration;
-            if (t > 1.0f) t = 1.0f;  // Clamp to 1.0
-            
-            // Smooth interpolation (ease-in-out)
-            float easeT = t * t * (3.0f - 2.0f * t);
-
-            // Update camera position
-            customCamPos.v[0] = cutsceneCamPosStart.v[0] + (cutsceneCamPosEnd.v[0] - cutsceneCamPosStart.v[0]) * easeT;
-            customCamPos.v[1] = cutsceneCamPosStart.v[1] + (cutsceneCamPosEnd.v[1] - cutsceneCamPosStart.v[1]) * easeT;
-            customCamPos.v[2] = cutsceneCamPosStart.v[2] + (cutsceneCamPosEnd.v[2] - cutsceneCamPosStart.v[2]) * easeT;
-
-            dialog_controller_update();
-
-            if(cutsceneTimer >= 2.8f)
-            {
-                cutsceneTimer = 0.0f;
-                cutsceneCameraTimer = 0.0f;
-                cutsceneState = CUTSCENE_PHASE2_BNW;
-                scene_init_cutscene();
-                return;
-            }
-        } break;
-
-        case CUTSCENE_PHASE2_BNW: {
-            t3d_anim_update(bnwChainsAnimations[currentBnwChainsAnimation], deltaTime);
-            t3d_skeleton_update(bnwChainsSkeleton);
-
-            float cameraMoveDuration = 15.0f;
-            float t = cutsceneCameraTimer / cameraMoveDuration;
-            if (t > 1.0f) t = 1.0f;  // Clamp to 1.0
-
-            const float spinSpeed = -20.0f; // radians/sec, tune
-            floorSpinBnwYaw += deltaTime * spinSpeed;
-            if (floorSpinBnwYaw > T3D_PI * 2.0f) floorSpinBnwYaw -= T3D_PI * 2.0f;
-
-            // rebuild fixed-point matrix: SRT (scale, rotEuler, translate)
-            t3d_mat4fp_from_srt_euler(
-                floorSpinBnwMatrix,
-                (float[3]){MODEL_SCALE, MODEL_SCALE, MODEL_SCALE},
-                (float[3]){0.0f, floorSpinBnwYaw, 0.0f},   // Y rotation ONLY
-                (float[3]){0.0f, roomY, 0.0f}
-            );
-
-            lightning_fx_system_update(deltaTime);
-            animation_utility_set_screen_shake_mag(0.2f);
-            dialog_controller_update();
-            // Smooth interpolation (ease-in-out)
-            float easeT = t * t * (3.0f - 2.0f * t);
-
-            // Update camera position
-            customCamPos.v[0] = cutsceneCamPosStart.v[0] + (cutsceneCamPosEnd.v[0] - cutsceneCamPosStart.v[0]) * easeT;
-            customCamPos.v[1] = cutsceneCamPosStart.v[1] + (cutsceneCamPosEnd.v[1] - cutsceneCamPosStart.v[1]) * easeT;
-            customCamPos.v[2] = cutsceneCamPosStart.v[2] + (cutsceneCamPosEnd.v[2] - cutsceneCamPosStart.v[2]) * easeT;
-            
-            // End state of the segment
-            if(cutsceneTimer >= 15.0f)
-            {
-                cutsceneTimer = 0.0f;
-                cutsceneCameraTimer = 0.0f;
-                cutsceneState = CUTSCENE_PHASE2_END;
-                scene_init_cutscene();
-                return;
-            }
-        }break;
-        case CUTSCENE_PHASE2_END: {
-            //t3d_anim_update(bossChainsAnimations[currentBossChainsAnimation], deltaTime);
-            //t3d_skeleton_update(bossChainsSkeleton);
-
-            float cameraMoveDuration = 10.0f;
-            float t = cutsceneCameraTimer / cameraMoveDuration;
-            if (t > 1.0f) t = 1.0f;  // Clamp to 1.0
-            
-            // Smooth interpolation (ease-in-out)
-            float easeT = t * t * (3.0f - 2.0f * t);
-
-            // Update camera position
-            customCamPos.v[0] = cutsceneCamPosStart.v[0] + (cutsceneCamPosEnd.v[0] - cutsceneCamPosStart.v[0]) * easeT;
-            customCamPos.v[1] = cutsceneCamPosStart.v[1] + (cutsceneCamPosEnd.v[1] - cutsceneCamPosStart.v[1]) * easeT;
-            customCamPos.v[2] = cutsceneCamPosStart.v[2] + (cutsceneCamPosEnd.v[2] - cutsceneCamPosStart.v[2]) * easeT;
-
-            if (cutsceneTimer >= 5.0f)
-            {
-                // keep x/z locked to boss each frame (optional but usually desired)
-                customCamTarget.v[0] = g_boss->pos[0];
-                customCamTarget.v[2] = g_boss->pos[2];
-
-                // smoothly move Y from +20 -> +37.9 over cameraMoveDuration using easeT
-                float y0 = g_boss->pos[1];
-                float y1 = g_boss->pos[1] + 37.9f;
-                customCamTarget.v[1] = y0 + (y1 - y0) * easeT;
-            }
-
-            if(cutsceneTimer >= 10.0f)
-            {
-                scene_finish_phase2_cutscene();
-                return;
-            }
-        } break;
         case CUTSCENE_POST_BOSS_RESTORED: {
-            // Post-boss dialog runs while gameplay continues to animate (no "paused time" feel).
-            // Player input stays disabled by `character_update()` while a cutscene is active.
+            // Post-boss dialog: keep the current gameplay camera position,
+            // but retarget it to face the boss.
+            cutsceneDialogActive = true;
+            bossPostDefeatDialogStep = 0;
+            skipButtonVisible = false;
+            lastCutsceneAPressed = false;
+
+            // Freeze character motion for the duration of this dialog so we don't coast afterward.
+            character_set_velocity_xz(0.0f, 0.0f);
+
+            // Keep current camera position and smoothly rotate to face the boss.
+            customCamPos = camPos;
+            customCamTarget = get_boss_lock_focus_point();
+            camera_mode_smooth(CAMERA_CUSTOM, 0.25f);
+
+            // Start the current chat's first line.
+            // bossPostDefeatChatIndex persists across cutscene entries.
+            const PostBossChat *chat = cutscene_manager_get_post_boss_chat(bossPostDefeatChatIndex);
+            dialog_controller_speak(chat->line1, 0, chat->holdSec, false, true);
+        } break;
+
+        default:
+            break;
+    }
+}
+
+static inline float ease_in_out(float x) {
+    if (x < 0.0f) x = 0.0f;
+    if (x > 1.0f) x = 1.0f;
+    return x * x * (3.0f - 2.0f * x);
+}
+
+static void scene_update_cutscene_skip(void)
+{
+    if (cutsceneState == CUTSCENE_POST_BOSS_RESTORED) {
+        skipButtonVisible = false;
+        lastCutsceneAPressed = btn.a;
+        return;
+    }
+
+    bool aCurrentlyPressed = btn.a;
+    bool aJustPressed = aCurrentlyPressed && !lastCutsceneAPressed;
+
+    if (aJustPressed) {
+        if (!skipButtonVisible) {
+            skipButtonVisible = true;
+        } else {
+            if (cutscene_guardian_phase1_handles(cutsceneState)) {
+                cutscene_guardian_phase1_skip(&sceneContext);
+                return;
+            }
+
+            if (cutscene_guardian_phase2_handles(cutsceneState)) {
+                cutscene_guardian_phase2_skip(&sceneContext);
+                return;
+            }
+        }
+    }
+
+    lastCutsceneAPressed = aCurrentlyPressed;
+}
+
+void scene_cutscene_update(void)
+{
+    scene_update_context();
+
+    if (cutscene_guardian_phase1_handles(cutsceneState)) {
+        cutscene_guardian_phase1_update(&sceneContext, deltaTime);
+        scene_update_cutscene_skip();
+        return;
+    }
+
+    if (cutscene_guardian_phase2_handles(cutsceneState)) {
+        cutscene_guardian_phase2_update(&sceneContext, deltaTime);
+        scene_update_cutscene_skip();
+        return;
+    }
+
+    switch (cutsceneState) {
+        case CUTSCENE_POST_BOSS_RESTORED: {
+            // Post-boss dialog runs while gameplay continues to animate.
+            // Player input stays disabled by character_update() while a cutscene is active.
             character_update();
             character_update_position();
 
@@ -2391,31 +1638,33 @@ void scene_cutscene_update()
 
             collision_update();
 
-            // Run dialog sequence (2 lines) then return to gameplay
-            // Allow A/Start to advance immediately to the next line (or end).
+            // Allow A/Start to advance immediately to the next line or end.
             if (dialog_controller_speaking() && (btn.a || btn.start)) {
                 dialog_controller_skip();
             }
+
             dialog_controller_update();
 
             if (!dialog_controller_speaking()) {
                 const PostBossChat *chat = cutscene_manager_get_post_boss_chat(bossPostDefeatChatIndex);
 
                 if (bossPostDefeatDialogStep == 0 && chat->line2) {
-                    // Multi-line chat: play the second line.
                     bossPostDefeatDialogStep = 1;
-                    dialog_controller_speak(chat->line2, 0, chat->holdSec, false, true);
+
+                    dialog_controller_speak(
+                        chat->line2,
+                        0,
+                        chat->holdSec,
+                        false,
+                        true
+                    );
                 } else {
-                    // Chat finished — advance index for the next A-press, capped at the last entry.
-                    // TODO: when Phase 3 is implemented, fire it here on the transition into the
-                    // final chat (e.g. when bossPostDefeatChatIndex reaches count - 1). For now
-                    // the final line is dialog-only and replays if the player keeps pressing A.
                     int count = cutscene_manager_post_boss_chat_count();
+
                     if (bossPostDefeatChatIndex < count - 1) {
                         bossPostDefeatChatIndex++;
                     }
 
-                    // Finish: return to gameplay.
                     cutsceneDialogActive = false;
                     cutsceneState = CUTSCENE_NONE;
                     cutsceneTimer = 0.0f;
@@ -2424,65 +1673,20 @@ void scene_cutscene_update()
 
                     camera_mode_smooth(CAMERA_CHARACTER, 0.8f);
 
-                    // Ensure we don't carry any stored motion into gameplay.
                     character_set_velocity_xz(0.0f, 0.0f);
 
-                    // Consume any lingering button edges so we don't immediately roll/act on the first gameplay frame.
                     character_reset_button_state();
                     scene_sync_input_edge_state();
                     return;
                 }
             }
         } break;
+
         default:
             break;
     }
 
-    // Handle cutscene skip. Post-boss dialog is not skippable via this mechanic;
-    // phase 1 intro skips back to the start of gameplay, phase 2 cutscenes skip
-    // straight into the start of the phase 2 fight.
-    bool isPhase2Cutscene = (cutsceneState == CUTSCENE_PHASE2_INTRO
-                          || cutsceneState == CUTSCENE_PHASE2_KNEEL
-                          || cutsceneState == CUTSCENE_PHASE2_BLURB
-                          || cutsceneState == CUTSCENE_PHASE2_MIND
-                          || cutsceneState == CUTSCENE_PHASE2_SHACKLED_SUN
-                          || cutsceneState == CUTSCENE_PHASE2_BURN
-                          || cutsceneState == CUTSCENE_PHASE2_BNW
-                          || cutsceneState == CUTSCENE_PHASE2_END);
-    if (cutsceneState != CUTSCENE_POST_BOSS_RESTORED) {
-        // toggle button on first A press, skip on second
-        bool aCurrentlyPressed = btn.a;
-        bool aJustPressed = aCurrentlyPressed && !lastCutsceneAPressed;
-
-        if (aJustPressed)
-        {
-            if (!skipButtonVisible)
-            {
-                // First press - show the skip button
-                skipButtonVisible = true;
-            }
-            else
-            {
-                // Second press - skip the cutscene
-                if (isPhase2Cutscene) {
-                    scene_finish_phase2_cutscene();
-                } else {
-                    skipButtonVisible = false;
-                    cutsceneTimer = 0.0f;
-                    cutsceneCameraTimer = 0.0f;
-                    scene_init_playing(true);
-                }
-                return;
-            }
-        }
-
-        // Update last state for next frame
-        lastCutsceneAPressed = aCurrentlyPressed;
-    } else {
-        // Keep skip state hidden during post-boss dialog
-        skipButtonVisible = false;
-        lastCutsceneAPressed = btn.a;
-    }
+    scene_update_cutscene_skip();
 }
 
 void scene_update_title(void)
@@ -3563,707 +2767,115 @@ void scene_draw_title(T3DViewport *viewport)
         cutscene_manager_draw_skip_overlay();
     }
 }
+void scene_draw_cutscene(void)
+{
+    scene_update_context();
 
-void scene_draw_cutscene(){
+    if (cutscene_guardian_phase1_handles(cutsceneState)) {
+        cutscene_guardian_phase1_draw(&sceneContext, NULL);
+        return;
+    }
 
-    switch(cutsceneState){
+    if (cutscene_guardian_phase2_handles(cutsceneState)) {
+        cutscene_guardian_phase2_draw(&sceneContext, NULL);
+        return;
+    }
+
+    switch (cutsceneState) {
         case CUTSCENE_POST_BOSS_RESTORED: {
-            // Render the normal scene while the post-boss dialog is active.
-            // This avoids a black screen (this cutscene is camera/dialog only).
+            /*
+             * Render the normal scene while the post-boss dialog is active.
+             * This avoids a black screen because this cutscene is camera/dialog only.
+             */
+
             rdpq_sync_pipe();
             rdpq_mode_zbuf(false, false);
 
-            // Draw no depth environment first
+            // No-depth environment first.
             t3d_matrix_push_pos(1);
-                t3d_matrix_set(windowsMatrix, true);
-                rspq_block_run(windowsDpl);
+                if (windowsMatrix && windowsDpl) {
+                    t3d_matrix_set(windowsMatrix, true);
+                    rspq_block_run(windowsDpl);
+                }
 
-                t3d_matrix_set(mapMatrix, true);
-                rspq_block_run(mapDpl);
+                if (mapMatrix && mapDpl) {
+                    t3d_matrix_set(mapMatrix, true);
+                    rspq_block_run(mapDpl);
+                }
             t3d_matrix_pop(1);
 
-            // Floor
+            // Floor.
             rdpq_sync_pipe();
             rdpq_mode_zbuf(true, true);
+
             t3d_matrix_push_pos(1);
-                t3d_matrix_set(roomFloorMatrix, true);
-                rspq_block_run(roomFloorDpl);
+                if (roomFloorMatrix && roomFloorDpl) {
+                    t3d_matrix_set(roomFloorMatrix, true);
+                    rspq_block_run(roomFloorDpl);
+                }
             t3d_matrix_pop(1);
 
-            // Shadows
+            // Shadows.
             rdpq_sync_pipe();
             rdpq_mode_zbuf(false, false);
+
             t3d_matrix_push_pos(1);
                 character_draw_shadow();
+
                 if (g_boss) {
                     boss_draw_shadow(g_boss);
                 }
             t3d_matrix_pop(1);
 
-            // Room pieces
+            // Room pieces.
             rdpq_sync_pipe();
             rdpq_mode_zbuf(true, true);
+
             t3d_matrix_push_pos(1);
-                t3d_matrix_set(roomLedgeMatrix, true);
-                rspq_block_run(roomLedgeDpl);
+                if (roomLedgeMatrix && roomLedgeDpl) {
+                    t3d_matrix_set(roomLedgeMatrix, true);
+                    rspq_block_run(roomLedgeDpl);
+                }
 
-                t3d_matrix_set(pillarsMatrix, true);
-                rspq_block_run(pillarsDpl);
+                if (pillarsMatrix && pillarsDpl) {
+                    t3d_matrix_set(pillarsMatrix, true);
+                    rspq_block_run(pillarsDpl);
+                }
 
-                t3d_matrix_set(pillarsFrontMatrix, true);
-                rspq_block_run(pillarsFrontDpl);
+                if (pillarsFrontMatrix && pillarsFrontDpl) {
+                    t3d_matrix_set(pillarsFrontMatrix, true);
+                    rspq_block_run(pillarsFrontDpl);
+                }
             t3d_matrix_pop(1);
 
-            // Characters
+            // Characters.
             t3d_matrix_push_pos(1);
                 character_draw();
+
                 if (g_boss) {
                     boss_draw(g_boss);
                 }
             t3d_matrix_pop(1);
 
-            // Optional chains (keep consistency with gameplay)
+            // Persistent gameplay chains only.
+            // cinematicChains moved into cutscene_guardian_phase1.c and should not be referenced here.
             t3d_matrix_push_pos(1);
-                if (cinematicChainsVisible) {
-                    t3d_matrix_set(cinematicChainsMatrix, true);
-                    rspq_block_run(cinematicChainsDpl);
+                if (chainsMatrix && chainsDpl) {
+                    t3d_matrix_set(chainsMatrix, true);
+                    rspq_block_run(chainsDpl);
                 }
-                t3d_matrix_set(chainsMatrix, true);
-                rspq_block_run(chainsDpl);
             t3d_matrix_pop(1);
 
-            // 2D dialog overlay (same style/placement as other cutscenes)
-            int height = 70;
-            int width = 220;
-            int x = (SCREEN_WIDTH - width) / 2;
+            // 2D dialog overlay.
             if (cutsceneDialogActive) {
-                int y = 240 - height - 10;
-                dialog_controller_draw(false, x, y, width, height);
-            }
-
-        } break;
-        case CUTSCENE_PHASE2_MIND:{
-            rdpq_sync_pipe();
-            rdpq_mode_zbuf(false, false);
-
-            // Draw no depth environment first
-            t3d_matrix_push_pos(1);
-                // t3d_matrix_set(windowsMatrix, true);
-                // rspq_block_run(windowsDpl);
-
-                t3d_matrix_set(mapMatrix, true);
-                rspq_block_run(mapDpl);
-
-
-                t3d_matrix_set(roomFloorMatrix, true);
-                rspq_block_run(roomFloorDpl);
-
-                t3d_matrix_set(roomLedgeMatrix, true);
-                rspq_block_run(roomLedgeDpl);
-
-                t3d_matrix_set(pillarsMatrix, true);
-                rspq_block_run(pillarsDpl);
-
-            t3d_matrix_pop(1);
-    
-            rdpq_sync_pipe();
-            rdpq_mode_zbuf(true, true);
-            
-            t3d_matrix_push_pos(1);
-                if (g_boss) {
-                    boss_draw(g_boss);
-                }
-            t3d_matrix_pop(1);
-
-            rdpq_sync_pipe();
-            rdpq_mode_zbuf(false, false);
-
-            t3d_matrix_push_pos(1);   
-                //Draw transparencies last
-                t3d_matrix_set(sunshaftsMatrix, true);
-                rspq_block_run(sunshaftsDpl);
-
-                t3d_matrix_set(pillarsFrontMatrix, true);
-                rspq_block_run(pillarsFrontDpl);
-
-            t3d_matrix_pop(1); 
-            
-            if(cutsceneTimer >= 2){
-                if(screenTransition)
-                {
-                    display_utility_solid_black_transition(false, 200.0f);
-                }
-            }
-
-            int height = 70;
-            int width = 220;
-            int x = (SCREEN_WIDTH - width) / 2;
-            if(cutsceneDialogActive)
-            {
-                int y = 240 - height - 10; 
-                dialog_controller_draw(false, x, y, width, height);
-            }
-        }break;
-        case CUTSCENE_PHASE2_KNEEL:
-        case CUTSCENE_PHASE2_BLURB:
-        case CUTSCENE_PHASE2_BURN:
-        case CUTSCENE_PHASE2_INTRO:{
-            rdpq_sync_pipe();
-            rdpq_mode_zbuf(false, false);
-
-            // Draw no depth environment first
-            t3d_matrix_push_pos(1);
-                // t3d_matrix_set(windowsMatrix, true);
-                // rspq_block_run(windowsDpl);
-
-                t3d_matrix_set(mapMatrix, true);
-                rspq_block_run(mapDpl);
-
-
-                t3d_matrix_set(roomFloorMatrix, true);
-                rspq_block_run(roomFloorDpl);
-
-                t3d_matrix_set(roomLedgeMatrix, true);
-                rspq_block_run(roomLedgeDpl);
-
-                t3d_matrix_set(pillarsMatrix, true);
-                rspq_block_run(pillarsDpl);
-
-            t3d_matrix_pop(1);
-    
-            rdpq_sync_pipe();
-            rdpq_mode_zbuf(true, true);
-            
-            t3d_matrix_push_pos(1);
-                if (g_boss) {
-                    boss_draw(g_boss);
-                }
-            t3d_matrix_pop(1);
-
-            rdpq_sync_pipe();
-            rdpq_mode_zbuf(false, false);
-
-            t3d_matrix_push_pos(1);   
-                //Draw transparencies last
-                t3d_matrix_set(sunshaftsMatrix, true);
-                rspq_block_run(sunshaftsDpl);
-
-                t3d_matrix_set(pillarsFrontMatrix, true);
-                rspq_block_run(pillarsFrontDpl);
-
-            t3d_matrix_pop(1); 
-
-            int height = 70;
-            int width = 220;
-            int x = (SCREEN_WIDTH - width) / 2;
-            if(cutsceneDialogActive)
-            {
-                int y = 240 - height - 10; 
-                dialog_controller_draw(false, x, y, width, height);
-            }
-
-        } break;
-        case CUTSCENE_PHASE2_SHACKLED_SUN:{
-            rdpq_sync_pipe();
-            rdpq_mode_zbuf(false, false);
-
-            // Draw no depth environment first
-            t3d_matrix_push_pos(1);
-                t3d_matrix_set(shackledSunGlowMatrix, true);
-                t3d_model_draw_custom(shackledSunGlowModel, (T3DModelDrawConf){
-                    .userData = &shackledSunGlowScrollParams,
-                    .tileCb = tile_scroll,
-                });
-            t3d_matrix_pop(1);
-
-            t3d_matrix_push_pos(1);   
-
-                t3d_matrix_set(shackles2Matrix, true);
-                t3d_model_draw_custom(shacklesModel, (T3DModelDrawConf){
-                    .userData = &shacklesScrollParams,
-                    .tileCb = tile_scroll,
-                });
-
-                t3d_matrix_set(shackledSunMatrix, true);
-                rspq_block_run(shackledSunDpl);
-
-                t3d_matrix_set(shacklesMatrix, true);
-                t3d_model_draw_custom(shacklesModel, (T3DModelDrawConf){
-                    .userData = &shacklesScrollParams,
-                    .tileCb = tile_scroll,
-                });
-
-            t3d_matrix_pop(1);
-
-            if(screenTransition)
-            {
-                display_utility_solid_black_transition(true, 100.0f);
-            }
-
-            int height = 70;
-            int width = 220;
-            int x = (SCREEN_WIDTH - width) / 2;
-            if(cutsceneDialogActive)
-            {
-                int y = 240 - height - 10; 
-                dialog_controller_draw(false, x, y, width, height);
-            }
-        } break;
-        case CUTSCENE_PHASE2_BNW:{
-            rdpq_sync_pipe();
-            rdpq_mode_zbuf(true, true);
-
-            // const color_t prim = lightning_fx_system_is_lit()
-            //     ? RGBA32(255,255,255,255)
-            //     : RGBA32(0,0,0,255);
-
-            // Draw no depth environment first
-
-            rdpq_set_prim_color(RGBA32(0,0,0,255));
-            t3d_matrix_push_pos(1);
-                t3d_matrix_set(bnwBossMatrix, true);
-                rspq_block_run(bnwBossDpl);
-            t3d_matrix_pop(1);
-
-            rdpq_set_prim_color(RGBA32(0,0,0,255));
-            t3d_matrix_push_pos(1);
-                t3d_matrix_set(bnwChainsMatrix, true);
-                rspq_block_run(bnwChainsDpl);
-            t3d_matrix_pop(1);
-
-            rdpq_set_prim_color(RGBA32(0,0,0,255));
-            t3d_matrix_push_pos(1);
-                t3d_matrix_set(floorSpinBnwMatrix, true);
-                rspq_block_run(floorSpinBnwDpl);
-
-                rdpq_set_prim_color(RGBA32(0,0,0,255));
-                t3d_matrix_set(floorGlowBnwMatrix, true);
-                // Create a struct to pass the scrolling parameters to the tile callback
-                t3d_model_draw_custom(floorGlowBnwModel, (T3DModelDrawConf){
-                    .userData = &floorGlowBnwScrollParams,
-                    .tileCb = tile_scroll,
-                });
-            t3d_matrix_pop(1);
-
-            lightning_fx_system_draw();
-
-            //==== Draw 2D ====
-            rdpq_sync_pipe();
-            if(cutsceneTimer >= 12)
-            {
-                if(screenTransition)
-                {
-                    display_utility_solid_black_transition(false, 150.0f);
-                }
-            }
-
-            if(cutsceneTimer <= 9.0f)
-            {
                 int height = 70;
                 int width = 220;
                 int x = (SCREEN_WIDTH - width) / 2;
-                
-                if(cutsceneDialogActive)
-                {
-                    int y = 240 - height - 10; 
-                    dialog_controller_draw(false, x, y, width, height);
-                }
-            }
-        } break;
-        case CUTSCENE_PHASE2_END:{
-            rdpq_sync_pipe();
-            rdpq_mode_zbuf(false, false);
+                int y = 240 - height - 10;
 
-            // Draw no depth environment first
-            t3d_matrix_push_pos(1);
-                // t3d_matrix_set(windowsMatrix, true);
-                // rspq_block_run(windowsDpl);
-
-                t3d_matrix_set(mapMatrix, true);
-                rspq_block_run(mapDpl);
-
-
-                t3d_matrix_set(roomFloorMatrix, true);
-                rspq_block_run(roomFloorDpl);
-
-                t3d_matrix_set(roomLedgeMatrix, true);
-                rspq_block_run(roomLedgeDpl);
-
-                t3d_matrix_set(pillarsMatrix, true);
-                rspq_block_run(pillarsDpl);
-
-                t3d_matrix_set(bossChainsGlowMatrix, true);
-                // Create a struct to pass the scrolling parameters to the tile callback
-                t3d_model_draw_custom(bossChainsGlowModel, (T3DModelDrawConf){
-                    .userData = &bossChainsGlowScrollParams,
-                    .tileCb = tile_scroll,
-                });
-
-            t3d_matrix_pop(1);
-    
-            rdpq_sync_pipe();
-            rdpq_mode_zbuf(true, true);
-            
-            t3d_matrix_push_pos(1);
-                if (g_boss) {
-                    boss_draw(g_boss);
-                }
-
-                //t3d_matrix_set(bossChainsMatrix, true);
-                //rspq_block_run(bossChainsDpl);
-
-            t3d_matrix_pop(1);
-
-            rdpq_sync_pipe();
-            rdpq_mode_zbuf(false, false);
-
-            t3d_matrix_push_pos(1);   
-                // t3d_matrix_set(pillarsFrontMatrix, true);
-                // rspq_block_run(pillarsFrontDpl);
-
-                if (g_boss) {
-                    boss_draw_shadow(g_boss);
-                }
-                //Draw transparencies last
-                t3d_matrix_set(sunshaftsMatrix, true);
-                rspq_block_run(sunshaftsDpl);
-
-                
-            t3d_matrix_pop(1); 
-
-            if(screenTransition)
-            {
-                display_utility_solid_black_transition(true, 100.0f);
-            }
-
-        } break;
-        case CUTSCENE_PHASE1_INTRO:
-            rdpq_sync_pipe();
-            rdpq_mode_zbuf(false, false);
-
-            // Draw no depth environment first
-            t3d_matrix_push_pos(1);
-                // t3d_matrix_set(windowsMatrix, true);
-                // rspq_block_run(windowsDpl);
-
-                t3d_matrix_set(mapMatrix, true);
-                rspq_block_run(mapDpl);
-
-
-                t3d_matrix_set(roomFloorMatrix, true);
-                rspq_block_run(roomFloorDpl);
-
-                t3d_matrix_set(roomLedgeMatrix, true);
-                rspq_block_run(roomLedgeDpl);
-
-                if (g_boss) {
-                    boss_draw(g_boss);
-                }
-                t3d_matrix_set(pillarsMatrix, true);
-                rspq_block_run(pillarsDpl);
-
-            t3d_matrix_pop(1);
-    
-            t3d_matrix_push_pos(1);   
-                //Draw transparencies last
-                t3d_matrix_set(sunshaftsMatrix, true);
-                rspq_block_run(sunshaftsDpl);
-
-                t3d_matrix_set(cinematicChainsMatrix, true);
-                rspq_block_run(cinematicChainsDpl);
-
-                t3d_matrix_set(chainsMatrix, true);
-                rspq_block_run(chainsDpl);
-
-                t3d_matrix_set(pillarsFrontMatrix, true);
-                rspq_block_run(pillarsFrontDpl);
-
-            t3d_matrix_pop(1); 
-
-            //==== Draw 2D ====
-            rdpq_sync_pipe();
-            if(screenTransition)
-            {
-                display_utility_solid_black_transition(true, 100.0f);
-            }
-            break;
-        case CUTSCENE_PHASE1_CHAIN_CLOSEUP:
-            rdpq_sync_pipe();
-            rdpq_mode_zbuf(false, false);
-
-            // Draw no depth environment first
-            t3d_matrix_push_pos(1);
-
-                t3d_matrix_set(mapMatrix, true);
-                rspq_block_run(mapDpl);
-
-
-                t3d_matrix_set(roomFloorMatrix, true);
-                rspq_block_run(roomFloorDpl);
-
-                t3d_matrix_set(pillarsMatrix, true);
-                rspq_block_run(pillarsDpl);
-
-                if (g_boss) {
-                    boss_draw(g_boss);
-                }
-            t3d_matrix_pop(1);
-
-            t3d_matrix_push_pos(1);   
-                //Draw transparencies last
-                t3d_matrix_set(sunshaftsMatrix, true);
-                rspq_block_run(sunshaftsDpl);
-
-                t3d_matrix_set(cinematicChainsMatrix, true);
-                rspq_block_run(cinematicChainsDpl);
-            t3d_matrix_pop(1); 
-
-            break;
-        case CUTSCENE_PHASE1_SWORDS_CLOSEUP:
-            rdpq_sync_pipe();
-            rdpq_mode_zbuf(false, false);
-
-            // Draw no depth environment first
-            t3d_matrix_push_pos(1);
-                t3d_matrix_set(windowsMatrix, true);
-                rspq_block_run(windowsDpl);
-
-                t3d_matrix_set(mapMatrix, true);
-                rspq_block_run(mapDpl);
-
-                t3d_matrix_set(pillarsMatrix, true);
-                rspq_block_run(pillarsDpl);
-
-            t3d_matrix_pop(1);
-
-            rdpq_sync_pipe();
-            rdpq_mode_zbuf(true, true);
-
-            t3d_matrix_push_pos(1);
-                t3d_matrix_set(roomFloorMatrix, true);
-                rspq_block_run(roomFloorDpl);
-
-                if (g_boss) {
-                    boss_draw(g_boss);
-                }
-            t3d_matrix_pop(1);
-
-            rdpq_sync_pipe();
-            rdpq_mode_zbuf(false, false);
-
-            t3d_matrix_push_pos(1);   
-
-                t3d_matrix_set(chainsMatrix, true);
-                rspq_block_run(chainsDpl);
-                //Draw transparencies last
-                t3d_matrix_set(sunshaftsMatrix, true);
-                rspq_block_run(sunshaftsDpl);
-
-                t3d_matrix_set(cinematicChainsMatrix, true);
-                rspq_block_run(cinematicChainsDpl);
-            t3d_matrix_pop(1); 
-            break;
-        case CUTSCENE_PHASE1_FILLER: {
-            rdpq_sync_pipe();
-            rdpq_mode_zbuf(false, false);
-
-            // Draw no depth environment first
-            t3d_matrix_push_pos(1);
-                // t3d_fog_set_range(450.0f, 800.0f);
-                // t3d_matrix_set(windowsMatrix, true);
-                // rspq_block_run(windowsDpl);
-                // //t3d_fog_set_range(30.0f, 50.0f);
-                // t3d_matrix_set(mapMatrix, true);
-                // rspq_block_run(mapDpl);
-
-                t3d_matrix_set(cinematicChainsMatrix, true);
-                rspq_block_run(cinematicChainsDpl);
-
-                t3d_matrix_set(sunshaftsMatrix, true);
-                rspq_block_run(sunshaftsDpl);
-            t3d_matrix_pop(1);
-
-            rdpq_sync_pipe();
-            rdpq_mode_zbuf(true, true);
-
-            // Draw no depth environment first
-            t3d_matrix_push_pos(1);
-                t3d_matrix_set(roomFloorMatrix, true);
-                rspq_block_run(roomFloorDpl);
-
-                if (g_boss) {
-                    boss_draw(g_boss);
-                }
-            t3d_matrix_pop(1); 
-
-            // 2D
-
-            // Draw dialog on top of everything
-            int height = 70;
-            int width = 220;
-            int x = (SCREEN_WIDTH - width) / 2;
-            // bottom positioning
-            if(cutsceneDialogActive)
-            {
-                int y = 240 - height - 10; 
-                dialog_controller_draw(false, x, y, width, height);
-            }
-
-        } break;
-        case CUTSCENE_PHASE1_LOYALTY: {
-            rdpq_sync_pipe();
-            rdpq_mode_zbuf(true, true);
-
-            t3d_matrix_push_pos(1);
-                t3d_matrix_set(roomFloorMatrix, true);
-                rspq_block_run(roomFloorDpl);
-                if (g_boss) {
-                    boss_draw(g_boss);
-                }
-            t3d_matrix_pop(1);
-
-            // Draw dialog on top of everything
-            int height = 70;
-            int width = 220;
-            int x = (SCREEN_WIDTH - width) / 2;
-            // bottom positioning
-            if(cutsceneDialogActive)
-            {
-                int y = 240 - height - 10; 
                 dialog_controller_draw(false, x, y, width, height);
             }
         } break;
-        case CUTSCENE_PHASE1_FEAR:{
-            rdpq_sync_pipe();
-            rdpq_mode_zbuf(false, false);
-
-            // Draw no depth environment first
-            t3d_matrix_push_pos(1);
-                t3d_matrix_set(roomFloorMatrix, true);
-                rspq_block_run(roomFloorDpl);
-            t3d_matrix_pop(1);
-
-            rdpq_sync_pipe();
-            rdpq_mode_zbuf(true, true);
-
-            t3d_matrix_push_pos(1);
-                if (g_boss) {
-                    boss_draw(g_boss);
-                }
-            t3d_matrix_pop(1);
-
-            // Draw dialog on top of everything
-            int height = 70;
-            int width = 220;
-            int x = (SCREEN_WIDTH - width) / 2;
-            // bottom positioning
-            if(cutsceneDialogActive)
-            {
-                int y = 240 - height - 10; 
-                dialog_controller_draw(false, x, y, width, height);
-            }
-
-            rdpq_sync_pipe();
-            if(screenTransition)
-            {
-                display_utility_solid_black_transition(false, 200.0f);
-            }
-
-        } break;
-
-        case CUTSCENE_PHASE1_BREAK_CHAINS:{
-            rdpq_sync_pipe();
-            rdpq_mode_zbuf(false, false);
-            
-            // Draw no depth environment first
-            t3d_matrix_push_pos(1);
-                cutscene_manager_chain_break_draw();
-            t3d_matrix_pop(1);
-
-            rdpq_sync_pipe(); // idk if it's needed but there was a crash here
-            if(screenTransition)
-            {
-                display_utility_solid_black_transition(false, 200.0f);
-            }
-
-        } break;
-
-        case CUTSCENE_PHASE1_INTRO_END:
-            rdpq_sync_pipe();
-            rdpq_mode_zbuf(false, false);
-
-            // Draw no depth environment first
-            t3d_matrix_push_pos(1);
-                // t3d_matrix_set(windowsMatrix, true);
-                // rspq_block_run(windowsDpl);
-
-                t3d_matrix_set(mapMatrix, true);
-                rspq_block_run(mapDpl);
-
-                t3d_matrix_set(roomLedgeMatrix, true);
-                rspq_block_run(roomLedgeDpl);
-
-                t3d_matrix_set(pillarsMatrix, true);
-                rspq_block_run(pillarsDpl);
-
-            t3d_matrix_pop(1);
-    
-            rdpq_sync_pipe();
-            rdpq_mode_zbuf(true, true);
-
-            t3d_matrix_push_pos(1);
-                t3d_matrix_set(roomFloorMatrix, true);
-                rspq_block_run(roomFloorDpl);
-                if (g_boss) {
-                    boss_draw(g_boss);
-                }
-
-                t3d_matrix_set(cinematicChainsMatrix, true);
-                rspq_block_run(cinematicChainsDpl);
-            t3d_matrix_pop(1);
-
-            rdpq_sync_pipe();
-            rdpq_mode_zbuf(false, false);
-
-            t3d_matrix_push_pos(1);   
-                //Draw transparencies last
-                // t3d_matrix_set(sunshaftsMatrix, true);
-                // rspq_block_run(sunshaftsDpl);
-
-                t3d_matrix_set(chainsMatrix, true);
-                rspq_block_run(chainsDpl);
-
-                if (g_boss) {
-                    boss_draw_shadow(g_boss);
-                }
-
-            t3d_matrix_pop(1); 
-
-            //==== Draw 2D ====
-            rdpq_sync_pipe();
-
-            rdpq_set_mode_standard();
-            rdpq_mode_blender(RDPQ_BLENDER_MULTIPLY);
-            rdpq_set_prim_color(RGBA32(0,0,0,120));
-            rdpq_mode_combiner(RDPQ_COMBINER_FLAT);
-            
-            int barWidth = 195;
-            int barHeight = 23;
-            int barTop = 35;
-            int barLeft = (SCREEN_WIDTH - barWidth) / 2;
-            rdpq_fill_rectangle(barLeft, barTop, barLeft + barWidth, barTop + barHeight);
-
-            rdpq_set_prim_color(RGBA32(255, 255, 255, 255));
-            rdpq_text_printf(&(rdpq_textparms_t){
-                .align = ALIGN_CENTER,
-                .width = SCREEN_WIDTH,
-            }, FONT_UNBALANCED, 0, 50, "%s", g_boss->name);
-
-            if(screenTransition)
-            {
-                display_utility_solid_black_transition(true, 100.0f);
-            }
-            break;
 
         default:
             break;

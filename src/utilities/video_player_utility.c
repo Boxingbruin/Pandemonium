@@ -24,7 +24,7 @@
 #include "globals.h"
 #include "audio_controller.h"
 #include "scene.h"
-#include "cutscene_manager.h"
+#include "../managers/cutscene_manager.h"
 #include "dev.h"
 
 /*
