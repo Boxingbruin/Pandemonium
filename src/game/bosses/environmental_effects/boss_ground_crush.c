@@ -7,6 +7,8 @@
 #include <t3d/t3d.h>
 #include <t3d/t3dmodel.h>
 
+#include "../../../utilities/globals.h"
+
 typedef struct {
     bool active;
 
@@ -21,31 +23,28 @@ typedef struct {
 static BossGroundCrush groundCrush;
 
 static T3DModel *groundCrushModel = NULL;
-static rspq_block_t *dplGroundCrush = NULL;
 
 void boss_ground_crush_init(void)
 {
     memset(&groundCrush, 0, sizeof(groundCrush));
 
     groundCrush.mat = malloc_uncached(sizeof(T3DMat4FP));
+    groundCrush.scale = MODEL_SCALE;
 
     groundCrushModel = t3d_model_load("rom:/boss/ground_crush.t3dm");
-
-    rspq_block_begin();
-        t3d_model_draw(groundCrushModel);
-    dplGroundCrush = rspq_block_end();
 }
 
 void boss_ground_crush_reset(void)
 {
     groundCrush.active = false;
-    groundCrush.age = 0.0f;
-    groundCrush.life = 0.0f;
-    groundCrush.scale = 1.0f;
 
     groundCrush.pos[0] = 0.0f;
     groundCrush.pos[1] = 0.0f;
     groundCrush.pos[2] = 0.0f;
+
+    groundCrush.age = 0.0f;
+    groundCrush.life = 0.0f;
+    groundCrush.scale = MODEL_SCALE;
 }
 
 void boss_ground_crush_spawn(float x, float y, float z)
@@ -58,7 +57,7 @@ void boss_ground_crush_spawn(float x, float y, float z)
 
     groundCrush.age = 0.0f;
     groundCrush.life = 3.0f;
-    groundCrush.scale = 1.0f;
+    groundCrush.scale = MODEL_SCALE;
 }
 
 void boss_ground_crush_update(float dt)
@@ -67,7 +66,7 @@ void boss_ground_crush_update(float dt)
 
     groundCrush.age += dt;
 
-    if (groundCrush.age >= groundCrush.life) {
+    if (groundCrush.age > groundCrush.life) {
         groundCrush.active = false;
     }
 }
@@ -75,7 +74,7 @@ void boss_ground_crush_update(float dt)
 void boss_ground_crush_draw(void)
 {
     if (!groundCrush.active) return;
-    if (!groundCrush.mat || !dplGroundCrush) return;
+    if (!groundCrush.mat || !groundCrushModel) return;
 
     float alpha = 1.0f;
 
@@ -98,10 +97,11 @@ void boss_ground_crush_draw(void)
         (float[3]){ groundCrush.pos[0], groundCrush.pos[1], groundCrush.pos[2] }
     );
 
+    t3d_matrix_set(groundCrush.mat, true);
+
     rdpq_set_prim_color(RGBA32(255, 255, 255, a));
 
-    t3d_matrix_set(groundCrush.mat, true);
-    rspq_block_run(dplGroundCrush);
+    t3d_model_draw(groundCrushModel);
 }
 
 void boss_ground_crush_cleanup(void)
@@ -109,11 +109,6 @@ void boss_ground_crush_cleanup(void)
     if (groundCrush.mat) {
         free_uncached(groundCrush.mat);
         groundCrush.mat = NULL;
-    }
-
-    if (dplGroundCrush) {
-        rspq_block_free(dplGroundCrush);
-        dplGroundCrush = NULL;
     }
 
     if (groundCrushModel) {
