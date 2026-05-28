@@ -31,11 +31,4 @@ extern bool lastCutsceneAPressed;
 extern int  bossPostDefeatDialogStep;
 extern int  bossPostDefeatChatIndex;
 
-// PHASE1_BREAK_CHAINS asset.
-extern T3DModel*     cutsceneChainBreakModel;
-extern rspq_block_t* cutsceneChainBreakDpl;
-extern T3DMat4FP*    cutsceneChainBreakMatrix;
-extern T3DSkeleton*  cutsceneChainBreakSkeleton;
-extern T3DAnim**     cutsceneChainBreakAnimations;
-
 #endif

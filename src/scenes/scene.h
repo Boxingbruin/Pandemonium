@@ -6,7 +6,7 @@
 #include <sprite.h>
 
 // CutsceneState now lives with the cutscene manager.
-#include "cutscene_manager.h"
+#include "../managers/cutscene_manager.h"
 
 typedef enum {
     GAME_STATE_PLAYING,

@@ -1,9 +1,6 @@
 #ifndef DIALOG_CONTROLLER_H
 #define DIALOG_CONTROLLER_H
 
-#include <libdragon.h>
-#include <stdbool.h>
-
 // Dialog controller initialization and cleanup
 void dialog_controller_init(void);
 void dialog_controller_reset(void);

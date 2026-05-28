@@ -4,6 +4,12 @@
 #include <stdbool.h>
 #include <t3d/t3d.h>
 
+// Forward declaration.
+// The full SceneContext definition lives in scene_context.h.
+// We only need a pointer type here so scene.c can call the manager API
+// without the manager public header needing to pull in the whole scene context.
+typedef struct SceneContext SceneContext;
+
 // All cutscenes in the game, in roughly the order they play. CUTSCENE_NONE means
 // gameplay (or title) is active and no cutscene is running.
 typedef enum {
@@ -42,46 +48,41 @@ void cutscene_manager_cleanup(void);
 void cutscene_manager_reset(void);
 
 // ----------------------------------------------------------------------------
-// Queries used by callers across the codebase (scene.c, character.c, FMV, etc.)
+// Phase routing.
+// These are the public scene-facing entry points for guardian phase cutscenes.
+// scene.c should call these instead of directly calling cutscene_guardian_phase1_*
+// or cutscene_guardian_phase2_*.
+// ----------------------------------------------------------------------------
+bool cutscene_manager_handles_guardian_cutscene(CutsceneState state);
+
+void cutscene_manager_enter(SceneContext *ctx, CutsceneState state);
+void cutscene_manager_update(SceneContext *ctx, float dt);
+void cutscene_manager_draw(SceneContext *ctx, T3DViewport *viewport);
+void cutscene_manager_skip(SceneContext *ctx);
+
+// ----------------------------------------------------------------------------
+// Queries used by callers across the codebase.
 // ----------------------------------------------------------------------------
 CutsceneState cutscene_manager_get_state(void);
 bool          cutscene_manager_is_active(void);
 bool          cutscene_manager_is_dialog_active(void);
 bool          cutscene_manager_is_skip_visible(void);
 
-// Phase-2 trigger latch (boss AI checks this before kicking off the phase 2 cutscene)
+// Phase-2 trigger latch.
 bool cutscene_manager_phase2_triggered(void);
 void cutscene_manager_mark_phase2_triggered(void);
 
 // ----------------------------------------------------------------------------
-// Drawing: the bits that are cleanly separable from scene.c's world render.
-// scene.c keeps `scene_draw_cutscene()` (it renders the same room geometry
-// as gameplay) and calls these helpers as needed.
+// Drawing helpers.
 // ----------------------------------------------------------------------------
-// A-button + "skip" overlay. Drawn for both in-engine cutscenes and FMV playback.
 void cutscene_manager_draw_skip_overlay(void);
-// Per-cutscene fog ranges.
 void cutscene_manager_draw_fog(void);
 
-// ----------------------------------------------------------------------------
-// Chain-break asset (PHASE1_BREAK_CHAINS). The model + skeleton + animation
-// is cutscene-exclusive, so the manager owns its lifecycle and per-frame tick.
-// scene.c renders it during the break-chains cutscene.
-// ----------------------------------------------------------------------------
-void cutscene_manager_chain_break_tick(float dt);
-void cutscene_manager_chain_break_draw(void);
-
-// Dialog string accessors used by the cutscene init in scene.c.
-// (The arrays live in cutscene_manager.c since they are cutscene-only.)
-const char *cutscene_manager_get_phase1_dialog(int idx);
-const char *cutscene_manager_get_phase2_dialog(int idx);
-
-// Post-boss dialog (escalating frustration). One entry per chat; chat 0 has a
-// two-line opener, the rest are single-line.
+// Post-boss dialog.
 typedef struct {
     const char *line1;
-    const char *line2;   // NULL when single-line
-    float       holdSec; // dialog_controller_speak activeTime
+    const char *line2;
+    float       holdSec;
 } PostBossChat;
 
 int                 cutscene_manager_post_boss_chat_count(void);
