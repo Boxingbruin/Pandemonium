@@ -61,42 +61,10 @@ static void dust_reset(void);
 static void dust_update(float dt);
 static void dust_draw(T3DViewport *viewport);
 
-// Ground crushed decal (implemented near dust)
-static void ground_crush_reset(void);
-static void ground_crush_update(float dt);
-static void ground_crush_draw(T3DViewport *viewport);
-
 // Blood (implemented after dust)
 static void blood_reset(void);
 static void blood_update(float dt);
 static void blood_draw(T3DViewport *viewport);
-
-static void boot_reinit_display_rdpq(void)
-{
-    // The logo routines call display_close(), so we must restore a valid display + RDPQ
-    // context before drawing anything else (including the next logo).
-    if (DITHER_ENABLED) {
-        display_init(RESOLUTION_320x240, DEPTH_16_BPP, FRAME_BUFFER_COUNT, GAMMA_NONE, FILTERS_RESAMPLE_ANTIALIAS);
-    } else {
-        if (ARES_AA_ENABLED) {
-            display_init(RESOLUTION_320x240, DEPTH_32_BPP, FRAME_BUFFER_COUNT, GAMMA_NONE, FILTERS_RESAMPLE_ANTIALIAS);
-        } else {
-            display_init(RESOLUTION_320x240, DEPTH_32_BPP, FRAME_BUFFER_COUNT, GAMMA_NONE, FILTERS_DISABLED);
-        }
-    }
-
-    rdpq_init();
-}
-
-void scene_boot_logos(void)
-{
-    if (DEV_MODE) return;
-
-    logo_libdragon();
-    boot_reinit_display_rdpq(); // needed before the next logo draws
-    logo_t3d();
-    boot_reinit_display_rdpq(); // restore for the main game
-}
 
 T3DModel* mapModel;
 rspq_block_t* mapDpl;
@@ -529,10 +497,6 @@ static surface_t victoryTitleBgSurf = {0};
 // Dust particle sprite (simple puffs)
 static sprite_t* dustParticleSprite = NULL;
 static surface_t dustParticleSurf = {0};
-
-// Ground impact decal (crushed ground)
-static sprite_t* groundCrushedSprite = NULL;
-static surface_t groundCrushedSurf = {0};
 
 // Blood splatter sprites (large + medium variants + tiny variants).
 // Loaded as IA8 so they can be tinted red via prim color and stay TMEM-cheap.
@@ -1210,12 +1174,6 @@ void scene_init(void)
         dustParticleSurf = sprite_get_pixels(dustParticleSprite);
     }
 
-    // Load ground crushed decal sprite (IA8)
-    groundCrushedSprite = sprite_load("rom:/groundCrushed.ia8.sprite");
-    if (groundCrushedSprite) {
-        groundCrushedSurf = sprite_get_pixels(groundCrushedSprite);
-    }
-
     // Load blood splatter sprites (IA8 - tinted red at draw time)
     static const char* bloodPaths[BLOOD_SPRITE_COUNT] = {
         "rom:/blood/blood_large.ia8.sprite",
@@ -1274,7 +1232,6 @@ void scene_init(void)
     scene_title_init();
 
     dust_reset();
-    ground_crush_reset();
     blood_reset();
 
     msa_init();
@@ -5061,12 +5018,6 @@ void scene_cleanup(void) // Realistically we never want to call this for the jam
         sprite_free(dustParticleSprite);
         dustParticleSprite = NULL;
         surface_free(&dustParticleSurf);
-    }
-
-    if (groundCrushedSprite) {
-        sprite_free(groundCrushedSprite);
-        groundCrushedSprite = NULL;
-        surface_free(&groundCrushedSurf);
     }
 
     for (int i = 0; i < BLOOD_SPRITE_COUNT; i++) {
