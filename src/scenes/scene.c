@@ -34,11 +34,11 @@
 #include "game/bosses/boss_ai.h"
 #include "game/bosses/boss_anim.h"
 #include "game/bosses/boss_render.h"
+#include "game/bosses/environmental_effects/boss_ground_crush.h"
 #include "dialog_controller.h"
 #include "display_utility.h"
 #include "menu_controller.h"
 #include "save_controller.h"
-//#include "collision_mesh.h"
 #include "collision_system.h"
 #include "letterbox_utility.h"
 #include "utilities/sword_trail.h"
@@ -61,42 +61,10 @@ static void dust_reset(void);
 static void dust_update(float dt);
 static void dust_draw(T3DViewport *viewport);
 
-// Ground crushed decal (implemented near dust)
-static void ground_crush_reset(void);
-static void ground_crush_update(float dt);
-static void ground_crush_draw(T3DViewport *viewport);
-
 // Blood (implemented after dust)
 static void blood_reset(void);
 static void blood_update(float dt);
 static void blood_draw(T3DViewport *viewport);
-
-static void boot_reinit_display_rdpq(void)
-{
-    // The logo routines call display_close(), so we must restore a valid display + RDPQ
-    // context before drawing anything else (including the next logo).
-    if (DITHER_ENABLED) {
-        display_init(RESOLUTION_320x240, DEPTH_16_BPP, FRAME_BUFFER_COUNT, GAMMA_NONE, FILTERS_RESAMPLE_ANTIALIAS);
-    } else {
-        if (ARES_AA_ENABLED) {
-            display_init(RESOLUTION_320x240, DEPTH_32_BPP, FRAME_BUFFER_COUNT, GAMMA_NONE, FILTERS_RESAMPLE_ANTIALIAS);
-        } else {
-            display_init(RESOLUTION_320x240, DEPTH_32_BPP, FRAME_BUFFER_COUNT, GAMMA_NONE, FILTERS_DISABLED);
-        }
-    }
-
-    rdpq_init();
-}
-
-void scene_boot_logos(void)
-{
-    if (DEV_MODE) return;
-
-    logo_libdragon();
-    boot_reinit_display_rdpq(); // needed before the next logo draws
-    logo_t3d();
-    boot_reinit_display_rdpq(); // restore for the main game
-}
 
 T3DModel* mapModel;
 rspq_block_t* mapDpl;
@@ -276,117 +244,6 @@ static const float VIDEO_BLACK_HOLD_S = 0.5f;
 static const float VIDEO_FADE_SPEED   = 200.0f; // same scale you already use
 static bool bossDeathMusicFadeStarted = false;
 
-// ------------------------------------------------------------
-// Walls OBB (world space)
-// ------------------------------------------------------------
-
-#define WALL_THICKNESS 20.0f
-#define WALL_HEIGHT   200.0f
-
-static SCU_OBB g_roomOBBs[] = {
-
-    // -------------------------------------------------
-    // right wall
-    // (345, 595) -> (-430, 595)
-    // -------------------------------------------------
-    {
-        .center = { (-430.0f + 345.0f) * 0.5f, 0.0f, 595.0f },                 // x=-42.5, z=595
-        .half   = { (345.0f - (-430.0f)) * 0.5f, WALL_HEIGHT * 0.5f, WALL_THICKNESS * 0.5f }, // hx=387.5
-        .yaw    = 3.1415926f
-    },
-
-    // -------------------------------------------------
-    // front wall
-    // (-430, 595) -> (-430, -595)
-    // -------------------------------------------------
-    {
-        .center = { -430.0f, 0.0f, (595.0f + -595.0f) * 0.5f },                // x=-430, z=0
-        .half   = { (595.0f - (-595.0f)) * 0.5f, WALL_HEIGHT * 0.5f, WALL_THICKNESS * 0.5f }, // hx=595
-        .yaw    = -1.5707963f
-    },
-
-    // -------------------------------------------------
-    // left wall
-    // (-458, -595) -> (345, -595)
-    // -------------------------------------------------
-    {
-        .center = { (-458.0f + 345.0f) * 0.5f, 0.0f, -595.0f },                // x=-56.5, z=-595
-        .half   = { (345.0f - (-458.0f)) * 0.5f, WALL_HEIGHT * 0.5f, WALL_THICKNESS * 0.5f }, // hx=401.5
-        .yaw    = 0.0f
-    },
-
-    // -------------------------------------------------
-    // left wall bend in
-    // (345, -595) -> (420, -420)
-    // -------------------------------------------------
-    {
-        .center = { (345.0f + 420.0f) * 0.5f, 0.0f, (-595.0f + -420.0f) * 0.5f }, // x=382.5, z=-507.5
-        .half   = { 95.52f, WALL_HEIGHT * 0.5f, WALL_THICKNESS * 0.5f },          // half length ≈ sqrt(75^2+175^2)/2
-        .yaw    = 1.1659045f
-    },
-
-    // -------------------------------------------------
-    // right wall bend in
-    // (345, 595) -> (420, 420)
-    // -------------------------------------------------
-    {
-        .center = { (345.0f + 420.0f) * 0.5f, 0.0f, (595.0f + 420.0f) * 0.5f },  // x=382.5, z=507.5
-        .half   = { 95.52f, WALL_HEIGHT * 0.5f, WALL_THICKNESS * 0.5f },
-        .yaw    = -1.1659045f
-    },
-
-    // -------------------------------------------------
-    // left wall continued
-    // (420, -415) -> (600, -415)
-    // -------------------------------------------------
-    {
-        .center = { (420.0f + 600.0f) * 0.5f, 0.0f, -415.0f },                 // x=510, z=-415
-        .half   = { (600.0f - 420.0f) * 0.5f, WALL_HEIGHT * 0.5f, WALL_THICKNESS * 0.5f }, // hx=90
-        .yaw    = 0.0f
-    },
-
-    // -------------------------------------------------
-    // right wall continued
-    // (420, 415) -> (600, 415)
-    // -------------------------------------------------
-    {
-        .center = { (420.0f + 600.0f) * 0.5f, 0.0f, 415.0f },                  // x=510, z=415
-        .half   = { (600.0f - 420.0f) * 0.5f, WALL_HEIGHT * 0.5f, WALL_THICKNESS * 0.5f }, // hx=90
-        .yaw    = 0.0f
-    },
-
-    // -------------------------------------------------
-    // back wall
-    // (600, 420) -> (600, -420)
-    // -------------------------------------------------
-    {
-        .center = { 600.0f, 0.0f, (420.0f + -420.0f) * 0.5f },                 // x=600, z=0
-        .half   = { (420.0f - (-420.0f)) * 0.5f, WALL_HEIGHT * 0.5f, WALL_THICKNESS * 0.5f }, // hx=420
-        .yaw    = -1.5707963f
-    },
-    // -------------------------------------------------
-    // pillar 1 (depth X=100, width Z=80), keep front face, extend only +X
-    // center (x=553, z=-238)
-    // -------------------------------------------------
-    {
-        .center = { 553.0f, 0.0f, -238.0f },
-        .half   = { 50.0f, WALL_HEIGHT * 0.5f, 40.0f },
-        .yaw    = 0.0f
-    },
-
-    // -------------------------------------------------
-    // pillar 2 (depth X=100, width Z=80), keep front face, extend only +X
-    // center (x=553, z=238)
-    // -------------------------------------------------
-    {
-        .center = { 553.0f, 0.0f, 238.0f },
-        .half   = { 50.0f, WALL_HEIGHT * 0.5f, 40.0f },
-        .yaw    = 0.0f
-    },
-};
-
-static const int g_roomOBBCount = sizeof(g_roomOBBs) / sizeof(g_roomOBBs[0]);
-
 #define TITLE_DIALOG_COUNT (sizeof(titleDialogs) / sizeof(titleDialogs[0]))
 
 static const char *titleDialogs[] = {
@@ -530,10 +387,6 @@ static surface_t victoryTitleBgSurf = {0};
 static sprite_t* dustParticleSprite = NULL;
 static surface_t dustParticleSurf = {0};
 
-// Ground impact decal (crushed ground)
-static sprite_t* groundCrushedSprite = NULL;
-static surface_t groundCrushedSurf = {0};
-
 // Blood splatter sprites (large + medium variants + tiny variants).
 // Loaded as IA8 so they can be tinted red via prim color and stay TMEM-cheap.
 enum {
@@ -604,62 +457,6 @@ static const char *SCENE1_SFX_PATHS[SCENE1_SFX_COUNT] = {
     [SCENE1_SFX_CHAR_UMPH] = "rom:/audio/sfx/character/umph_22k.wav64",
 };
 
-static void scene_get_character_world_capsule(float capA[3], float capB[3], float *radius)
-{
-    capA[0] = character.pos[0] + character.capsuleCollider.localCapA.v[0] * character.scale[0];
-    capA[1] = character.pos[1] + character.capsuleCollider.localCapA.v[1] * character.scale[1];
-    capA[2] = character.pos[2] + character.capsuleCollider.localCapA.v[2] * character.scale[2];
-
-    capB[0] = character.pos[0] + character.capsuleCollider.localCapB.v[0] * character.scale[0];
-    capB[1] = character.pos[1] + character.capsuleCollider.localCapB.v[1] * character.scale[1];
-    capB[2] = character.pos[2] + character.capsuleCollider.localCapB.v[2] * character.scale[2];
-
-    *radius = character.capsuleCollider.radius * character.scale[0];
-}
-
-void scene_resolve_character_room_obbs(void)
-{
-    // more iterations => less corner tunneling / less “elastic”
-    for (int iter = 0; iter < 8; iter++) {
-        float capA[3], capB[3], r;
-        scene_get_character_world_capsule(capA, capB, &r);
-
-        float vx, vz;
-        character_get_velocity(&vx, &vz);
-
-        bool any = false;
-
-        for (int i = 0; i < g_roomOBBCount; i++) {
-            float push[3];
-            float n[3];
-
-            if (scu_capsule_vs_obb_push_xz_f(capA, capB, r, &g_roomOBBs[i], push, n)) {
-
-                // push out (world)
-                character.pos[0] += push[0];
-                character.pos[2] += push[2];
-
-                // IMPORTANT: keep capsule in sync for subsequent OBB checks THIS iter
-                capA[0] += push[0]; capA[2] += push[2];
-                capB[0] += push[0]; capB[2] += push[2];
-
-                // slide: remove inward velocity component (vn < 0 means into the surface)
-                float vn = vx * n[0] + vz * n[2];
-                if (vn < 0.0f) {
-                    vx -= vn * n[0];
-                    vz -= vn * n[2];
-                }
-
-                any = true;
-            }
-        }
-
-        character_set_velocity_xz(vx, vz);
-
-        if (!any) break;
-    }
-}
-
 static void scene_begin_video_preroll(void)
 {
     if (videoTrigFired) return;
@@ -679,7 +476,7 @@ static void scene_update_video_trigger(void)
     if (videoTrigFired) return;
 
     float capA[3], capB[3], r;
-    scene_get_character_world_capsule(capA, capB, &r);
+    collision_get_character_capsule_world(capA, capB, &r);
 
     if (scu_capsule_vs_rect_f(capA, capB, r, videoTrigMin, videoTrigMax)) {
         scene_begin_video_preroll();
@@ -712,37 +509,6 @@ static void scene_update_video_preroll(void)
 
         videoPreroll = VIDEO_PREROLL_NONE;
     }
-}
-
-static void debug_draw_obb_xz(
-    T3DViewport *vp,
-    const SCU_OBB *o,
-    float y,
-    uint16_t color)
-{
-    float c = cosf(o->yaw);
-    float s = sinf(o->yaw);
-
-    float hx = o->half[0];
-    float hz = o->half[2];
-
-    // 4 corners in local space (XZ)
-    float lx[4] = { -hx,  hx,  hx, -hx };
-    float lz[4] = { -hz, -hz,  hz,  hz };
-
-    T3DVec3 p[4];
-
-    for (int i = 0; i < 4; i++) {
-        // local -> world (rotate + translate)
-        float wx = o->center[0] + (c * lx[i] - s * lz[i]);
-        float wz = o->center[2] + (s * lx[i] + c * lz[i]);
-
-        p[i] = (T3DVec3){{ wx, y, wz }};
-    }
-
-    // Draw rectangle as two wire triangles
-    debug_draw_tri_wire(vp, &p[0], &p[1], &p[2], color);
-    debug_draw_tri_wire(vp, &p[0], &p[2], &p[3], color);
 }
 
 void scene_load_environment(){
@@ -1169,6 +935,8 @@ void scene_init(void)
         return;
     }
 
+    boss_ground_crush_init();
+
     // Transform will be updated in boss_update()
     
     // Make character face the boss
@@ -1206,12 +974,6 @@ void scene_init(void)
     dustParticleSprite = sprite_load("rom:/dustParticle.ia8.sprite");
     if (dustParticleSprite) {
         dustParticleSurf = sprite_get_pixels(dustParticleSprite);
-    }
-
-    // Load ground crushed decal sprite (IA8)
-    groundCrushedSprite = sprite_load("rom:/groundCrushed.ia8.sprite");
-    if (groundCrushedSprite) {
-        groundCrushedSurf = sprite_get_pixels(groundCrushedSprite);
     }
 
     // Load blood splatter sprites (IA8 - tinted red at draw time)
@@ -1272,7 +1034,6 @@ void scene_init(void)
     scene_title_init();
 
     dust_reset();
-    ground_crush_reset();
     blood_reset();
 
     msa_init();
@@ -1411,7 +1172,7 @@ void scene_reset(void)
     s_bossRunStartS = 0.0;
 
     dust_reset();
-    ground_crush_reset();
+    boss_ground_crush_reset();
     blood_reset();
 }
 
@@ -2622,8 +2383,6 @@ void scene_cutscene_update()
             // Post-boss dialog runs while gameplay continues to animate (no "paused time" feel).
             // Player input stays disabled by `character_update()` while a cutscene is active.
             character_update();
-            // Keep constraints/collision up to date so the world stays consistent during dialog.
-            scene_resolve_character_room_obbs();
             character_update_position();
 
             if (bossActivated && g_boss) {
@@ -2958,10 +2717,10 @@ void scene_update(void)
         }
 
         character_update();
-        // Constrain player inside obbs
-        scene_resolve_character_room_obbs();
         // Update character transform after constraint
         character_update_position();
+
+        boss_ground_crush_update(deltaTime);
         
         if (bossActivated && g_boss) {
             boss_update(g_boss);
@@ -3676,215 +3435,6 @@ static void blood_draw(T3DViewport *viewport) {
             .scale_x = sx,
             .scale_y = sy,
         });
-    }
-
-    rdpq_mode_zoverride(false, 0.0f, 0);
-    rdpq_mode_zbuf(false, false);
-}
-
-/* -----------------------------------------------------------------------------
- * Ground crushed decal (world-space quad on the floor)
- * -------------------------------------------------------------------------- */
-
-typedef struct {
-    bool  active;
-    float pos[3];   // world
-    float age;      // sec
-    float life;     // sec
-} GroundCrushDecal;
-
-enum { GROUND_CRUSH_MAX = 8 };
-static GroundCrushDecal s_groundCrush[GROUND_CRUSH_MAX];
-
-static void ground_crush_reset(void) {
-    memset(s_groundCrush, 0, sizeof(s_groundCrush));
-}
-
-static int ground_crush_alloc_slot(void) {
-    for (int i = 0; i < GROUND_CRUSH_MAX; i++) {
-        if (!s_groundCrush[i].active) return i;
-    }
-    // No free slot; evict the oldest.
-    int oldest = 0;
-    float bestAge = s_groundCrush[0].age;
-    for (int i = 1; i < GROUND_CRUSH_MAX; i++) {
-        if (s_groundCrush[i].age > bestAge) {
-            bestAge = s_groundCrush[i].age;
-            oldest = i;
-        }
-    }
-    return oldest;
-}
-
-void scene_spawn_ground_crushed(float x, float z)
-{
-    int idx = ground_crush_alloc_slot();
-    GroundCrushDecal *d = &s_groundCrush[idx];
-
-    d->active = true;
-    d->age = 0.0f;
-    d->life = 3.0f;
-
-    d->pos[0] = x;
-    d->pos[1] = roomY + 0.25f; // slightly above the floor to avoid z-fighting
-    d->pos[2] = z;
-}
-
-static void ground_crush_update(float dt) {
-    if (dt < 0.0f) dt = 0.0f;
-    if (dt > 0.25f) dt = 0.25f;
-
-    for (int i = 0; i < GROUND_CRUSH_MAX; i++) {
-        GroundCrushDecal *d = &s_groundCrush[i];
-        if (!d->active) continue;
-
-        d->age += dt;
-        if (d->age >= d->life) {
-            d->active = false;
-        }
-    }
-}
-
-static void ground_crush_draw(T3DViewport *viewport) {
-    if (!viewport) return;
-    if (!groundCrushedSprite || groundCrushedSurf.width <= 0 || groundCrushedSurf.height <= 0) return;
-
-    // 2D render state. We'll project a world-space quad into screen-space and draw it
-    // with z-buffered textured triangles so it can sit *under* the boss correctly.
-    rdpq_sync_pipe();
-    rdpq_set_mode_standard();
-    rdpq_mode_zbuf(true, false);
-
-    // Use the IA8 alpha channel; avoid alpha-compare clipping on soft edges.
-    rdpq_mode_alphacompare(0);
-    rdpq_mode_combiner(RDPQ_COMBINER_TEX_FLAT);
-    rdpq_mode_blender(RDPQ_BLENDER_MULTIPLY);
-    // Perspective-correct texturing: required so the decal doesn't shear
-    // when the projected quad becomes a strong trapezoid (camera tilt/orbit).
-    rdpq_mode_persp(true);
-
-    // Upload texture once; tile=0 is what TRIFMT_ZBUF_TEX expects by default.
-    rdpq_tex_upload(TILE0, &groundCrushedSurf, NULL);
-
-    // Size tuning: reduced slightly so it doesn't overpower the landing.
-    const float SIZE_MUL = 2.0f;
-    const float HALF_SIZE_BASE = 30.0f; // world units (before SIZE_MUL)
-    const float half = HALF_SIZE_BASE * SIZE_MUL;
-    const int texW = groundCrushedSurf.width;
-    const int texH = groundCrushedSurf.height;
-
-    // Preserve sprite aspect ratio in world space.
-    float halfX = half;
-    float halfZ = half;
-    if (texW > 0 && texH > 0) {
-        if (texW >= texH) {
-            halfZ = half * ((float)texH / (float)texW);
-        } else {
-            halfX = half * ((float)texW / (float)texH);
-        }
-    }
-
-    for (int i = 0; i < GROUND_CRUSH_MAX; i++) {
-        const GroundCrushDecal *d = &s_groundCrush[i];
-        if (!d->active) continue;
-
-        // Fade out over the last ~0.5s.
-        float t = (d->life > 0.0f) ? (d->age / d->life) : 1.0f;
-        if (t < 0.0f) t = 0.0f;
-        if (t > 1.0f) t = 1.0f;
-
-        float a01 = 1.0f;
-        const float fadeStart = 1.0f - (0.5f / 3.0f);
-        if (t >= fadeStart) {
-            float u = (t - fadeStart) / (1.0f - fadeStart);
-            if (u < 0.0f) u = 0.0f;
-            if (u > 1.0f) u = 1.0f;
-            a01 = 1.0f - u;
-        }
-
-        uint8_t a = (uint8_t)(a01 * 220.0f);
-        if (a == 0) continue;
-
-        // Slightly warm grey so it reads on the floor.
-        rdpq_set_prim_color(RGBA32(235, 232, 226, a));
-
-        // Build a world-space quad on the floor (facing +Y).
-        const float cx = d->pos[0];
-        const float cy = d->pos[1];
-        const float cz = d->pos[2];
-
-        T3DVec3 w0 = {{ cx - halfX, cy, cz - halfZ }};
-        T3DVec3 w1 = {{ cx + halfX, cy, cz - halfZ }};
-        T3DVec3 w2 = {{ cx - halfX, cy, cz + halfZ }};
-        T3DVec3 w3 = {{ cx + halfX, cy, cz + halfZ }};
-
-        // Project to clip space ourselves so we keep W per vertex; without
-        // real 1/W, RDP texture interpolation is affine and the decal shears
-        // as the camera tilts/orbits.
-        T3DVec4 c0, c1, c2, c3;
-        t3d_mat4_mul_vec3(&c0, &viewport->matCamProj, &w0);
-        t3d_mat4_mul_vec3(&c1, &viewport->matCamProj, &w1);
-        t3d_mat4_mul_vec3(&c2, &viewport->matCamProj, &w2);
-        t3d_mat4_mul_vec3(&c3, &viewport->matCamProj, &w3);
-
-        // Reject if any corner is at/behind the near plane.
-        if (c0.v[3] <= 0.001f || c1.v[3] <= 0.001f ||
-            c2.v[3] <= 0.001f || c3.v[3] <= 0.001f) continue;
-
-        const float halfW = viewport->size[0] * 0.5f;
-        const float halfH = viewport->size[1] * 0.5f;
-        const float ox = (float)viewport->offset[0] + halfW;
-        const float oy = (float)viewport->offset[1] + halfH;
-
-        float invW0 = 1.0f / c0.v[3];
-        float invW1 = 1.0f / c1.v[3];
-        float invW2 = 1.0f / c2.v[3];
-        float invW3 = 1.0f / c3.v[3];
-
-        float sx0 = c0.v[0] * invW0 * halfW + ox;
-        float sy0 = -c0.v[1] * invW0 * halfH + oy;
-        float sx1 = c1.v[0] * invW1 * halfW + ox;
-        float sy1 = -c1.v[1] * invW1 * halfH + oy;
-        float sx2 = c2.v[0] * invW2 * halfW + ox;
-        float sy2 = -c2.v[1] * invW2 * halfH + oy;
-        float sx3 = c3.v[0] * invW3 * halfW + ox;
-        float sy3 = -c3.v[1] * invW3 * halfH + oy;
-
-        float z0 = c0.v[2] * invW0;
-        float z1 = c1.v[2] * invW1;
-        float z2 = c2.v[2] * invW2;
-        float z3 = c3.v[2] * invW3;
-        if (z0 >= 1.0f || z1 >= 1.0f || z2 >= 1.0f || z3 >= 1.0f) continue;
-        if (z0 < 0.0f) z0 = 0.0f;
-        if (z0 > 0.9999f) z0 = 0.9999f;
-        if (z1 < 0.0f) z1 = 0.0f;
-        if (z1 > 0.9999f) z1 = 0.9999f;
-        if (z2 < 0.0f) z2 = 0.0f;
-        if (z2 > 0.9999f) z2 = 0.9999f;
-        if (z3 < 0.0f) z3 = 0.0f;
-        if (z3 > 0.9999f) z3 = 0.9999f;
-
-        // Lock the whole decal to the farthest corner's depth via zoverride
-        // (same pattern dust_draw uses). With rdpq_mode_persp(true), per-vertex
-        // Z from rdpq_triangle doesn't line up with what t3d's ucode writes
-        // for 3D meshes, so the decal was winning the depth test against the
-        // boss. One conservative Z per decal makes occlusion match floor depth.
-        float zMax = z0;
-        if (z1 > zMax) zMax = z1;
-        if (z2 > zMax) zMax = z2;
-        if (z3 > zMax) zMax = z3;
-        rdpq_mode_zoverride(true, zMax, 0);
-
-        // Textured triangles. Real per-vertex INV_W enables perspective-correct
-        // S/T interpolation; zoverride above supplies the depth comparison value.
-        // Vertex format: { X, Y, Z, S, T, INV_W }
-        float v0[6] = { sx0, sy0, z0, 0.0f,        0.0f,        invW0 };
-        float v1[6] = { sx1, sy1, z1, (float)texW, 0.0f,        invW1 };
-        float v2[6] = { sx2, sy2, z2, 0.0f,        (float)texH, invW2 };
-        float v3[6] = { sx3, sy3, z3, (float)texW, (float)texH, invW3 };
-
-        rdpq_triangle(&TRIFMT_ZBUF_TEX, v0, v1, v2);
-        rdpq_triangle(&TRIFMT_ZBUF_TEX, v1, v3, v2);
     }
 
     rdpq_mode_zoverride(false, 0.0f, 0);
@@ -4828,7 +4378,9 @@ void scene_draw(T3DViewport *viewport)
     rdpq_sync_pipe();
     rdpq_mode_zbuf(false, false);
 
-    t3d_matrix_push_pos(1);   
+    t3d_matrix_push_pos(1);
+        // projection effects
+        boss_ground_crush_draw();
         // blob shadows
         character_draw_shadow();
         if (g_boss) {
@@ -4929,8 +4481,6 @@ void scene_draw(T3DViewport *viewport)
     sword_trail_draw_all(viewport);
 
     // Dust puffs (boss landings/impacts)
-    ground_crush_update(deltaTime);
-    ground_crush_draw(viewport);
     dust_update(deltaTime);
     dust_draw(viewport);
 
@@ -4944,21 +4494,6 @@ void scene_draw(T3DViewport *viewport)
     // Overlay lock-on marker above the boss
     if(DEV_MODE)
         draw_lockon_indicator(viewport);
-
-    // Debug draw room colliders in gameplay
-    // NOTE: The 3D debug draw path renders into `offscreenBuffer` (RGBA16). If DEV_MODE is off,
-    // that buffer isn't allocated/used, so avoid calling these routines to prevent invalid writes.
-    if (DEV_MODE && cutsceneState == CUTSCENE_NONE && debugDraw) {
-        float capA[3], capB[3], r;
-        scene_get_character_world_capsule(capA, capB, &r);
-
-        for (int i = 0; i < g_roomOBBCount; i++) {
-            float push[3], n[3];
-            bool hit = scu_capsule_vs_obb_push_xz_f(capA, capB, r, &g_roomOBBs[i], push, n);
-
-            debug_draw_obb_xz(viewport, &g_roomOBBs[i], 0.0f, hit ? DEBUG_COLORS[0] : DEBUG_COLORS[2]);
-        }
-    }
 
     scene_draw_video_trigger(viewport);
     
@@ -5211,6 +4746,7 @@ void scene_cleanup(void) // Realistically we never want to call this for the jam
 {
     //collision_mesh_cleanup();
     scene_delete_environment();
+    boss_ground_crush_cleanup();
     camera_reset();
     
     character_delete();
@@ -5265,12 +4801,6 @@ void scene_cleanup(void) // Realistically we never want to call this for the jam
         sprite_free(dustParticleSprite);
         dustParticleSprite = NULL;
         surface_free(&dustParticleSurf);
-    }
-
-    if (groundCrushedSprite) {
-        sprite_free(groundCrushedSprite);
-        groundCrushedSprite = NULL;
-        surface_free(&groundCrushedSurf);
     }
 
     for (int i = 0; i < BLOOD_SPRITE_COUNT; i++) {

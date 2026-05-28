@@ -23,6 +23,7 @@
 #include "character.h"
 #include "scene_sfx.h" // TODO: make sfx entity specific
 #include "scene.h"
+#include "environmental_effects/boss_ground_crush.h"
 
 #include "utilities/collision_mesh.h"
 #include "utilities/simple_collision_utility.h"
@@ -78,7 +79,8 @@ static inline void boss_spawn_ground_crushed_toward_player(Boss *boss, float for
 
     float cx = boss->pos[0] + dirX * forwardDist;
     float cz = boss->pos[2] + dirZ * forwardDist;
-    scene_spawn_ground_crushed(cx, cz);
+
+    boss_ground_crush_spawn(cx, boss->pos[1] + 0.25f, cz);
 }
 
 static inline void boss_attacks_on_player_hit(float damage)

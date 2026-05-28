@@ -13,6 +13,7 @@
 #include "save_controller.h"
 #include "collision_system.h"
 #include "scene.h"
+#include "opening_credits.h"
 #include "dev.h"
 #include "dev/crt_safe_area_overlay.h"
 #include "video_player_utility.h"
@@ -55,7 +56,7 @@ int main(void)
     audio_initialize();
 
     // Boot logos (before the first scene loads)
-    scene_boot_logos();
+    opening_credits_play();
 
     // Fonts (register once after the final rdpq_init)
     rdpq_text_register_font(FONT_BUILTIN_DEBUG_MONO, rdpq_font_load_builtin(FONT_BUILTIN_DEBUG_MONO));
