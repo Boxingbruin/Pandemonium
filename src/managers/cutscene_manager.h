@@ -4,6 +4,12 @@
 #include <stdbool.h>
 #include <t3d/t3d.h>
 
+// Forward declaration.
+// The full SceneContext definition lives in scene_context.h.
+// We only need a pointer type here so scene.c can call the manager API
+// without the manager public header needing to pull in the whole scene context.
+typedef struct SceneContext SceneContext;
+
 // All cutscenes in the game, in roughly the order they play. CUTSCENE_NONE means
 // gameplay (or title) is active and no cutscene is running.
 typedef enum {
@@ -40,6 +46,19 @@ typedef enum {
 void cutscene_manager_init(void);
 void cutscene_manager_cleanup(void);
 void cutscene_manager_reset(void);
+
+// ----------------------------------------------------------------------------
+// Phase routing.
+// These are the public scene-facing entry points for guardian phase cutscenes.
+// scene.c should call these instead of directly calling cutscene_guardian_phase1_*
+// or cutscene_guardian_phase2_*.
+// ----------------------------------------------------------------------------
+bool cutscene_manager_handles_guardian_cutscene(CutsceneState state);
+
+void cutscene_manager_enter(SceneContext *ctx, CutsceneState state);
+void cutscene_manager_update(SceneContext *ctx, float dt);
+void cutscene_manager_draw(SceneContext *ctx, T3DViewport *viewport);
+void cutscene_manager_skip(SceneContext *ctx);
 
 // ----------------------------------------------------------------------------
 // Queries used by callers across the codebase.

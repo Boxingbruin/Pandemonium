@@ -12,6 +12,7 @@
 #include "globals.h"
 #include "video_layout.h"
 #include "scene.h"
+#include "joypad_utility.h"
 
 #include "cutscene_guardian_phase1.h"
 #include "cutscene_guardian_phase2.h"
@@ -101,6 +102,103 @@ void cutscene_manager_reset(void)
 
     cutscene_guardian_phase1_unload();
     cutscene_guardian_phase2_unload();
+}
+
+// ----------------------------------------------------------------------------
+// Phase routing
+// ----------------------------------------------------------------------------
+
+bool cutscene_manager_handles_guardian_cutscene(CutsceneState state)
+{
+    return cutscene_guardian_phase1_handles(state) ||
+           cutscene_guardian_phase2_handles(state);
+}
+
+void cutscene_manager_enter(SceneContext *ctx, CutsceneState state)
+{
+    if (!ctx) return;
+
+    skipButtonVisible = false;
+    lastCutsceneAPressed = false;
+
+    if (cutscene_guardian_phase1_handles(state)) {
+        cutscene_guardian_phase1_enter(ctx, state);
+        return;
+    }
+
+    if (cutscene_guardian_phase2_handles(state)) {
+        cutscene_guardian_phase2_enter(ctx, state);
+        return;
+    }
+}
+
+void cutscene_manager_update(SceneContext *ctx, float dt)
+{
+    if (!ctx) return;
+
+    if (cutscene_guardian_phase1_handles(cutsceneState)) {
+        cutscene_guardian_phase1_update(ctx, dt);
+        cutscene_manager_skip(ctx);
+        return;
+    }
+
+    if (cutscene_guardian_phase2_handles(cutsceneState)) {
+        cutscene_guardian_phase2_update(ctx, dt);
+        cutscene_manager_skip(ctx);
+        return;
+    }
+}
+
+void cutscene_manager_draw(SceneContext *ctx, T3DViewport *viewport)
+{
+    if (!ctx) return;
+
+    if (cutscene_guardian_phase1_handles(cutsceneState)) {
+        cutscene_guardian_phase1_draw(ctx, viewport);
+        return;
+    }
+
+    if (cutscene_guardian_phase2_handles(cutsceneState)) {
+        cutscene_guardian_phase2_draw(ctx, viewport);
+        return;
+    }
+}
+
+void cutscene_manager_skip(SceneContext *ctx)
+{
+    if (!ctx) return;
+
+    /*
+     * CUTSCENE_POST_BOSS_RESTORED is still scene-owned for now.
+     * It has special gameplay/dialog behavior and should not be skipped by
+     * the phase skip flow.
+     */
+    if (cutsceneState == CUTSCENE_POST_BOSS_RESTORED) {
+        skipButtonVisible = false;
+        lastCutsceneAPressed = btn.a;
+        return;
+    }
+
+    bool aCurrentlyPressed = btn.a;
+    bool aJustPressed = aCurrentlyPressed && !lastCutsceneAPressed;
+
+    if (aJustPressed) {
+        if (!skipButtonVisible) {
+            skipButtonVisible = true;
+        } else {
+            if (cutscene_guardian_phase1_handles(cutsceneState)) {
+                cutscene_guardian_phase1_skip(ctx);
+                return;
+            }
+
+            if (cutscene_guardian_phase2_handles(cutsceneState)) {
+                cutscene_guardian_phase2_skip(ctx);
+                return;
+            }
+        }
+    }
+
+    lastCutsceneAPressed = aCurrentlyPressed;
 }
 
 // ----------------------------------------------------------------------------

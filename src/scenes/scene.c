@@ -28,8 +28,6 @@
 
 #include "../managers/cutscene_manager.h"
 #include "../managers/cutscene_manager_internal.h"
-#include "cutscene_guardian_phase1.h"
-#include "cutscene_guardian_phase2.h"
 #include "scene_context.h"
 
 #include "character.h"
@@ -1332,8 +1330,14 @@ void scene_init_playing(bool skippedCutscene)
 
     // Skip dialog and cutscene
     dialog_controller_stop_speaking();
+
     cutsceneState = CUTSCENE_NONE;
+    cutsceneTimer = 0.0f;
     cutsceneCameraTimer = 0.0f;
+    cutsceneDialogActive = false;
+    skipButtonVisible = false;
+    lastCutsceneAPressed = false;
+
     bossActivated = true;
 
     // Starting a new run (boss attempt).
@@ -1535,13 +1539,8 @@ void scene_init_cutscene(void)
 
     skipButtonVisible = false;
 
-    if (cutscene_guardian_phase1_handles(cutsceneState)) {
-        cutscene_guardian_phase1_enter(&sceneContext, cutsceneState);
-        return;
-    }
-
-    if (cutscene_guardian_phase2_handles(cutsceneState)) {
-        cutscene_guardian_phase2_enter(&sceneContext, cutsceneState);
+    if (cutscene_manager_handles_guardian_cutscene(cutsceneState)) {
+        cutscene_manager_enter(&sceneContext, cutsceneState);
         return;
     }
 
@@ -1573,55 +1572,27 @@ void scene_init_cutscene(void)
     }
 }
 
-static inline float ease_in_out(float x) {
-    if (x < 0.0f) x = 0.0f;
-    if (x > 1.0f) x = 1.0f;
-    return x * x * (3.0f - 2.0f * x);
-}
-
-static void scene_update_cutscene_skip(void)
+static void scene_update_post_boss_cutscene_input(void)
 {
+    /*
+     * Guardian phase cutscene skip is owned by cutscene_manager_skip().
+     * This remains only for the scene-owned post-boss restored cutscene.
+     */
     if (cutsceneState == CUTSCENE_POST_BOSS_RESTORED) {
         skipButtonVisible = false;
         lastCutsceneAPressed = btn.a;
         return;
     }
 
-    bool aCurrentlyPressed = btn.a;
-    bool aJustPressed = aCurrentlyPressed && !lastCutsceneAPressed;
-
-    if (aJustPressed) {
-        if (!skipButtonVisible) {
-            skipButtonVisible = true;
-        } else {
-            if (cutscene_guardian_phase1_handles(cutsceneState)) {
-                cutscene_guardian_phase1_skip(&sceneContext);
-                return;
-            }
-
-            if (cutscene_guardian_phase2_handles(cutsceneState)) {
-                cutscene_guardian_phase2_skip(&sceneContext);
-                return;
-            }
-        }
-    }
-
-    lastCutsceneAPressed = aCurrentlyPressed;
+    lastCutsceneAPressed = btn.a;
 }
 
 void scene_cutscene_update(void)
 {
     scene_update_context();
 
-    if (cutscene_guardian_phase1_handles(cutsceneState)) {
-        cutscene_guardian_phase1_update(&sceneContext, deltaTime);
-        scene_update_cutscene_skip();
-        return;
-    }
-
-    if (cutscene_guardian_phase2_handles(cutsceneState)) {
-        cutscene_guardian_phase2_update(&sceneContext, deltaTime);
-        scene_update_cutscene_skip();
+    if (cutscene_manager_handles_guardian_cutscene(cutsceneState)) {
+        cutscene_manager_update(&sceneContext, deltaTime);
         return;
     }
 
@@ -1686,7 +1657,7 @@ void scene_cutscene_update(void)
             break;
     }
 
-    scene_update_cutscene_skip();
+    scene_update_post_boss_cutscene_input();
 }
 
 void scene_update_title(void)
@@ -2023,7 +1994,7 @@ void scene_update(void)
     // Z-target:
     // - Tap Z toggles lock-on on/off
     // - Hold Z keeps lock-on active and allows cycling targets with C-left/C-right
-    bool lockonAllowed = scene_is_boss_active() && g_boss;
+    bool lockonAllowed = cutsceneState == CUTSCENE_NONE && scene_is_boss_active() && g_boss;
     bool zHeld = joypad.btn.z;
     bool zJustPressed = zHeld && !lastZPressed;
     bool zJustReleased = !zHeld && lastZPressed;
@@ -2086,7 +2057,9 @@ void scene_update(void)
         }
     }
 
-    msa_update(deltaTime); // multi sword attack
+    if (cutsceneState == CUTSCENE_NONE) {
+        msa_update(deltaTime); // multi sword attack
+    }
     //boulder_hazard_update(deltaTime); // close-range ground boulders
 
     lastZPressed = zHeld;
@@ -2767,17 +2740,13 @@ void scene_draw_title(T3DViewport *viewport)
         cutscene_manager_draw_skip_overlay();
     }
 }
-void scene_draw_cutscene(void)
+
+void scene_draw_cutscene(T3DViewport *viewport)
 {
     scene_update_context();
 
-    if (cutscene_guardian_phase1_handles(cutsceneState)) {
-        cutscene_guardian_phase1_draw(&sceneContext, NULL);
-        return;
-    }
-
-    if (cutscene_guardian_phase2_handles(cutsceneState)) {
-        cutscene_guardian_phase2_draw(&sceneContext, NULL);
+    if (cutscene_manager_handles_guardian_cutscene(cutsceneState)) {
+        cutscene_manager_draw(&sceneContext, viewport);
         return;
     }
 
@@ -2941,7 +2910,7 @@ void scene_draw(T3DViewport *viewport)
 
     if(cutsceneState != CUTSCENE_NONE)
     {
-        scene_draw_cutscene();
+        scene_draw_cutscene(viewport);
         // Draw letterbox bars during cutscenes
         letterbox_draw();
         // Draw skip indicator on top of letterbox bars
@@ -3079,11 +3048,7 @@ void scene_draw(T3DViewport *viewport)
     rdpq_sync_pipe();
     rdpq_mode_zbuf(true, true);
 
-    t3d_matrix_push_pos(1);   
-        if (cinematicChainsVisible) {
-            t3d_matrix_set(cinematicChainsMatrix, true);
-            rspq_block_run(cinematicChainsDpl);
-        }
+    t3d_matrix_push_pos(1);
         t3d_matrix_set(chainsMatrix, true);
         rspq_block_run(chainsDpl);
     t3d_matrix_pop(1); 
@@ -3381,18 +3346,6 @@ void scene_cleanup(void) // Realistically we never want to call this for the jam
         if (dynamicBannerAnimations[0]) { t3d_anim_destroy(dynamicBannerAnimations[0]); free_uncached(dynamicBannerAnimations[0]); }
         free_uncached(dynamicBannerAnimations);
         dynamicBannerAnimations = NULL;
-    }
-
-    if (cinematicChainsDpl) { rspq_block_free(cinematicChainsDpl); cinematicChainsDpl = NULL; }
-    if (cinematicChainsModel) { t3d_model_free(cinematicChainsModel); cinematicChainsModel = NULL; }
-    if (cinematicChainsMatrix) { free_uncached(cinematicChainsMatrix); cinematicChainsMatrix = NULL; }
-    if (cinematicChainsSkeleton) { t3d_skeleton_destroy(cinematicChainsSkeleton); free_uncached(cinematicChainsSkeleton); cinematicChainsSkeleton = NULL; }
-    if (cinematicChainsAnimations) {
-        for (int i = 0; i < 2; i++) {
-            if (cinematicChainsAnimations[i]) { t3d_anim_destroy(cinematicChainsAnimations[i]); free_uncached(cinematicChainsAnimations[i]); }
-        }
-        free_uncached(cinematicChainsAnimations);
-        cinematicChainsAnimations = NULL;
     }
 
     cutscene_manager_cleanup();
