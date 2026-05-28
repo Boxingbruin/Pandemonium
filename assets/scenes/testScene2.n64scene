@@ -1,0 +1,292 @@
+{
+  "active_camera": 3,
+  "objects": [
+    {
+      "components": [
+        {
+          "fields": {
+            "path": "assets/boss_room/pillars_front.glb"
+          },
+          "type": "Model"
+        }
+      ],
+      "name": "Cube",
+      "parent": -1,
+      "transform": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "type": "mesh",
+      "visible": true
+    },
+    {
+      "components": [
+        {
+          "fields": {
+            "path": "assets/boss_room/ceiling_chains.glb"
+          },
+          "type": "Model"
+        }
+      ],
+      "name": "Cube.001",
+      "parent": -1,
+      "transform": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        2.5,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "type": "mesh",
+      "visible": true
+    },
+    {
+      "components": [
+        {
+          "fields": {
+            "path": "assets/boss_room/chains.glb"
+          },
+          "type": "Model"
+        }
+      ],
+      "name": "Cube.002",
+      "parent": -1,
+      "transform": [
+        0.6062177419662476,
+        0.0,
+        -0.3499999940395355,
+        0.0,
+        0.0,
+        0.699999988079071,
+        0.0,
+        0.0,
+        0.3499999940395355,
+        0.0,
+        0.6062177419662476,
+        0.0,
+        -2.0,
+        0.5,
+        1.5,
+        1.0
+      ],
+      "type": "mesh",
+      "visible": true
+    },
+    {
+      "camera": {
+        "far": 500.0,
+        "fov": 50.0,
+        "near": 0.05000000074505806
+      },
+      "components": [],
+      "name": "Camera",
+      "parent": -1,
+      "transform": [
+        0.8000001311302185,
+        -0.0,
+        -0.6000000238418579,
+        -0.0,
+        -0.22283445298671722,
+        0.928476870059967,
+        -0.2971125841140747,
+        0.0,
+        0.5570860505104065,
+        0.3713907301425934,
+        0.7427814602851868,
+        -0.0,
+        6.000000476837158,
+        4.000000476837158,
+        8.0,
+        1.0
+      ],
+      "type": "camera",
+      "visible": true
+    },
+    {
+      "components": [
+        {
+          "fields": {
+            "path": "assets/boss_room/room.glb"
+          },
+          "type": "Model"
+        }
+      ],
+      "name": "Object.4",
+      "parent": -1,
+      "transform": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "type": "mesh",
+      "visible": true
+    },
+    {
+      "components": [
+        {
+          "fields": {
+            "path": "assets/boss_room/pillars.glb"
+          },
+          "type": "Model"
+        }
+      ],
+      "name": "Object.5",
+      "parent": -1,
+      "transform": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "type": "mesh",
+      "visible": true
+    },
+    {
+      "components": [
+        {
+          "fields": {
+            "path": "assets/boss_room/sunshafts.glb"
+          },
+          "type": "Model"
+        }
+      ],
+      "name": "sunshafts",
+      "parent": -1,
+      "transform": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "type": "mesh",
+      "visible": true
+    },
+    {
+      "components": [
+        {
+          "fields": {
+            "path": "assets/boss_room/room_ledge_walls.glb"
+          },
+          "type": "Model"
+        }
+      ],
+      "name": "Object.5 copy copy",
+      "parent": -1,
+      "transform": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        2.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "type": "mesh",
+      "visible": true
+    },
+    {
+      "components": [
+        {
+          "fields": {
+            "path": "assets/boss_room/windows.glb"
+          },
+          "type": "Model"
+        }
+      ],
+      "name": "Object.5 copy copy copy",
+      "parent": -1,
+      "transform": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        3.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "type": "mesh",
+      "visible": true
+    }
+  ],
+  "version": 3
+}

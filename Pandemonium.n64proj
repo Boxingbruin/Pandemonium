@@ -1,0 +1,13 @@
+{
+  "assetDir": "assets/",
+  "buildDir": "",
+  "componentManifest": "assets/components.json",
+  "cookOutput": "filesystem",
+  "cutsceneDir": "assets/cutscenes",
+  "cutsceneManifest": "assets/cutscenes/cutscene-manifest.json",
+  "makeTarget": "",
+  "name": "Pandemonium",
+  "romName": "pandemonium.z64",
+  "sceneDir": "assets/scenes",
+  "startScene": "assets/scenes/testScene2.n64scene"
+}

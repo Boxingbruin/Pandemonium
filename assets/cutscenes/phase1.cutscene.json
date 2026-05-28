@@ -1,0 +1,177 @@
+{
+  "version": 1,
+  "name": "phase1_intro",
+  "skip": "none",
+  "onEnter": [],
+  "onExit": [],
+  "segments": [
+    {
+      "id": "seg_intro",
+      "name": "Intro",
+      "duration": 9.0,
+      "cameraMove": 9.0,
+      "camStart": [-700.0, 120.4, 0.0],
+      "camEnd": [-600.0, 120.4, 0.0],
+      "lookat": { "mode": "boss", "offset": [0.0, 100.0, 0.0] },
+      "keepCamTimer": false,
+      "fog": [300.0, 600.0],
+      "flags": ["screen_transition", "start_screen_fade"],
+      "dialog": null,
+      "dialogHold": 0.0,
+      "onEnter": [
+        { "id": "a_cam", "verb": "camera_mode", "args": { "mode": "custom" } },
+        { "id": "a_music", "verb": "play_music",
+          "args": { "path": "rom:/audio/music/boss_phase1_cutscene1-22k.wav64", "loop": false } }
+      ],
+      "actions": [],
+      "onExit": [],
+      "draw": [
+        { "layer": "map" }, { "layer": "room_floor" }, { "layer": "pillars" },
+        { "layer": "pillars_front" }, { "layer": "sunshafts" }, { "layer": "chains" },
+        { "layer": "cinematic_chains" }, { "layer": "boss" }, { "layer": "room_ledge" }
+      ]
+    },
+    {
+      "id": "seg_chain_closeup",
+      "name": "Chain Closeup",
+      "duration": 6.0,
+      "cameraMove": 6.0,
+      "camStart": [-239.0, 239.4, -133.7],
+      "camEnd": [-239.0, 239.4, -133.7],
+      "lookat": { "mode": "fixed", "pos": [-151.9, 208.0, -96.0] },
+      "keepCamTimer": false,
+      "fog": [300.0, 500.0],
+      "flags": [],
+      "dialog": null,
+      "dialogHold": 0.0,
+      "onEnter": [], "actions": [], "onExit": [],
+      "draw": [
+        { "layer": "map" }, { "layer": "room_floor" }, { "layer": "pillars" },
+        { "layer": "cinematic_chains" }, { "layer": "boss" }
+      ]
+    },
+    {
+      "id": "seg_swords_closeup",
+      "name": "Swords Closeup",
+      "duration": 5.0,
+      "cameraMove": 4.0,
+      "camStart": [-197.86, 20.0, 191.45],
+      "camEnd": [-220.97, 20.0, 190.0],
+      "lookat": { "mode": "fixed", "pos": [-142.32, 55.14, 114.76] },
+      "keepCamTimer": false,
+      "fog": [450.0, 800.0],
+      "flags": [],
+      "dialog": null,
+      "dialogHold": 0.0,
+      "onEnter": [], "actions": [], "onExit": [],
+      "draw": [
+        { "layer": "map" }, { "layer": "room_floor" }, { "layer": "chains" },
+        { "layer": "cinematic_chains" }, { "layer": "boss" }, { "layer": "windows" }
+      ]
+    },
+    {
+      "id": "seg_filler",
+      "name": "Filler",
+      "duration": 10.0,
+      "cameraMove": 13.0,
+      "camStart": [-0.47, 6.89, 70.0],
+      "camEnd": [-0.15, 22.99, 32.26],
+      "lookat": { "mode": "fixed", "pos": [0.476, 55.54, -71.29] },
+      "keepCamTimer": false,
+      "fog": [30.0, 50.0],
+      "flags": [],
+      "dialog": "^Those who approach the\nthrone of gold~ ^fall at my\nblade.",
+      "dialogHold": 0.0,
+      "onEnter": [], "actions": [], "onExit": [],
+      "draw": [
+        { "layer": "room_floor" }, { "layer": "sunshafts" },
+        { "layer": "cinematic_chains" }, { "layer": "boss" }
+      ]
+    },
+    {
+      "id": "seg_loyalty",
+      "name": "Loyalty",
+      "duration": 5.0,
+      "cameraMove": 5.0,
+      "camStart": [-18.28, 11.45, 2.0],
+      "camEnd": [-18.28, 11.45, -2.0],
+      "lookat": { "mode": "fixed", "pos": [80.4, -1.0, -11.0] },
+      "keepCamTimer": false,
+      "fog": [3.0, 10.0],
+      "flags": [],
+      "dialog": "^A Knight?~ >Where is your\n^loyalty...",
+      "dialogHold": 0.0,
+      "onEnter": [], "actions": [], "onExit": [],
+      "draw": [ { "layer": "room_floor" }, { "layer": "boss" } ]
+    },
+    {
+      "id": "seg_fear",
+      "name": "Fear",
+      "duration": 10.5,
+      "cameraMove": 7.5,
+      "camStart": [-13.454, 13.41, -24.27],
+      "camEnd": [-13.454, 25.41, -24.27],
+      "lookat": { "mode": "fixed", "pos": [400.0, 43.41, -29.67] },
+      "keepCamTimer": false,
+      "fog": [20.0, 50.0],
+      "flags": [],
+      "dialog": "^Where is your...~ <Fear.",
+      "dialogHold": 0.0,
+      "onEnter": [],
+      "actions": [
+        { "id": "a_kneel", "t": 6.5, "verb": "boss_anim", "args": { "name": "kneel_cutscene" } },
+        { "id": "a_fade", "t": 7.5, "verb": "fade", "args": { "dir": "out", "speed": 200.0 } }
+      ],
+      "onExit": [],
+      "draw": [ { "layer": "room_floor" }, { "layer": "boss" } ]
+    },
+    {
+      "id": "seg_break_chains",
+      "name": "Break Chains",
+      "duration": 5.0,
+      "cameraMove": 5.0,
+      "camStart": [-22.31, 1.7, 0.65],
+      "camEnd": [-42.31, 1.7, 0.65],
+      "lookat": { "mode": "fixed", "pos": [-12.31, 1.7, 0.65] },
+      "keepCamTimer": false,
+      "flags": [],
+      "dialog": null,
+      "dialogHold": 0.0,
+      "onEnter": [
+        { "id": "a_rumble", "verb": "rumble", "args": { "seconds": 0.5 } }
+      ],
+      "actions": [
+        { "id": "a_fade2", "t": 3.0, "verb": "fade", "args": { "dir": "out", "speed": 200.0 } }
+      ],
+      "onExit": [],
+      "draw": [ { "layer": "chain_break" } ]
+    },
+    {
+      "id": "seg_intro_end",
+      "name": "Intro End",
+      "duration": 10.0,
+      "cameraMove": 10.0,
+      "camStart": [-22.0, 29.0, -10.0],
+      "camEnd": [-150.0, 29.0, -10.0],
+      "lookat": { "mode": "fixed", "pos": [100.0, 29.0, 0.0] },
+      "keepCamTimer": false,
+      "fog": [450.0, 800.0],
+      "flags": ["screen_transition", "start_screen_fade"],
+      "dialog": null,
+      "dialogHold": 0.0,
+      "onEnter": [
+        { "id": "a_cam2", "verb": "camera_mode", "args": { "mode": "custom" } },
+        { "id": "a_boss", "verb": "boss_anim", "args": { "name": "kneel" } },
+        { "id": "a_chains", "verb": "cinematic_chains_anim", "args": { "index": 1, "looping": false } },
+        { "id": "a_letterbox", "verb": "letterbox_hide", "args": {} }
+      ],
+      "actions": [],
+      "onExit": [],
+      "draw": [
+        { "layer": "map" }, { "layer": "room_floor" }, { "layer": "pillars" },
+        { "layer": "chains" }, { "layer": "cinematic_chains" }, { "layer": "boss" },
+        { "layer": "room_ledge" }
+      ]
+    }
+  ]
+}

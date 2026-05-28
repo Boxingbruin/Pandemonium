@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "verbs": [
+    { "name": "camera_mode", "kind": "state",
+      "args": { "mode": { "type": "enum", "values": ["custom", "character"] } } },
+    { "name": "play_music", "kind": "trigger",
+      "args": { "path": { "type": "string" }, "loop": { "type": "bool" } } },
+    { "name": "stop_music", "kind": "trigger", "args": {} },
+    { "name": "boss_anim", "kind": "state",
+      "args": { "name": { "type": "enum", "values": ["kneel", "kneel_cutscene", "phase2_collapse"] } } },
+    { "name": "cinematic_chains_anim", "kind": "state",
+      "args": { "index": { "type": "int" }, "looping": { "type": "bool" } } },
+    { "name": "rumble", "kind": "trigger",
+      "args": { "seconds": { "type": "float" } } },
+    { "name": "fade", "kind": "trigger",
+      "args": { "dir": { "type": "enum", "values": ["out", "in"] }, "speed": { "type": "float" } } },
+    { "name": "letterbox_hide", "kind": "trigger", "args": {} }
+  ],
+  "layers": [
+    "map", "room_floor", "pillars", "pillars_front", "sunshafts", "chains",
+    "cinematic_chains", "boss", "room_ledge", "windows", "chain_break"
+  ],
+  "flags": ["screen_transition", "start_screen_fade"],
+  "skipModes": ["none", "to_gameplay", "phase2_finish"]
+}
