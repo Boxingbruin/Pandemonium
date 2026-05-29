@@ -60,7 +60,7 @@ void cutscene_manager_draw(SceneContext *ctx, T3DViewport *viewport);
 void cutscene_manager_skip(SceneContext *ctx);
 
 // ----------------------------------------------------------------------------
-// Generic cutscene camera helpers.
+// Cutscene camera helpers.
 // ----------------------------------------------------------------------------
 void cutscene_manager_set_camera_shot(
     SceneContext *ctx,
@@ -72,12 +72,18 @@ void cutscene_manager_set_camera_shot(
 void cutscene_manager_update_camera(float duration);
 
 // ----------------------------------------------------------------------------
-// Generic cutscene dialog helpers.
+// Cutscene dialog helpers.
 // ----------------------------------------------------------------------------
 void cutscene_manager_begin_dialog(const char *text, float holdSec);
 void cutscene_manager_update_dialog(void);
 void cutscene_manager_draw_dialog(void);
 void cutscene_manager_clear_dialog(void);
+
+// ----------------------------------------------------------------------------
+// Cutscene boss helpers. TODO: This needs to live in the boss scripts eventually.
+// ----------------------------------------------------------------------------
+void cutscene_manager_update_boss_transform(SceneContext *ctx);
+void cutscene_manager_set_boss_anim(SceneContext *ctx, int animIndex);
 
 // ----------------------------------------------------------------------------
 // Queries used by callers across the codebase.

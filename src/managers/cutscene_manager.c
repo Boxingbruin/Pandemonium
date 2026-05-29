@@ -20,6 +20,12 @@
 #include "cutscene_guardian_phase1.h"
 #include "cutscene_guardian_phase2.h"
 
+#include "scene_context.h"
+// TODO: These should be removed once cutscene animations are handled directly to the boss scripts.
+#include <t3d/t3danim.h>
+#include "../game/bosses/boss_anim.h"
+
+
 // ----------------------------------------------------------------------------
 // Constants
 // ----------------------------------------------------------------------------
@@ -80,15 +86,6 @@ const PostBossChat *cutscene_manager_get_post_boss_chat(int idx)
 // Lifecycle
 // ----------------------------------------------------------------------------
 
-void cutscene_manager_init(void)
-{
-    /*
-     * No heavy cutscene assets are loaded here anymore.
-     *
-     * Guardian phase 1 and phase 2 load/unload their own cinematic assets.
-     */
-}
-
 void cutscene_manager_cleanup(void)
 {
     cutscene_guardian_phase1_unload();
@@ -118,7 +115,7 @@ void cutscene_manager_reset(void)
 }
 
 // ----------------------------------------------------------------------------
-// Generic cutscene camera helpers
+// Camera helpers
 // ----------------------------------------------------------------------------
 
 void cutscene_manager_set_camera_shot(
@@ -164,7 +161,7 @@ void cutscene_manager_update_camera(float duration)
 }
 
 // ----------------------------------------------------------------------------
-// Generic cutscene dialog helpers
+// Dialog helpers
 // ----------------------------------------------------------------------------
 
 void cutscene_manager_begin_dialog(const char *text, float holdSec)
@@ -208,6 +205,39 @@ void cutscene_manager_clear_dialog(void)
 {
     cutsceneDialogActive = false;
     dialog_controller_stop_speaking();
+}
+
+// ----------------------------------------------------------------------------
+// Boss helpers
+// ----------------------------------------------------------------------------
+
+void cutscene_manager_update_boss_transform(SceneContext *ctx)
+{
+    if (!ctx || !ctx->boss) return;
+
+    boss_anim_update(ctx->boss);
+
+    T3DMat4FP *mat = (T3DMat4FP*)ctx->boss->modelMat;
+    if (mat) {
+        t3d_mat4fp_from_srt_euler(
+            mat,
+            ctx->boss->scale,
+            ctx->boss->rot,
+            ctx->boss->pos
+        );
+    }
+}
+
+void cutscene_manager_set_boss_anim(SceneContext *ctx, int animIndex)
+{
+    if (!ctx || !ctx->boss || !ctx->boss->animations) return;
+
+    T3DAnim **anims = (T3DAnim**)ctx->boss->animations;
+
+    t3d_anim_set_playing(anims[animIndex], true);
+
+    ctx->boss->currentAnimation = animIndex;
+    ctx->boss->currentAnimState = animIndex;
 }
 
 // ----------------------------------------------------------------------------

@@ -177,34 +177,7 @@ static void cutscene_guardian_phase1_next_state(SceneContext *ctx, CutsceneState
     cutscene_guardian_phase1_enter(ctx, nextState);
 }
 
-static void cutscene_guardian_phase1_update_boss_transform(SceneContext *ctx)
-{
-    if (!ctx || !ctx->boss) return;
 
-    boss_anim_update(ctx->boss);
-
-    T3DMat4FP *mat = (T3DMat4FP*)ctx->boss->modelMat;
-    if (mat) {
-        t3d_mat4fp_from_srt_euler(
-            mat,
-            ctx->boss->scale,
-            ctx->boss->rot,
-            ctx->boss->pos
-        );
-    }
-}
-
-static void cutscene_guardian_phase1_set_boss_anim(SceneContext *ctx, int animIndex)
-{
-    if (!ctx || !ctx->boss || !ctx->boss->animations) return;
-
-    T3DAnim **anims = (T3DAnim**)ctx->boss->animations;
-
-    t3d_anim_set_playing(anims[animIndex], true);
-
-    ctx->boss->currentAnimation = animIndex;
-    ctx->boss->currentAnimState = animIndex;
-}
 
 
 static void cutscene_guardian_phase1_draw_boss_title(SceneContext *ctx)
@@ -468,7 +441,7 @@ void cutscene_guardian_phase1_enter(SceneContext *ctx, CutsceneState state)
         case CUTSCENE_PHASE1_INTRO_END: {
             camera_mode(CAMERA_CUSTOM);
 
-            cutscene_guardian_phase1_set_boss_anim(ctx, BOSS_ANIM_KNEEL);
+            cutscene_manager_set_boss_anim(ctx, BOSS_ANIM_KNEEL);
 
             s_currentCinematicChainsAnimation = 1;
 
@@ -533,7 +506,7 @@ void cutscene_guardian_phase1_update(SceneContext *ctx, float dt)
         }
     }
 
-    cutscene_guardian_phase1_update_boss_transform(ctx);
+    cutscene_manager_update_boss_transform(ctx);
 
     switch (cutsceneState) {
         case CUTSCENE_PHASE1_INTRO: {
@@ -591,7 +564,7 @@ void cutscene_guardian_phase1_update(SceneContext *ctx, float dt)
                 ctx->boss &&
                 ctx->boss->currentAnimation != BOSS_ANIM_KNEEL_CUTSCENE)
             {
-                cutscene_guardian_phase1_set_boss_anim(ctx, BOSS_ANIM_KNEEL_CUTSCENE);
+                cutscene_manager_set_boss_anim(ctx, BOSS_ANIM_KNEEL_CUTSCENE);
             }
 
             if (cutsceneTimer >= 7.5f) {

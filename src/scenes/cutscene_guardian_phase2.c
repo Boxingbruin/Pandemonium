@@ -236,34 +236,7 @@ static void cutscene_guardian_phase2_next_state(SceneContext *ctx, CutsceneState
     cutscene_guardian_phase2_enter(ctx, nextState);
 }
 
-static void cutscene_guardian_phase2_update_boss_transform(SceneContext *ctx)
-{
-    if (!ctx || !ctx->boss) return;
 
-    boss_anim_update(ctx->boss);
-
-    T3DMat4FP *mat = (T3DMat4FP*)ctx->boss->modelMat;
-    if (mat) {
-        t3d_mat4fp_from_srt_euler(
-            mat,
-            ctx->boss->scale,
-            ctx->boss->rot,
-            ctx->boss->pos
-        );
-    }
-}
-
-static void cutscene_guardian_phase2_set_boss_anim(SceneContext *ctx, int animIndex)
-{
-    if (!ctx || !ctx->boss || !ctx->boss->animations) return;
-
-    T3DAnim **anims = (T3DAnim**)ctx->boss->animations;
-
-    t3d_anim_set_playing(anims[animIndex], true);
-
-    ctx->boss->currentAnimation = animIndex;
-    ctx->boss->currentAnimState = animIndex;
-}
 
 
 static void cutscene_guardian_phase2_draw_standard_room(
@@ -489,7 +462,7 @@ void cutscene_guardian_phase2_enter(SceneContext *ctx, CutsceneState state)
                 ctx->boss->velX = 0.0f;
                 ctx->boss->velZ = 0.0f;
 
-                cutscene_guardian_phase2_set_boss_anim(ctx, BOSS_ANIM_PHASE2_COLLAPSE);
+                cutscene_manager_set_boss_anim(ctx, BOSS_ANIM_PHASE2_COLLAPSE);
             }
 
             camera_mode(CAMERA_CUSTOM);
@@ -517,7 +490,7 @@ void cutscene_guardian_phase2_enter(SceneContext *ctx, CutsceneState state)
         } break;
 
         case CUTSCENE_PHASE2_KNEEL: {
-            cutscene_guardian_phase2_set_boss_anim(ctx, BOSS_ANIM_PHASE2_COLLAPSE_IDLE);
+            cutscene_manager_set_boss_anim(ctx, BOSS_ANIM_PHASE2_COLLAPSE_IDLE);
 
             cutscene_manager_begin_dialog(
                 cutscene_guardian_phase2_get_dialog(0),
@@ -526,7 +499,7 @@ void cutscene_guardian_phase2_enter(SceneContext *ctx, CutsceneState state)
         } break;
 
         case CUTSCENE_PHASE2_BLURB: {
-            cutscene_guardian_phase2_set_boss_anim(ctx, BOSS_ANIM_PHASE2_COLLAPSE_IDLE);
+            cutscene_manager_set_boss_anim(ctx, BOSS_ANIM_PHASE2_COLLAPSE_IDLE);
 
             cutscene_manager_begin_dialog(
                 cutscene_guardian_phase2_get_dialog(1),
@@ -585,7 +558,7 @@ void cutscene_guardian_phase2_enter(SceneContext *ctx, CutsceneState state)
         } break;
 
         case CUTSCENE_PHASE2_BURN: {
-            cutscene_guardian_phase2_set_boss_anim(ctx, BOSS_ANIM_PHASE2_WIN_KNEEL);
+            cutscene_manager_set_boss_anim(ctx, BOSS_ANIM_PHASE2_WIN_KNEEL);
 
             cutscene_manager_begin_dialog(
                 cutscene_guardian_phase2_get_dialog(4),
@@ -646,7 +619,7 @@ void cutscene_guardian_phase2_enter(SceneContext *ctx, CutsceneState state)
 
             startScreenFade = true;
 
-            cutscene_guardian_phase2_set_boss_anim(ctx, BOSS_ANIM_PHASE2_REVEAL);
+            cutscene_manager_set_boss_anim(ctx, BOSS_ANIM_PHASE2_REVEAL);
 
             cutscene_manager_clear_dialog();
 
@@ -679,7 +652,7 @@ void cutscene_guardian_phase2_update(SceneContext *ctx, float dt)
         cutsceneCameraTimer += dt;
     }
 
-    cutscene_guardian_phase2_update_boss_transform(ctx);
+    cutscene_manager_update_boss_transform(ctx);
 
     switch (cutsceneState) {
         case CUTSCENE_PHASE2_INTRO: {
