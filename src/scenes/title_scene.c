@@ -274,17 +274,6 @@ void title_scene_enter(void)
     colorAmbient[2] = 0xFF;
     colorAmbient[3] = 0xFF;
 
-    /*
-     * Transitional ownership:
-     * The title currently displays the character. Until character memory ownership
-     * is cleaned up, keep character init/reset policy simple and avoid freeing it
-     * in title_scene_exit().
-     *
-     * If character_init() is not idempotent in your current codebase, move this
-     * call to a global boot init and leave title_scene_enter() only positioning it.
-     */
-    character_init();
-
     dialog_controller_init();
     letterbox_init();
     letterbox_show(false);
@@ -364,11 +353,6 @@ void title_scene_begin_transition(void)
 
     audio_stop_music_fade(6);
 
-    /*
-     * Defensive reload:
-     * The title scene owns this SFX table. Reload immediately before use in case
-     * another system swapped the active scene SFX table.
-     */
     audio_scene_load_paths(TITLE_SFX_PATHS, TITLE_SFX_COUNT);
 
     audio_play_scene_sfx_dist(

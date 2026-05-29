@@ -11,6 +11,7 @@
 
 #include "scene.h"
 #include "scene_sfx.h"
+#include "scene_controller.h"
 
 #include "audio_controller.h"
 
@@ -52,7 +53,7 @@
 #include "video_player_utility.h"
 
 #include "multi_sword_attacks.h" // TODO: call only from boss
-#include "fx/lightning_fx.h" 
+#include "fx/lightning_fx.h"
 //#include "boulder_hazard.h" // close-range ground-boulder hazard
 
 // Dust (implemented later near lock-on indicator)
@@ -1536,7 +1537,7 @@ void scene_update(void)
         letterbox_update();
 
         if (deathRestartLockoutTimer >= DEATH_RESTART_LOCKOUT_S && btn.a) {
-            scene_restart();
+            scene_controller_switch_to_title();
         }
         return;
     }
@@ -2873,7 +2874,10 @@ void scene_cleanup(void)
     boss_ground_crush_cleanup();
     camera_reset();
 
-    character_delete();
+    /*
+     * Character lifetime is owned by main.c for this transitional pass.
+     * Do not delete/free it during scene transitions.
+     */
     if (g_boss) {
         boss_free(g_boss);
         free(g_boss);

@@ -5,15 +5,20 @@
 
 static SceneControllerSceneId s_active_scene = SCENE_CONTROLLER_SCENE_TITLE;
 
-static void scene_controller_switch_to_title(void)
+void scene_controller_switch_to_title(void)
 {
+    if (s_active_scene == SCENE_CONTROLLER_SCENE_TITLE) {
+        title_scene_exit();
+    } else if (s_active_scene == SCENE_CONTROLLER_SCENE_GUARDIAN) {
+        scene_cleanup();
+    }
+
     s_active_scene = SCENE_CONTROLLER_SCENE_TITLE;
     title_scene_enter();
 }
 
 static void scene_controller_switch_to_guardian_intro(void)
 {
-
     title_scene_exit();
 
     scene_init();
@@ -67,7 +72,6 @@ void scene_controller_restart(void)
 {
     switch (s_active_scene) {
         case SCENE_CONTROLLER_SCENE_TITLE:
-            title_scene_exit();
             scene_controller_switch_to_title();
             break;
 

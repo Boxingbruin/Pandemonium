@@ -13,6 +13,8 @@ void scene_controller_update(void);
 void scene_controller_draw(T3DViewport *viewport);
 void scene_controller_restart(void);
 
+void scene_controller_switch_to_title(void);
+
 SceneControllerSceneId scene_controller_get_active_scene(void);
 
 #endif
