@@ -13,6 +13,7 @@
 #include "save_controller.h"
 #include "collision_system.h"
 #include "scene.h"
+#include "scene_controller.h"
 #include "opening_credits.h"
 #include "dev.h"
 #include "dev/crt_safe_area_overlay.h"
@@ -20,12 +21,12 @@
 
 int main(void)
 {
-    if (DEV_MODE) 
+    if (DEV_MODE)
     {
         dev_tools_init();
     }
 
-    if(DEBUG_DRAW)
+    if (DEBUG_DRAW)
     {
         debugDraw = true;
     }
@@ -79,8 +80,18 @@ int main(void)
         dev_models_init();
     }
 
-    scene_init();
+    /*
+     * Menu controller is shared by title and guardian.
+     * Initialize it before scene_controller_init(), because the title scene can
+     * immediately use menu_controller_update_title()/draw state.
+     */
     menu_controller_init();
+
+    /*
+     * scene_controller starts the title scene.
+     * It later exits title and enters the old scene.c Guardian/boss-room scene.
+     */
+    scene_controller_init();
 
     if (DEV_MODE && debugDraw) {
         offscreenBuffer = surface_alloc(FMT_RGBA16, SCREEN_WIDTH, SCREEN_HEIGHT);
@@ -91,6 +102,7 @@ int main(void)
         // Update time + input first
         game_time_update();
         joypad_update();
+
         // Debounced EEPROM save flush (eg: audio sliders)
         save_controller_update();
 
@@ -109,6 +121,7 @@ int main(void)
         } else {
             rdpq_attach(display_get(), display_get_zbuf());
         }
+
         // ===== UPDATE LOOP =====
         mixer_try_play();
 
@@ -123,10 +136,26 @@ int main(void)
         {
             camera_update(&viewport);
 
-            menu_controller_update();
+            /*
+             * Title menu input is updated inside title_scene_update()
+             * via menu_controller_update_title().
+             *
+             * Normal menu_controller_update() still asks scene.c for GameState,
+             * so only call it while the active scene is Guardian.
+             */
+            if (scene_controller_get_active_scene() == SCENE_CONTROLLER_SCENE_GUARDIAN) {
+                menu_controller_update();
+            }
 
-            scene_update();
-            scene_fixed_update();
+            scene_controller_update();
+
+            /*
+             * Fixed update currently belongs to the Guardian/boss-room scene.
+             * Title does not need it.
+             */
+            if (scene_controller_get_active_scene() == SCENE_CONTROLLER_SCENE_GUARDIAN) {
+                scene_fixed_update();
+            }
         }
         else
         {
@@ -134,18 +163,26 @@ int main(void)
                 camera_update(&viewport);
             }
 
-            menu_controller_update();
+            if (scene_controller_get_active_scene() == SCENE_CONTROLLER_SCENE_GUARDIAN) {
+                menu_controller_update();
+            }
         }
 
         // ===== DRAW LOOP =====
         if (!devMenuOpen || cameraNeedsUpdate) {
-            scene_draw(&viewport);
+            scene_controller_draw(&viewport);
         }
 
         t3d_tri_sync();
         rdpq_sync_pipe();
+
+        /*
+         * Shared menu draw.
+         * On title, the title scene updates the title menu state.
+         * On Guardian, main updates the pause menu state above.
+         */
         menu_controller_draw();
-        
+
         if (DEV_MODE)
         {
             dev_draw_update(&viewport);

@@ -65,6 +65,9 @@ static void blood_reset(void);
 static void blood_update(float dt);
 static void blood_draw(T3DViewport *viewport);
 
+// Forward declaration: scene_init() and scene_restart() start the Guardian intro.
+void scene_init_cutscene(void);
+
 T3DModel* mapModel;
 rspq_block_t* mapDpl;
 T3DMat4FP* mapMatrix;
@@ -117,13 +120,13 @@ ScrollParams floorGlowScrollParams = {
 
 //======== PHASE 2 ========
 
-static T3DModel* bossChainsModel; 
-static rspq_block_t* bossChainsDpl; 
-static T3DMat4FP* bossChainsMatrix; 
-static T3DSkeleton* bossChainsSkeleton; 
-static T3DAnim** bossChainsAnimations = NULL;
-static int currentBossChainsAnimation = 0;
-static bool bossChainsVisible = true;
+// static T3DModel* bossChainsModel;
+// static rspq_block_t* bossChainsDpl;
+// static T3DMat4FP* bossChainsMatrix;
+// static T3DSkeleton* bossChainsSkeleton;
+// static T3DAnim** bossChainsAnimations = NULL;
+// static int currentBossChainsAnimation = 0;
+// static bool bossChainsVisible = true;
 
 T3DModel* bossChainsGlowModel;
 rspq_block_t* bossChainsGlowDpl;
@@ -136,28 +139,16 @@ ScrollParams bossChainsGlowScrollParams = {
 
 //==========================
 
-// Dynamic Banner (Title Screen)
-static T3DModel* dynamicBannerModel; 
-static rspq_block_t* dynamicBannerDpl; 
-static T3DMat4FP* dynamicBannerMatrix; 
-static T3DSkeleton* dynamicBannerSkeleton; 
-static T3DAnim** dynamicBannerAnimations = NULL;
-
-static int currentTitleDialog = 0;
-static float titleTextActivationTimer = 0.0f;
-static float titleTextActivationTime = 50.0f;
-
-static float titleStartGameTimer = 0.0f;
-static float titleStartGameTime = 10.0f;
-static float titleFadeTime = 7.0f;
-
+// Guardian room vertical offset
 static float roomY = -1.0f;
 
-// Title scene character facing: rotate to face down the hall
-static const float TITLE_CHARACTER_YAW = T3D_PI * 0.5f; // +90° around Y
-
+// Cutscene/screen transition state shared with Guardian cutscene context.
 static bool screenTransition = false;
-static bool screenBreath = false;
+
+// Character yaw used when gameplay begins.
+// The old title-facing yaw was +90 degrees; gameplay faces the opposite direction.
+static const float GUARDIAN_CHARACTER_YAW = T3D_PI * 1.5f;
+
 
 // ------------------------------------------------------------
 // Video trigger AABB at world origin
@@ -177,14 +168,6 @@ static const float VIDEO_BLACK_HOLD_S = 0.5f;
 static const float VIDEO_FADE_SPEED   = 200.0f; // same scale you already use
 static bool bossDeathMusicFadeStarted = false;
 
-#define TITLE_DIALOG_COUNT (sizeof(titleDialogs) / sizeof(titleDialogs[0]))
-
-static const char *titleDialogs[] = {
-    ">The Demon\nking has\nforced\nthe land\ninto a\ncentury long\ndarkness.",
-    ">The King\nhas trained\na legion\nof powerful\nknights\nsworn to\nprotect the\nthrone.",
-    ">These\nbattle born\nknights are\ntaken from\ntheir\nfamilies and\ncast into\nservitude.",
-    ">Enduring\nblade and\ntorment\nuntil nothing\nremains but\nhollow armor."
-};
 
 // (phase1Dialogs / phase2Dialogs and cutsceneDialogActive, phase2CutsceneTriggered,
 // bossPostDefeatDialogStep all live in cutscene_manager.c — accessed via the
@@ -271,7 +254,7 @@ static bool bossActivated = false;
 static Boss* g_boss = NULL;  // Boss instance pointer
 
 // Game state management
-static GameState gameState = GAME_STATE_TITLE;
+static GameState gameState = GAME_STATE_PLAYING;
 static bool lastMenuActive = false;
 
 // Death screen restart lockout (prevents rapid A-mash from instantly restarting)
@@ -596,81 +579,10 @@ void scene_load_environment(void)
 
     // Global/system-level effect. Keep loaded if it is used outside one cutscene,
     // or move it later if it is phase-2-only.
-    lightning_fx_system_init("rom:/boss/boss_back_sword_lightning2.t3dm");
+    //lightning_fx_system_init("rom:/boss/boss_back_sword_lightning2.t3dm");
 }
 
-static void scene_title_init_dynamic_banner_assets(void)
-{
-    if (dynamicBannerModel) return;
-
-    // ===== LOAD Dynamic Banner (Title Screen) =====
-    dynamicBannerModel = t3d_model_load("rom:/title_screen/dynamic_banners.t3dm"); 
-    dynamicBannerSkeleton = malloc_uncached(sizeof(T3DSkeleton)); 
-    *dynamicBannerSkeleton = t3d_skeleton_create(dynamicBannerModel); 
-    const char* dynamicBannerAnimationNames[] = {"Wind"}; 
-    const int dynamicBannerAnimationCount = 1;
-
-    dynamicBannerAnimations = malloc_uncached(dynamicBannerAnimationCount * sizeof(T3DAnim*)); 
-    for (int i = 0; i < dynamicBannerAnimationCount; i++) { 
-        dynamicBannerAnimations[i] = malloc_uncached(sizeof(T3DAnim)); 
-        *dynamicBannerAnimations[i] = t3d_anim_create(dynamicBannerModel, dynamicBannerAnimationNames[i]); 
-        t3d_anim_set_looping(dynamicBannerAnimations[i], true); 
-        t3d_anim_set_playing(dynamicBannerAnimations[i], true); 
-        t3d_anim_attach(dynamicBannerAnimations[i], dynamicBannerSkeleton); 
-    }
-
-    rspq_block_begin(); 
-    t3d_model_draw_skinned(dynamicBannerModel, dynamicBannerSkeleton); 
-    dynamicBannerDpl = rspq_block_end(); 
-    dynamicBannerMatrix = malloc_uncached(sizeof(T3DMat4FP)); 
-    t3d_mat4fp_from_srt_euler(dynamicBannerMatrix, (float[3]){MODEL_SCALE, MODEL_SCALE, MODEL_SCALE}, (float[3]){0.0f, 0.0f, 0.0f}, (float[3]){0.0f, roomY, 0.0f} );
-}
-
-static void scene_title_init(void)
-{
-    // Ensure title-only assets are loaded once.
-    scene_title_init_dynamic_banner_assets();
-
-    audio_play_music("rom:/audio/music/demonous-22k.wav64", true);
-
-    // Init to title screen position
-    camera_mode(CAMERA_CUSTOM);
-    camera_initialize(
-        &(T3DVec3){{-580.6f, 75.0f, 0.0f}}, 
-        &(T3DVec3){{-1,0,0}}, 
-        1.544792654048f, 
-        4.05f
-    );
-
-    customCamTarget.v[1] = 90.0f;
-
-    character.pos[0] = -650.0f;
-    character.pos[1] = 44.0f;
-    character.pos[2] = 0.0f;
-
-    character.scale[0] = MODEL_SCALE * 1.5f;
-    character.scale[1] = MODEL_SCALE * 1.5f;
-    character.scale[2] = MODEL_SCALE * 1.5f;
-
-    character.rot[1] = TITLE_CHARACTER_YAW;
-
-    character_update_position();
-
-    // Reset/prime banner animation so restarts start from a consistent pose.
-    if (dynamicBannerAnimations && dynamicBannerAnimations[0]) {
-        t3d_anim_set_time(dynamicBannerAnimations[0], 0.0f);
-        t3d_anim_set_playing(dynamicBannerAnimations[0], true);
-    }
-
-    // Start Dialog
-    currentTitleDialog = 0;
-    titleTextActivationTimer = 0.0f;
-    dialog_controller_speak(titleDialogs[0], 0, 9.0f, false, true);
-
-    startScreenFade = true;
-}
-
-void scene_init(void) 
+void scene_init(void)
 {
     joypad_rumble_stop();
 
@@ -682,7 +594,7 @@ void scene_init(void)
 
     cameraState = CAMERA_CUSTOM;
     lastCameraState = CAMERA_CUSTOM;
-    
+
     // ==== Lighting ====
     game_lighting_initialize();
     colorAmbient[2] = 0xFF;
@@ -695,7 +607,7 @@ void scene_init(void)
     // colorDir[1] = 0xFF;
     // colorDir[0] = 0xFF;
     // colorDir[3] = 0xFF;
-    // lightDirVec = (T3DVec3){{-0.9833f, 0.1790f, -0.0318f}}; 
+    // lightDirVec = (T3DVec3){{-0.9833f, 0.1790f, -0.0318f}};
     // t3d_vec3_norm(&lightDirVec);
 
     // Load collision mesh
@@ -706,7 +618,7 @@ void scene_init(void)
     // collision_mesh_init();
 
     scene_load_environment();
-    
+
     g_boss = boss_spawn();
     if (!g_boss) {
         // Handle error
@@ -716,7 +628,7 @@ void scene_init(void)
     boss_ground_crush_init();
 
     // Transform will be updated in boss_update()
-    
+
     // Make character face the boss
     // Note: dx and dz were calculated but not used - keeping for potential future use
     // float dx = g_boss->pos[0] - character.pos[0];
@@ -724,7 +636,7 @@ void scene_init(void)
 
     // Initialize character
     character_init();
-    
+
     // // Set character initial position to be on the ground
     // character.pos[0] = 150.0f;
     // character.pos[1] = -4.8f;  // Position character feet on map surface
@@ -804,12 +716,19 @@ void scene_init(void)
 
     collision_init();
 
-    scene_title_init();
 
     dust_reset();
     blood_reset();
 
     msa_init();
+
+    // Guardian scene normal startup: entering the scene starts the phase-1 intro.
+    gameState = GAME_STATE_PLAYING;
+    cutsceneState = CUTSCENE_PHASE1_INTRO;
+    cutsceneTimer = 0.0f;
+    cutsceneCameraTimer = 0.0f;
+    scene_init_cutscene();
+    audio_stop_all_sfx();
 
     // DEBUG: uncomment to start the fight in phase 2
     // if (g_boss) g_boss->phaseIndex = 2;
@@ -881,7 +800,7 @@ void scene_reset(void)
     // Note: skipButtonVisible is also used for title transition, so we reset it here
     bossActivated = false;
     phase2CutsceneTriggered = false;
-    gameState = GAME_STATE_TITLE;
+    gameState = GAME_STATE_PLAYING;
     lastMenuActive = false;
     lastAPressed = false;
     lastStartPressed = false;
@@ -901,14 +820,8 @@ void scene_reset(void)
     bossDeathMusicFadeStarted = false;
     videoTrigFired = false;
     videoPendingPlay = false;
-
-    // Title state
+    // Cutscene fade/transition state
     screenTransition = false;
-    screenBreath = false;
-    titleStartGameTimer = 0.0f;
-    titleTextActivationTimer = 0.0f;
-    currentTitleDialog = 0;
-
     // UI state
     bossTitleFade = 0.0f;
     bossUiIntro = 1.0f;
@@ -1219,28 +1132,6 @@ bool scene_is_menu_active(void) {
     return gameState == GAME_STATE_MENU;
 }
 
-void scene_begin_title_transition(void)
-{
-    if (gameState == GAME_STATE_TITLE_TRANSITION) return;
-    if (gameState != GAME_STATE_TITLE) return;
-
-    // Hide title menu immediately once we commit to transitioning.
-    menu_controller_close();
-
-    gameState = GAME_STATE_TITLE_TRANSITION;
-    skipButtonVisible = false; // Reset skip button state when entering transition
-    lastCutsceneAPressed = false;
-
-    camera_breath_active(false);
-    screenBreath = false;
-    audio_stop_music_fade(6); // duration
-    audio_play_scene_sfx_dist(
-        SCENE1_SFX_TITLE_WALK, // sfx id
-        1.0f,                  // base volume
-        0.0f                   // distance
-    );
-}
-
 // Check if character would collide with room boundaries at the given position
 // Returns true if character would be outside room bounds (collision detected)
 // bool scene_check_room_bounds(float posX, float posY, float posZ)
@@ -1250,7 +1141,7 @@ void scene_begin_title_transition(void)
 
 void scene_restart(void)
 {
-    debugf("RESTART: Starting restart sequence\n");
+    debugf("RESTART: Starting Guardian scene restart sequence\n");
 
     // 1) Stop running systems first (prevents update-on-freed state)
     audio_stop_all_sfx();
@@ -1264,16 +1155,22 @@ void scene_restart(void)
     if (g_boss) boss_reset(g_boss);
     character_reset();
 
-    // 4) Reset camera / lock-on and scene runtime flags
+    // 4) Reset camera / lock-on and Guardian runtime flags
     camera_reset();
     camera_mode(CAMERA_CUSTOM);
     scene_reset();
 
-    // 5) Enter title runtime state (NO re-init / NO allocations)
-    scene_title_init();
+    // 5) Re-enter Guardian intro runtime state (NO allocations / NO frees)
+    gameState = GAME_STATE_PLAYING;
+    cutsceneState = CUTSCENE_PHASE1_INTRO;
+    cutsceneTimer = 0.0f;
+    cutsceneCameraTimer = 0.0f;
+    scene_init_cutscene();
+    audio_stop_all_sfx();
+
     scene_sync_input_edge_state();
 
-    debugf("RESTART: Soft reset complete. cameraState=%d speaking=%s\n",
+    debugf("RESTART: Guardian soft reset complete. cameraState=%d speaking=%s\n",
            cameraState, dialog_controller_speaking() ? "true" : "false");
 }
 
@@ -1288,7 +1185,7 @@ void scene_init_playing(bool skippedCutscene)
     character.scale[2] = MODEL_SCALE * 0.5f;
 
     // Face towards boss
-    character.rot[1] = TITLE_CHARACTER_YAW + T3D_PI;
+    character.rot[1] = GUARDIAN_CHARACTER_YAW;
 
     character_update_position();
 
@@ -1608,125 +1505,7 @@ void scene_cutscene_update(void)
     scene_update_post_boss_cutscene_input();
 }
 
-void scene_update_title(void)
-{
-    if(gameState == GAME_STATE_TITLE_TRANSITION)
-    {
-        if(titleStartGameTimer >= titleStartGameTime){
-            titleStartGameTimer = 0.0f;
-            // Enter the intro cutscene intentionally from title.
-            cutsceneState = CUTSCENE_PHASE1_INTRO;
-            cutsceneTimer = 0.0f;
-            cutsceneCameraTimer = 0.0f;
-            scene_init_cutscene();
-            audio_stop_all_sfx(); // TODO: eventually we probably want a stop specific sound effect ID but that would add complexity at this point
-        }
-        else
-        {
-            // Handle skip button - toggle button on first A press, skip on second
-            bool aCurrentlyPressed = btn.a;
-            bool aJustPressed = aCurrentlyPressed && !lastCutsceneAPressed;
-            
-            if (aJustPressed)
-            {
-                if (!skipButtonVisible)
-                {
-                    // First press - show the skip button
-                    skipButtonVisible = true;
-                }
-                else
-                {
-                    // Second press - skip to cutscene
-                    skipButtonVisible = false;
-                    titleStartGameTimer = 0.0f;
-                    cutsceneState = CUTSCENE_PHASE1_INTRO;
-                    cutsceneTimer = 0.0f;
-                    cutsceneCameraTimer = 0.0f;
-                    scene_init_cutscene();
-                    audio_stop_all_sfx();
-                    lastCutsceneAPressed = aCurrentlyPressed;
-                    return;
-                }
-            }
-            
-            // Update last state for next frame
-            lastCutsceneAPressed = aCurrentlyPressed;
-            
-            // Allow start button to skip immediately (original behavior)
-            if(btn.start)
-            {
-                titleStartGameTimer = 0.0f;
-                cutsceneState = CUTSCENE_PHASE1_INTRO;
-                cutsceneTimer = 0.0f;
-                cutsceneCameraTimer = 0.0f;
-                scene_init_cutscene();
-                audio_stop_all_sfx();
-                return;
-            }
-
-            audio_update_fade(deltaTime);
-            titleStartGameTimer += deltaTime;
-
-            float forwardSpeed = 15.0f;
-            float targetDropSpeed = 1.0f;
-
-            // compute forward dir
-            customCamDir.v[0] = customCamTarget.v[0] - customCamPos.v[0];
-            customCamDir.v[1] = customCamTarget.v[1] - customCamPos.v[1];
-            customCamDir.v[2] = customCamTarget.v[2] - customCamPos.v[2];
-            t3d_vec3_norm(&customCamDir);
-
-            // move forward
-            for (int i = 0; i < 3; i++) {
-                customCamPos.v[i]    += customCamDir.v[i] * forwardSpeed * deltaTime;
-                customCamTarget.v[i] += customCamDir.v[i] * forwardSpeed * deltaTime;
-            }
-
-            // gently lower target
-            customCamTarget.v[1] -= targetDropSpeed * deltaTime;
-        }
-        return;
-    }
-
-    // No "press A/Start to begin" here anymore; the title menu handles starting the game.
-    // Keep these updated so other title code relying on them doesn't see stale edges.
-    lastStartPressed = btn.start;
-    lastAPressed = btn.a;
-
-    if (!screenBreath) 
-    { 
-        camera_breath_active(true); 
-        screenBreath = true; 
-    }
-
-    camera_breath_update(deltaTime);
-
-    // Don't advance/play story dialog while browsing title submenus (Audio/Controls/Credits).
-    if (!menu_controller_is_title_submenu_active()) {
-        if(titleTextActivationTimer >= titleTextActivationTime){
-            dialog_controller_update();
-            if(!dialog_controller_speaking())
-            {
-                currentTitleDialog ++;
-                if(currentTitleDialog >= TITLE_DIALOG_COUNT)
-                {
-                    titleTextActivationTimer = 0;
-                    currentTitleDialog = -1;
-                }
-                else
-                {
-                    dialog_controller_speak(titleDialogs[currentTitleDialog], 0, 9.0f, false, true);
-                }
-            }
-        }
-        else
-        {
-            titleTextActivationTimer += deltaTime;
-        }
-    }
-}
-
-void scene_update(void) 
+void scene_update(void)
 {
     if (gameState == GAME_STATE_VIDEO) {
         return;
@@ -1750,21 +1529,9 @@ void scene_update(void)
     }
 
     scene_update_video_preroll();  // always safe; it early-outs
-    
+
     // Update all scrolling textures
     scroll_update();
-
-    if(gameState == GAME_STATE_TITLE || gameState == GAME_STATE_TITLE_TRANSITION)
-    {
-        scene_update_title();
-        character_update();
-        t3d_anim_update(dynamicBannerAnimations[0], deltaTime);
-        t3d_skeleton_update(dynamicBannerSkeleton);
-        // Keep animation state updated (bars not drawn during title)
-        letterbox_update();
-        return;
-    }
-
     // Check if pause menu was just closed - if so, reset character button state
     // NOTE: during victory, the pause menu overlays without switching GAME_STATE to MENU.
     bool pauseMenuBlocking = scene_is_menu_active() || menu_controller_is_pause_menu_active();
@@ -1799,7 +1566,7 @@ void scene_update(void)
         }
         return;
     }
-    
+
     // Don't update game logic when pause menu is active (including victory overlay case)
     if (pauseMenuBlocking) {
         return;
@@ -1844,7 +1611,7 @@ void scene_update(void)
         character_update_position();
 
         boss_ground_crush_update(deltaTime);
-        
+
         if (bossActivated && g_boss) {
             boss_update(g_boss);
             // Boss death no longer forces GAME_STATE_VICTORY.
@@ -1894,7 +1661,7 @@ void scene_update(void)
     {
         scene_cutscene_update();
     }
-    
+
     // Update letterbox animation
     letterbox_update();
 
@@ -2015,7 +1782,7 @@ void scene_update(void)
     lastCRightHeld = cRightHeld;
 }
 
-void scene_fixed_update(void) 
+void scene_fixed_update(void)
 {
 }
 
@@ -2566,129 +2333,6 @@ static void blood_draw(T3DViewport *viewport) {
     rdpq_mode_zbuf(false, false);
 }
 
-void scene_draw_title(T3DViewport *viewport)
-{
-    // ===== DRAW 3D =====
-    rdpq_sync_pipe();
-    rdpq_mode_zbuf(false, false);
-
-    // Draw no depth environment first
-    t3d_matrix_push_pos(1);
-        t3d_matrix_set(mapMatrix, true);
-        rspq_block_run(mapDpl);
-
-        t3d_matrix_set(dynamicBannerMatrix, true);
-        rspq_block_run(dynamicBannerDpl);
-    t3d_matrix_pop(1);
-
-        // Draw depth environment
-    rdpq_sync_pipe();
-    rdpq_mode_zbuf(true, true);
-
-    t3d_matrix_push_pos(1);
-        character_draw();
-
-        t3d_matrix_set(fogDoorMatrix, true);
-        // Create a struct to pass the scrolling parameters to the tile callback
-        t3d_model_draw_custom(fogDoorModel, (T3DModelDrawConf){
-            .userData = &fogScrollParams,
-            .tileCb = tile_scroll,
-        });
-    t3d_matrix_pop(1);
-
-    // ======== Draw 2D ======== //
-    rdpq_sync_pipe();
-    //Title text
-    if(gameState != GAME_STATE_TITLE_TRANSITION)
-    {
-        rdpq_set_mode_standard();
-        rdpq_mode_blender(RDPQ_BLENDER_MULTIPLY);
-
-        // Run counters:
-        // - "Runs" is persisted via EEPROM (per save slot).
-        {
-            const bool savesOn = save_controller_is_enabled();
-            const uint32_t savedRuns = save_controller_get_run_count();
-            const uint32_t bestMs = save_controller_get_best_boss_time_ms();
-
-            // Hide counters when entering title submenus (Settings/Controls/Credits).
-            // Draw the panel if:
-            // - saves are disabled (so it's obvious why "Runs" won't persist), or
-            // - we have any counter value to show.
-            if (!menu_controller_is_title_submenu_active() &&
-                (!savesOn || savedRuns > 0 || bestMs > 0)) {
-                // Keep inside user-adjusted UI safe area for CRT overscan.
-                const int margin = ui_safe_margin_x();
-                const int panelW = 120;
-                const bool showBest = (savesOn && bestMs > 0);
-                const int lineCount = 1 + (showBest ? 1 : 0);
-                const int panelH = 6 + (lineCount * 13); // 13px per line + small padding
-                const int panelX0 = margin;
-                const int panelY0 = SCREEN_HEIGHT - ui_safe_margin_y() - panelH;
-
-                rdpq_set_prim_color(RGBA32(0, 0, 0, 120));
-                rdpq_mode_combiner(RDPQ_COMBINER_FLAT);
-                rdpq_fill_rectangle(panelX0, panelY0, panelX0 + panelW, panelY0 + panelH);
-
-                rdpq_set_prim_color(RGBA32(255, 255, 255, 255));
-                int lineY = panelY0 + 13;
-
-                // Line 1: Runs (persisted)
-                if (savesOn) {
-                    rdpq_text_printf(NULL, FONT_UNBALANCED, panelX0 + 6, lineY,
-                                     "Runs: %lu", (unsigned long)savedRuns);
-                } else {
-                    rdpq_text_printf(NULL, FONT_UNBALANCED, panelX0 + 6, lineY,
-                                     "Runs: --");
-                }
-                lineY += 13;
-
-                // Line 2 (optional): Best time
-                if (showBest) {
-                    const uint32_t minutes = bestMs / 60000u;
-                    const uint32_t seconds = (bestMs / 1000u) % 60u;
-                    const uint32_t millis  = bestMs % 1000u;
-                    rdpq_text_printf(NULL, FONT_UNBALANCED, panelX0 + 6, lineY,
-                                     "Best: %lu:%02lu.%03lu",
-                                     (unsigned long)minutes,
-                                     (unsigned long)seconds,
-                                     (unsigned long)millis);
-                    lineY += 13;
-                }
-            }
-        }
-
-        if(titleTextActivationTimer >= titleTextActivationTime && !menu_controller_is_title_submenu_active())
-        {
-            // Keep the title dialog inside the user-adjusted UI safe area (CRT overscan).
-            const int dlgW = 120;
-            const int dlgH = 180;
-            const int dlgX = SCREEN_WIDTH - ui_safe_margin_x() - dlgW;
-            const int dlgY = ui_safe_margin_y();
-            dialog_controller_draw(true, dlgX, dlgY, dlgW, dlgH);
-        }
-
-        display_utility_solid_black_transition(true, 200.0f);
-
-    }
-    else
-    {
-        if (titleStartGameTimer >= titleFadeTime && !screenTransition)
-        {
-            startScreenFade = true; // this is set in the display utility. Must not update this value.
-            screenTransition = true; // this is to toggle off setting the display utility.
-        }
-
-        if(screenTransition)
-        {
-            display_utility_solid_black_transition(false, 200.0f);
-        }
-
-        // Draw skip button on top during title transition (fog door)
-        cutscene_manager_draw_skip_overlay(skipButtonVisible);
-    }
-}
-
 void scene_draw_cutscene(T3DViewport *viewport)
 {
     scene_update_context();
@@ -2813,7 +2457,7 @@ static void scene_draw_video_trigger(T3DViewport *vp)
     debug_draw_aabb(vp, &mn, &mx, color);
 }
 
-void scene_draw(T3DViewport *viewport) 
+void scene_draw(T3DViewport *viewport)
 {
 
     if(gameState == GAME_STATE_VIDEO)
@@ -2849,13 +2493,6 @@ void scene_draw(T3DViewport *viewport)
     // T3DVec3 negCamDir = {{-camDir.x, -camDir.y, -camDir.z}};
     // t3d_light_set_directional(0, (uint8_t[4]){0x00, 0x00, 0x00, 0xFF}, &negCamDir);
     // t3d_light_set_count(1);
-
-    if(gameState == GAME_STATE_TITLE || gameState == GAME_STATE_TITLE_TRANSITION)
-    {
-        scene_draw_title(viewport);
-        return;
-    }
-
     if(cutsceneState != CUTSCENE_NONE)
     {
         scene_draw_cutscene(viewport);
@@ -2879,7 +2516,7 @@ void scene_draw(T3DViewport *viewport)
         t3d_matrix_set(mapMatrix, true);
         rspq_block_run(mapDpl);
     t3d_matrix_pop(1);
-    
+
 
     // if(g_boss->isAttacking || g_boss->health <= 0 || g_boss->state == BOSS_STATE_COMBO_ATTACK || g_boss->state == BOSS_STATE_STOMP) // TODO: Hacky fix but something weird is going on with comnbo1 and we dont have time
     // {
@@ -2887,10 +2524,10 @@ void scene_draw(T3DViewport *viewport)
         rdpq_sync_pipe();
         rdpq_mode_zbuf(true, true);
 
-        t3d_matrix_push_pos(1);   
+        t3d_matrix_push_pos(1);
             t3d_matrix_set(roomFloorMatrix, true);
             rspq_block_run(roomFloorDpl);
-        t3d_matrix_pop(1); 
+        t3d_matrix_pop(1);
     // }
     // else
     // {
@@ -2898,10 +2535,10 @@ void scene_draw(T3DViewport *viewport)
     //     rdpq_sync_pipe();
     //     rdpq_mode_zbuf(false, false);
 
-    //     t3d_matrix_push_pos(1);   
+    //     t3d_matrix_push_pos(1);
     //         t3d_matrix_set(roomFloorMatrix, true);
     //         rspq_block_run(roomFloorDpl);
-    //     t3d_matrix_pop(1); 
+    //     t3d_matrix_pop(1);
     // }
 
     rdpq_sync_pipe();
@@ -2916,12 +2553,12 @@ void scene_draw(T3DViewport *viewport)
             boss_draw_shadow(g_boss);
         }
 
-    t3d_matrix_pop(1); 
+    t3d_matrix_pop(1);
 
     rdpq_sync_pipe();
     rdpq_mode_zbuf(true, true);
 
-    t3d_matrix_push_pos(1);   
+    t3d_matrix_push_pos(1);
         t3d_matrix_set(roomLedgeMatrix, true);
         rspq_block_run(roomLedgeDpl);
 
@@ -2931,12 +2568,12 @@ void scene_draw(T3DViewport *viewport)
         t3d_matrix_set(pillarsFrontMatrix, true);
         rspq_block_run(pillarsFrontDpl);
 
-    t3d_matrix_pop(1); 
+    t3d_matrix_pop(1);
 
     rdpq_sync_pipe();
     rdpq_mode_zbuf(false, false);
 
-    t3d_matrix_push_pos(1);   
+    t3d_matrix_push_pos(1);
     // floor glow
     if(g_boss->health <= 0)
     {
@@ -2947,7 +2584,7 @@ void scene_draw(T3DViewport *viewport)
             .tileCb = tile_scroll,
         });
     }
-    t3d_matrix_pop(1); 
+    t3d_matrix_pop(1);
 
     rdpq_sync_pipe();
     rdpq_mode_zbuf(true, true);
@@ -2965,7 +2602,7 @@ void scene_draw(T3DViewport *viewport)
         if (g_boss) {
             boss_draw(g_boss);
         }
-        
+
 
     t3d_matrix_pop(1);
 
@@ -2973,7 +2610,7 @@ void scene_draw(T3DViewport *viewport)
     //boulder_hazard_draw(viewport); // close-range ground boulders
 
     //Draw transparencies last
-    // t3d_matrix_push_pos(1);    
+    // t3d_matrix_push_pos(1);
     //     t3d_matrix_set(sunshaftsMatrix, true);
     //     rspq_block_run(sunshaftsDpl);
     // t3d_matrix_pop(1);
@@ -2999,7 +2636,7 @@ void scene_draw(T3DViewport *viewport)
     t3d_matrix_push_pos(1);
         t3d_matrix_set(chainsMatrix, true);
         rspq_block_run(chainsDpl);
-    t3d_matrix_pop(1); 
+    t3d_matrix_pop(1);
     // ===== DRAW 2D =====
 
     // Screen-space ribbon trails, drawn right after 3D so they feel "in world"
@@ -3021,7 +2658,7 @@ void scene_draw(T3DViewport *viewport)
         draw_lockon_indicator(viewport);
 
     scene_draw_video_trigger(viewport);
-    
+
     bool cutsceneActive = scene_is_cutscene_active();
     GameState state = scene_get_game_state();
     bool isDead = state == GAME_STATE_DEAD;
@@ -3072,7 +2709,7 @@ void scene_draw(T3DViewport *viewport)
             .width = SCREEN_WIDTH,
         }, FONT_UNBALANCED, 0, currentTextY, "%s", g_boss->name);
     }
-    
+
     if (isEndScreen) {
         rdpq_sync_pipe();
         rdpq_set_mode_standard();
@@ -3186,7 +2823,7 @@ void scene_draw(T3DViewport *viewport)
         }
         return;
     }
-    
+
     // Draw dialog on top of everything
     int height = 70;
     int width = 220;
@@ -3194,7 +2831,7 @@ void scene_draw(T3DViewport *viewport)
     // bottom positioning
     if(cutsceneDialogActive)
     {
-        int y = 240 - height - 10; 
+        int y = 240 - height - 10;
         dialog_controller_draw(false, x, y, width, height);
     }
 
@@ -3256,13 +2893,13 @@ void scene_delete_environment(void)
     if (roomFloorMatrix) { free_uncached(roomFloorMatrix); roomFloorMatrix = NULL; }
 }
 
-void scene_cleanup(void) // Realistically we never want to call this for the jam.
+void scene_cleanup(void)
 {
     //collision_mesh_cleanup();
     scene_delete_environment();
     boss_ground_crush_cleanup();
     camera_reset();
-    
+
     character_delete();
     if (g_boss) {
         boss_free(g_boss);
@@ -3272,19 +2909,6 @@ void scene_cleanup(void) // Realistically we never want to call this for the jam
 
     dialog_controller_free();
     audio_scene_unload_sfx();
-
-    // --- Title/Cutscene assets not covered by scene_delete_environment() ---
-    if (dynamicBannerDpl) { rspq_block_free(dynamicBannerDpl); dynamicBannerDpl = NULL; }
-    if (dynamicBannerModel) { t3d_model_free(dynamicBannerModel); dynamicBannerModel = NULL; }
-    if (dynamicBannerMatrix) { free_uncached(dynamicBannerMatrix); dynamicBannerMatrix = NULL; }
-    if (dynamicBannerSkeleton) { t3d_skeleton_destroy(dynamicBannerSkeleton); free_uncached(dynamicBannerSkeleton); dynamicBannerSkeleton = NULL; }
-    if (dynamicBannerAnimations) {
-        // only 1 anim currently
-        if (dynamicBannerAnimations[0]) { t3d_anim_destroy(dynamicBannerAnimations[0]); free_uncached(dynamicBannerAnimations[0]); }
-        free_uncached(dynamicBannerAnimations);
-        dynamicBannerAnimations = NULL;
-    }
-
     cutscene_manager_cleanup();
     button_prompt_cleanup();
 

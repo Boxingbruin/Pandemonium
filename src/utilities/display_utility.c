@@ -1,6 +1,4 @@
 #include <libdragon.h>
-#include <t3d/t3d.h>
-#include <t3d/t3ddebug.h>
 #include <string.h>
 #include <math.h>
 
@@ -121,7 +119,7 @@ void draw_boss_health_bar(const char *name, float ratio, float flash)
 	#endif
 	rdpq_mode_combiner(RDPQ_COMBINER_FLAT);
 	rdpq_mode_blender(RDPQ_BLENDER_MULTIPLY);
-	
+
 	// Background bar (darker so the red fill is clearly visible as it shrinks).
 	// Boss HUD is anchored to the bottom-center of the screen, narrower than full width.
 	const int marginY = ui_safe_margin_y();
@@ -170,7 +168,7 @@ void draw_boss_health_bar(const char *name, float ratio, float flash)
 		rdpq_set_prim_color(RGBA32(50, 50, 50, 130));
 		rdpq_fill_rectangle(revealLeft, top, revealRight, bottom);
 	}
-	
+
 	update_bar_trails(ratio, &bossHealthBarState);
 
 	int fillEnd  = barLeft + (int)((barRight - barLeft) * ratio);
@@ -225,7 +223,7 @@ void draw_boss_health_bar(const char *name, float ratio, float flash)
 	// #if 0
 	if (!bossHealthBarNameLoadAttempted) {
 		bossHealthBarNameLoadAttempted = true;
-		bossHealthBarNameSprite = sprite_load("rom:/ui/healthbars/boss/guardian_of_the_shackled_sun.sprite");
+		bossHealthBarNameSprite = sprite_load("rom:/ui/healthbars/boss/guardian_of_the_shackled_sun.ia4.sprite");
 	}
 	if (bossHealthBarNameSprite) {
 		rdpq_sync_pipe();
