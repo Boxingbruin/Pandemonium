@@ -14,6 +14,7 @@
 #include <t3d/t3danim.h>
 #include <t3d/t3dmodel.h>
 
+#include "scene_context.h"
 #include "../controllers/audio_controller.h"
 #include "../controllers/camera_controller.h"
 #include "../controllers/dialog_controller.h"
