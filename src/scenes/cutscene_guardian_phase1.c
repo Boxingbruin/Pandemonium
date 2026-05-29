@@ -17,7 +17,6 @@
 #include "scene_context.h"
 #include "../controllers/audio_controller.h"
 #include "../controllers/camera_controller.h"
-#include "../controllers/dialog_controller.h"
 #include "../objects/character.h"
 #include "../managers/cutscene_manager.h"
 #include "../managers/cutscene_manager_internal.h"
@@ -207,17 +206,6 @@ static void cutscene_guardian_phase1_set_boss_anim(SceneContext *ctx, int animIn
     ctx->boss->currentAnimState = animIndex;
 }
 
-static void cutscene_guardian_phase1_draw_dialog(void)
-{
-    if (!cutsceneDialogActive) return;
-
-    int height = 70;
-    int width = 220;
-    int x = (SCREEN_WIDTH - width) / 2;
-    int y = 240 - height - 10;
-
-    dialog_controller_draw(false, x, y, width, height);
-}
 
 static void cutscene_guardian_phase1_draw_boss_title(SceneContext *ctx)
 {
@@ -411,7 +399,6 @@ void cutscene_guardian_phase1_enter(SceneContext *ctx, CutsceneState state)
         } break;
 
         case CUTSCENE_PHASE1_FILLER: {
-            cutsceneDialogActive = true;
 
             cutscene_manager_set_camera_shot(
                 ctx,
@@ -420,17 +407,13 @@ void cutscene_guardian_phase1_enter(SceneContext *ctx, CutsceneState state)
                     (T3DVec3){{0.476f, 55.54f, -71.29f}}
             );
 
-            dialog_controller_speak(
+            cutscene_manager_begin_dialog(
                 cutscene_guardian_phase1_get_dialog(0),
-                0,
-                0.0f,
-                false,
-                false
+                0.0f
             );
         } break;
 
         case CUTSCENE_PHASE1_LOYALTY: {
-            cutsceneDialogActive = true;
 
             cutscene_manager_set_camera_shot(
                 ctx,
@@ -439,17 +422,13 @@ void cutscene_guardian_phase1_enter(SceneContext *ctx, CutsceneState state)
                     (T3DVec3){{80.4f, -1.0f, -11.0f}}
             );
 
-            dialog_controller_speak(
+            cutscene_manager_begin_dialog(
                 cutscene_guardian_phase1_get_dialog(1),
-                0,
-                0.0f,
-                false,
-                false
+                0.0f
             );
         } break;
 
         case CUTSCENE_PHASE1_FEAR: {
-            cutsceneDialogActive = true;
 
             cutscene_manager_set_camera_shot(
                 ctx,
@@ -458,12 +437,9 @@ void cutscene_guardian_phase1_enter(SceneContext *ctx, CutsceneState state)
                     (T3DVec3){{400.0f, 43.41f, -29.67f}}
             );
 
-            dialog_controller_speak(
+            cutscene_manager_begin_dialog(
                 cutscene_guardian_phase1_get_dialog(2),
-                0,
-                0.0f,
-                false,
-                false
+                0.0f
             );
         } break;
 
@@ -472,7 +448,7 @@ void cutscene_guardian_phase1_enter(SceneContext *ctx, CutsceneState state)
                 *ctx->screenTransition = false;
             }
 
-            cutsceneDialogActive = false;
+            cutscene_manager_clear_dialog();
 
             if (s_chainBreakAnimations && s_chainBreakAnimations[0]) {
                 t3d_anim_set_time(s_chainBreakAnimations[0], 0.0f);
@@ -510,7 +486,7 @@ void cutscene_guardian_phase1_enter(SceneContext *ctx, CutsceneState state)
 
             letterbox_hide();
 
-            cutsceneDialogActive = false;
+            cutscene_manager_clear_dialog();
 
             cutscene_manager_set_camera_shot(
                 ctx,
@@ -589,7 +565,7 @@ void cutscene_guardian_phase1_update(SceneContext *ctx, float dt)
 
         case CUTSCENE_PHASE1_FILLER: {
             cutscene_manager_update_camera(13.0f);
-            dialog_controller_update();
+            cutscene_manager_update_dialog();
 
             if (cutsceneTimer >= 10.0f) {
                 cutscene_guardian_phase1_next_state(ctx, CUTSCENE_PHASE1_LOYALTY);
@@ -599,7 +575,7 @@ void cutscene_guardian_phase1_update(SceneContext *ctx, float dt)
 
         case CUTSCENE_PHASE1_LOYALTY: {
             cutscene_manager_update_camera(5.0f);
-            dialog_controller_update();
+            cutscene_manager_update_dialog();
 
             if (cutsceneTimer >= 5.0f) {
                 cutscene_guardian_phase1_next_state(ctx, CUTSCENE_PHASE1_FEAR);
@@ -609,7 +585,7 @@ void cutscene_guardian_phase1_update(SceneContext *ctx, float dt)
 
         case CUTSCENE_PHASE1_FEAR: {
             cutscene_manager_update_camera(7.5f);
-            dialog_controller_update();
+            cutscene_manager_update_dialog();
 
             if (cutsceneTimer >= 6.5f &&
                 ctx->boss &&
@@ -670,6 +646,8 @@ void cutscene_guardian_phase1_update(SceneContext *ctx, float dt)
 
 void cutscene_guardian_phase1_skip(SceneContext *ctx)
 {
+    cutscene_manager_clear_dialog();
+
     skipButtonVisible = false;
     cutsceneTimer = 0.0f;
     cutsceneCameraTimer = 0.0f;
@@ -875,7 +853,7 @@ void cutscene_guardian_phase1_draw(SceneContext *ctx, T3DViewport *viewport)
                 }
             t3d_matrix_pop(1);
 
-            cutscene_guardian_phase1_draw_dialog();
+            cutscene_manager_draw_dialog();
         } break;
 
         case CUTSCENE_PHASE1_LOYALTY: {
@@ -893,7 +871,7 @@ void cutscene_guardian_phase1_draw(SceneContext *ctx, T3DViewport *viewport)
                 }
             t3d_matrix_pop(1);
 
-            cutscene_guardian_phase1_draw_dialog();
+            cutscene_manager_draw_dialog();
         } break;
 
         case CUTSCENE_PHASE1_FEAR: {
@@ -916,7 +894,7 @@ void cutscene_guardian_phase1_draw(SceneContext *ctx, T3DViewport *viewport)
                 }
             t3d_matrix_pop(1);
 
-            cutscene_guardian_phase1_draw_dialog();
+            cutscene_manager_draw_dialog();
 
             rdpq_sync_pipe();
 

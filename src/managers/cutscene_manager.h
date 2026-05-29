@@ -72,6 +72,14 @@ void cutscene_manager_set_camera_shot(
 void cutscene_manager_update_camera(float duration);
 
 // ----------------------------------------------------------------------------
+// Generic cutscene dialog helpers.
+// ----------------------------------------------------------------------------
+void cutscene_manager_begin_dialog(const char *text, float holdSec);
+void cutscene_manager_update_dialog(void);
+void cutscene_manager_draw_dialog(void);
+void cutscene_manager_clear_dialog(void);
+
+// ----------------------------------------------------------------------------
 // Queries used by callers across the codebase.
 // ----------------------------------------------------------------------------
 CutsceneState cutscene_manager_get_state(void);

@@ -18,7 +18,6 @@
 #include "../controllers/camera_controller.h"
 #include "../managers/cutscene_manager.h"
 #include "../managers/cutscene_manager_internal.h"
-#include "../controllers/dialog_controller.h"
 #include "../utilities/display_utility.h"
 #include "../game/bosses/boss_anim.h"
 #include "../game/bosses/boss_render.h"
@@ -266,17 +265,6 @@ static void cutscene_guardian_phase2_set_boss_anim(SceneContext *ctx, int animIn
     ctx->boss->currentAnimState = animIndex;
 }
 
-static void cutscene_guardian_phase2_draw_dialog(void)
-{
-    if (!cutsceneDialogActive) return;
-
-    int height = 70;
-    int width = 220;
-    int x = (SCREEN_WIDTH - width) / 2;
-    int y = 240 - height - 10;
-
-    dialog_controller_draw(false, x, y, width, height);
-}
 
 static void cutscene_guardian_phase2_draw_standard_room(
     SceneContext *ctx,
@@ -340,7 +328,7 @@ static void cutscene_guardian_phase2_draw_standard_room(
         }
     }
 
-    cutscene_guardian_phase2_draw_dialog();
+    cutscene_manager_draw_dialog();
 }
 
 // ------------------------------------------------------------
@@ -531,26 +519,18 @@ void cutscene_guardian_phase2_enter(SceneContext *ctx, CutsceneState state)
         case CUTSCENE_PHASE2_KNEEL: {
             cutscene_guardian_phase2_set_boss_anim(ctx, BOSS_ANIM_PHASE2_COLLAPSE_IDLE);
 
-            cutsceneDialogActive = true;
-            dialog_controller_speak(
+            cutscene_manager_begin_dialog(
                 cutscene_guardian_phase2_get_dialog(0),
-                0,
-                0.0f,
-                false,
-                false
+                0.0f
             );
         } break;
 
         case CUTSCENE_PHASE2_BLURB: {
             cutscene_guardian_phase2_set_boss_anim(ctx, BOSS_ANIM_PHASE2_COLLAPSE_IDLE);
 
-            cutsceneDialogActive = true;
-            dialog_controller_speak(
+            cutscene_manager_begin_dialog(
                 cutscene_guardian_phase2_get_dialog(1),
-                0,
-                0.0f,
-                false,
-                false
+                0.0f
             );
 
             if (ctx->boss) {
@@ -564,7 +544,6 @@ void cutscene_guardian_phase2_enter(SceneContext *ctx, CutsceneState state)
         } break;
 
         case CUTSCENE_PHASE2_MIND: {
-            cutsceneDialogActive = true;
 
             if (ctx->screenTransition) {
                 *ctx->screenTransition = true;
@@ -572,12 +551,9 @@ void cutscene_guardian_phase2_enter(SceneContext *ctx, CutsceneState state)
 
             startScreenFade = true;
 
-            dialog_controller_speak(
+            cutscene_manager_begin_dialog(
                 cutscene_guardian_phase2_get_dialog(2),
-                0,
-                0.0f,
-                false,
-                false
+                0.0f
             );
 
             cutscene_manager_set_camera_shot(
@@ -594,14 +570,10 @@ void cutscene_guardian_phase2_enter(SceneContext *ctx, CutsceneState state)
             }
 
             startScreenFade = true;
-            cutsceneDialogActive = true;
 
-            dialog_controller_speak(
+            cutscene_manager_begin_dialog(
                 cutscene_guardian_phase2_get_dialog(3),
-                0,
-                0.0f,
-                false,
-                false
+                0.0f
             );
 
             cutscene_manager_set_camera_shot(
@@ -615,14 +587,9 @@ void cutscene_guardian_phase2_enter(SceneContext *ctx, CutsceneState state)
         case CUTSCENE_PHASE2_BURN: {
             cutscene_guardian_phase2_set_boss_anim(ctx, BOSS_ANIM_PHASE2_WIN_KNEEL);
 
-            cutsceneDialogActive = true;
-
-            dialog_controller_speak(
+            cutscene_manager_begin_dialog(
                 cutscene_guardian_phase2_get_dialog(4),
-                0,
-                0.0f,
-                false,
-                false
+                0.0f
             );
 
             cutscene_manager_set_camera_shot(
@@ -658,14 +625,9 @@ void cutscene_guardian_phase2_enter(SceneContext *ctx, CutsceneState state)
 
             lightning_fx_system_ring_enable(true);
 
-            cutsceneDialogActive = true;
-
-            dialog_controller_speak(
+            cutscene_manager_begin_dialog(
                 cutscene_guardian_phase2_get_dialog(5),
-                0,
-                0.0f,
-                false,
-                false
+                0.0f
             );
 
             joypad_rumble_pulse_seconds(15.0f);
@@ -686,7 +648,7 @@ void cutscene_guardian_phase2_enter(SceneContext *ctx, CutsceneState state)
 
             cutscene_guardian_phase2_set_boss_anim(ctx, BOSS_ANIM_PHASE2_REVEAL);
 
-            cutsceneDialogActive = false;
+            cutscene_manager_clear_dialog();
 
             if (ctx->boss) {
                 cutscene_manager_set_camera_shot(
@@ -730,7 +692,7 @@ void cutscene_guardian_phase2_update(SceneContext *ctx, float dt)
         } break;
 
         case CUTSCENE_PHASE2_KNEEL: {
-            dialog_controller_update();
+            cutscene_manager_update_dialog();
 
             if (cutsceneTimer >= 7.0f) {
                 cutscene_guardian_phase2_next_state(ctx, CUTSCENE_PHASE2_BLURB);
@@ -741,7 +703,7 @@ void cutscene_guardian_phase2_update(SceneContext *ctx, float dt)
         case CUTSCENE_PHASE2_BLURB: {
             cutscene_manager_update_camera(5.0f);
 
-            dialog_controller_update();
+            cutscene_manager_update_dialog();
 
             if (cutsceneTimer >= 5.0f) {
                 cutscene_guardian_phase2_next_state(ctx, CUTSCENE_PHASE2_MIND);
@@ -752,7 +714,7 @@ void cutscene_guardian_phase2_update(SceneContext *ctx, float dt)
         case CUTSCENE_PHASE2_MIND: {
             cutscene_manager_update_camera(4.0f);
 
-            dialog_controller_update();
+            cutscene_manager_update_dialog();
 
             if (cutsceneTimer >= 4.0f) {
                 cutscene_guardian_phase2_next_state(ctx, CUTSCENE_PHASE2_SHACKLED_SUN);
@@ -763,7 +725,7 @@ void cutscene_guardian_phase2_update(SceneContext *ctx, float dt)
         case CUTSCENE_PHASE2_SHACKLED_SUN: {
             cutscene_manager_update_camera(8.0f);
 
-            dialog_controller_update();
+            cutscene_manager_update_dialog();
             animation_utility_set_screen_shake_mag(0.1f);
 
             if (cutsceneTimer >= 10.0f) {
@@ -775,7 +737,7 @@ void cutscene_guardian_phase2_update(SceneContext *ctx, float dt)
         case CUTSCENE_PHASE2_BURN: {
             cutscene_manager_update_camera(2.8f);
 
-            dialog_controller_update();
+            cutscene_manager_update_dialog();
 
             if (cutsceneTimer >= 2.8f) {
                 cutscene_guardian_phase2_next_state(ctx, CUTSCENE_PHASE2_BNW);
@@ -812,7 +774,7 @@ void cutscene_guardian_phase2_update(SceneContext *ctx, float dt)
 
             lightning_fx_system_update(dt);
             animation_utility_set_screen_shake_mag(0.2f);
-            dialog_controller_update();
+            cutscene_manager_update_dialog();
 
             if (cutsceneTimer >= 15.0f) {
                 cutscene_guardian_phase2_next_state(ctx, CUTSCENE_PHASE2_END);
@@ -856,6 +818,8 @@ void cutscene_guardian_phase2_update(SceneContext *ctx, float dt)
 void cutscene_guardian_phase2_skip(SceneContext *ctx)
 {
     if (!ctx) return;
+
+    cutscene_manager_clear_dialog();
 
     if (ctx->finish_phase2_cutscene) {
         ctx->finish_phase2_cutscene();
@@ -927,7 +891,7 @@ void cutscene_guardian_phase2_draw(SceneContext *ctx, T3DViewport *viewport)
                 display_utility_solid_black_transition(true, 100.0f);
             }
 
-            cutscene_guardian_phase2_draw_dialog();
+            cutscene_manager_draw_dialog();
         } break;
 
         case CUTSCENE_PHASE2_BNW: {
@@ -982,7 +946,7 @@ void cutscene_guardian_phase2_draw(SceneContext *ctx, T3DViewport *viewport)
             }
 
             if (cutsceneTimer <= 9.0f) {
-                cutscene_guardian_phase2_draw_dialog();
+                cutscene_manager_draw_dialog();
             }
         } break;
 

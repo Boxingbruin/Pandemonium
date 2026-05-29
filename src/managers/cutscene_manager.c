@@ -13,7 +13,9 @@
 #include "video_layout.h"
 #include "scene.h"
 #include "joypad_utility.h"
-#include "camera_controller.h"
+
+#include "../controllers/camera_controller.h"
+#include "../controllers/dialog_controller.h"
 
 #include "cutscene_guardian_phase1.h"
 #include "cutscene_guardian_phase2.h"
@@ -159,6 +161,53 @@ void cutscene_manager_update_camera(float duration)
     customCamPos.v[0] = cutsceneCamPosStart.v[0] + (cutsceneCamPosEnd.v[0] - cutsceneCamPosStart.v[0]) * easeT;
     customCamPos.v[1] = cutsceneCamPosStart.v[1] + (cutsceneCamPosEnd.v[1] - cutsceneCamPosStart.v[1]) * easeT;
     customCamPos.v[2] = cutsceneCamPosStart.v[2] + (cutsceneCamPosEnd.v[2] - cutsceneCamPosStart.v[2]) * easeT;
+}
+
+// ----------------------------------------------------------------------------
+// Generic cutscene dialog helpers
+// ----------------------------------------------------------------------------
+
+void cutscene_manager_begin_dialog(const char *text, float holdSec)
+{
+    if (!text) {
+        cutsceneDialogActive = false;
+        return;
+    }
+
+    cutsceneDialogActive = true;
+
+    dialog_controller_speak(
+        text,
+        0,
+        holdSec,
+        false,
+        false
+    );
+}
+
+void cutscene_manager_update_dialog(void)
+{
+    if (!cutsceneDialogActive) return;
+
+    dialog_controller_update();
+}
+
+void cutscene_manager_draw_dialog(void)
+{
+    if (!cutsceneDialogActive) return;
+
+    int height = 70;
+    int width = 220;
+    int x = (SCREEN_WIDTH - width) / 2;
+    int y = 240 - height - 10;
+
+    dialog_controller_draw(false, x, y, width, height);
+}
+
+void cutscene_manager_clear_dialog(void)
+{
+    cutsceneDialogActive = false;
+    dialog_controller_stop_speaking();
 }
 
 // ----------------------------------------------------------------------------
