@@ -110,7 +110,7 @@ int main(void)
         // VIDEO PUMP (MUST be BEFORE any rdpq_attach() in the frame)
         // ------------------------------------------------------------
         if (video_player_pump_and_play(&viewport)) {
-            // Video played. The utility restores display/rdpq/t3d and can scene_restart().
+            // Video played. The utility restores display/rdpq/t3d and can restart through scene_controller.
             // Start next frame cleanly.
             continue;
         }

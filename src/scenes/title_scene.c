@@ -46,6 +46,7 @@ static const char *TITLE_SFX_PATHS[TITLE_SFX_COUNT] = {
 
 static const float TITLE_ROOM_Y = -1.0f;
 static const float TITLE_CHARACTER_YAW = T3D_PI * 0.5f;
+static const float TITLE_CHARACTER_WALK_SPEED = 15.0f;
 
 static const float TITLE_TEXT_ACTIVATION_TIME = 50.0f;
 static const float TITLE_START_GAME_TIME = 10.0f;
@@ -250,6 +251,7 @@ static void title_scene_setup_camera_and_character(void)
     character.rot[1] = TITLE_CHARACTER_YAW;
 
     character_update_position();
+    character_set_state(CHAR_STATE_TITLE_IDLE);
 }
 
 static void title_scene_start_dialog(void)
@@ -350,6 +352,10 @@ void title_scene_begin_transition(void)
     menu_controller_close();
 
     s_state = TITLE_STATE_TRANSITION_TO_GUARDIAN;
+
+    character_set_state(CHAR_STATE_FOG_WALK);
+    character_set_velocity_xz(TITLE_CHARACTER_WALK_SPEED, 0.0f);
+
     s_skip_button_visible = false;
     s_last_cutscene_a_pressed = btn.a;
 
@@ -357,6 +363,13 @@ void title_scene_begin_transition(void)
     s_screen_breath = false;
 
     audio_stop_music_fade(6);
+
+    /*
+     * Defensive reload:
+     * The title scene owns this SFX table. Reload immediately before use in case
+     * another system swapped the active scene SFX table.
+     */
+    audio_scene_load_paths(TITLE_SFX_PATHS, TITLE_SFX_COUNT);
 
     audio_play_scene_sfx_dist(
         TITLE_SFX_WALK,
@@ -371,6 +384,8 @@ static void title_scene_finish_transition(void)
     s_skip_button_visible = false;
     s_state = TITLE_STATE_DONE;
     s_result = TITLE_SCENE_RESULT_START_GUARDIAN_INTRO;
+
+    character_set_velocity_xz(0.0f, 0.0f);
 
     audio_stop_all_sfx();
 }
@@ -477,12 +492,12 @@ void title_scene_update(void)
         MenuAction action = menu_controller_consume_action();
         if (action == MENU_ACTION_TITLE_START_GAME) {
             title_scene_begin_transition();
+        } else {
+            title_scene_update_idle();
         }
-
-        title_scene_update_idle();
     }
 
-    character_update();
+    character_update_cinematic();
 
     if (s_dynamic_banner_wind_anim && s_dynamic_banner_skeleton) {
         t3d_anim_update(s_dynamic_banner_wind_anim, deltaTime);

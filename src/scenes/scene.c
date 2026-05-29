@@ -610,13 +610,6 @@ void scene_init(void)
     // lightDirVec = (T3DVec3){{-0.9833f, 0.1790f, -0.0318f}};
     // t3d_vec3_norm(&lightDirVec);
 
-    // Load collision mesh
-    // NOTE: If collision wireframe doesn't match the rendered room, adjust this scale.
-    // The exported bossroom.collision is in glb units (~ +/- 100). Using 0.1 made the
-    // collision volume a tiny square; start with 1.0 for now.
-    // collision_mesh_set_transform(6.2f, 0.0f, roomY, 0.0f);
-    // collision_mesh_init();
-
     scene_load_environment();
 
     g_boss = boss_spawn();
@@ -627,23 +620,9 @@ void scene_init(void)
 
     boss_ground_crush_init();
 
-    // Transform will be updated in boss_update()
-
-    // Make character face the boss
-    // Note: dx and dz were calculated but not used - keeping for potential future use
-    // float dx = g_boss->pos[0] - character.pos[0];
-    // float dz = g_boss->pos[2] - character.pos[2];
-
-    // Initialize character
-    character_init();
-
-    // // Set character initial position to be on the ground
-    // character.pos[0] = 150.0f;
-    // character.pos[1] = -4.8f;  // Position character feet on map surface
-    // // Spawn inside the collision volume.
-    // character.pos[2] = 0.0f;
-    // character.rot[1] = -atan2f(dx, dz);
-    // character_update_position();  // Update transform matrix with new rotation
+    // reset character
+    character_reset();
+    character_reset_button_state();
 
     // Initialize dialog controller
     dialog_controller_init();
@@ -1188,6 +1167,8 @@ void scene_init_playing(bool skippedCutscene)
     character.rot[1] = GUARDIAN_CHARACTER_YAW;
 
     character_update_position();
+    character_set_state(CHAR_STATE_NORMAL);
+    character_set_velocity_xz(0.0f, 0.0f);
 
     // Skip dialog and cutscene
     dialog_controller_stop_speaking();
@@ -1443,10 +1424,8 @@ void scene_cutscene_update(void)
 
     switch (cutsceneState) {
         case CUTSCENE_POST_BOSS_RESTORED: {
-            // Post-boss dialog runs while gameplay continues to animate.
-            // Player input stays disabled by character_update() while a cutscene is active.
-            character_update();
-            character_update_position();
+            // Post-boss dialog runs while gameplay continues to animate without player input.
+            character_update_cinematic();
 
             if (bossActivated && g_boss) {
                 boss_update(g_boss);
@@ -1541,27 +1520,22 @@ void scene_update(void)
     }
     lastMenuActive = pauseMenuBlocking;
 
-    // If player is dead, disable player control but keep boss/UI moving
-    // NOTE: Victory should NOT early-return here; we still want full gameplay updates
-    // (collision/constraints) so the player's colliders don't "stick" in place.
-    if (gameState == GAME_STATE_DEAD) {
-        // Accumulate lockout timer while dead (we still update animations/UI during the end state)
+    // If player is dead, disable player control but keep boss/UI moving.
+    // Death is owned by the character now; the scene only reads the character state.
+    if (character_get_state() == CHAR_STATE_DEAD) {
         deathRestartLockoutTimer += deltaTime;
 
-        // Still update the character so end-state animations (like Death) can play.
-        character_update();
+        // Still update the character so end-state animations, like Death, can play.
+        character_update_cinematic();
 
-        // Keep boss AI updating so it continues moving during end screen
+        // Keep boss AI updating so it continues moving during end screen.
         if (bossActivated && g_boss) {
             boss_update(g_boss);
         }
 
-        // Continue letterbox animation updates
         letterbox_update();
 
-        // Allow restart via A button only on death.
-        // Victory should not force a restart prompt / flow.
-        if (gameState == GAME_STATE_DEAD && deathRestartLockoutTimer >= DEATH_RESTART_LOCKOUT_S && btn.a) {
+        if (deathRestartLockoutTimer >= DEATH_RESTART_LOCKOUT_S && btn.a) {
             scene_restart();
         }
         return;
@@ -2660,9 +2634,8 @@ void scene_draw(T3DViewport *viewport)
     scene_draw_video_trigger(viewport);
 
     bool cutsceneActive = scene_is_cutscene_active();
-    GameState state = scene_get_game_state();
-    bool isDead = state == GAME_STATE_DEAD;
-    bool isVictory = state == GAME_STATE_VICTORY;
+    bool isDead = character_get_state() == CHAR_STATE_DEAD;
+    bool isVictory = gameState == GAME_STATE_VICTORY;
     bool isEndScreen = isDead || isVictory;
 
     // Draw letterbox bars (they handle their own visibility and animation)

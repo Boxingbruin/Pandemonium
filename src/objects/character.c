@@ -15,7 +15,6 @@
 
 #include "debug_draw.h"
 #include "game/bosses/boss.h"
-#include "scene.h"
 #include "simple_collision_utility.h"
 #include "collision_system.h"
 #include "game_math.h"
@@ -1251,6 +1250,83 @@ static inline int get_target_animation(CharacterState state, float speedRatio)
     return isBackward ? ANIM_RUN_BACK : ANIM_RUN;
 }
 
+CharacterState character_get_state(void)
+{
+    return characterState;
+}
+
+void character_set_state(CharacterState state)
+{
+    if (characterState == state) {
+        return;
+    }
+
+    characterState = state;
+    actionTimer = 0.0f;
+
+    if (state == CHAR_STATE_TITLE_IDLE) {
+        walkThroughFog = false;
+        movementVelocityX = 0.0f;
+        movementVelocityZ = 0.0f;
+        currentSpeed = 0.0f;
+    } else if (state == CHAR_STATE_FOG_WALK) {
+        walkThroughFog = true;
+        currentSpeed = 1.0f;
+    } else if (state == CHAR_STATE_DEAD) {
+        movementVelocityX = 0.0f;
+        movementVelocityZ = 0.0f;
+        currentSpeed = 0.0f;
+    } else if (state == CHAR_STATE_NORMAL) {
+        walkThroughFog = false;
+    }
+
+    character.currentAnimation = get_target_animation(characterState, currentSpeed);
+    character.previousAnimation = -1;
+    character.isBlending = false;
+    character.blendFactor = 0.0f;
+    character.blendTimer = 0.0f;
+
+    if (character.animations &&
+        character.currentAnimation >= 0 &&
+        character.currentAnimation < character.animationCount &&
+        character.animations[character.currentAnimation]) {
+        t3d_anim_set_time(character.animations[character.currentAnimation], 0.0f);
+        t3d_anim_set_playing(character.animations[character.currentAnimation], true);
+    }
+}
+
+static inline void update_animations(
+    float speedRatio,
+    CharacterState state,
+    float dt,
+    float velMag,
+    float inputMag
+);
+
+void character_update_cinematic(void)
+{
+    sword_trail_update(deltaTime, false, NULL, NULL);
+
+    if (characterState == CHAR_STATE_DEAD) {
+        movementVelocityX = 0.0f;
+        movementVelocityZ = 0.0f;
+        currentSpeed = 0.0f;
+    } else if (characterState == CHAR_STATE_TITLE_IDLE) {
+        apply_friction(deltaTime, 1.0f);
+        update_current_speed(0.0f, deltaTime);
+    }
+
+    float animationSpeedRatio = currentSpeed;
+
+    update_animations(animationSpeedRatio, characterState, deltaTime, 0.0f, 0.0f);
+
+    character.pos[0] += movementVelocityX * deltaTime;
+    character.pos[2] += movementVelocityZ * deltaTime;
+
+    character_anim_apply_pose();
+    character_finalize_frame(false);
+}
+
 static inline bool is_action_state(CharacterState state)
 {
     return (state == CHAR_STATE_ROLLING) ||
@@ -2214,84 +2290,10 @@ void character_init(void)
 
 void character_update(void)
 {
-    GameState state = scene_get_game_state();
-
-    if (state == GAME_STATE_DEAD) {
-        sword_trail_update(deltaTime, false, NULL, NULL);
-        movementVelocityX = 0.0f;
-        movementVelocityZ = 0.0f;
-
-        if (characterState != CHAR_STATE_DEAD) {
-            characterState = CHAR_STATE_DEAD;
-            if (character.animations && ANIM_DEATH < character.animationCount && character.animations[ANIM_DEATH]) {
-                t3d_anim_set_time(character.animations[ANIM_DEATH], 0.0f);
-                t3d_anim_set_playing(character.animations[ANIM_DEATH], true);
-            }
-        }
-
-        update_animations(0.0f, characterState, deltaTime, 0.0f, 0.0f);
-
-        character_update_camera();
-        character_anim_apply_pose();
-        character_finalize_frame(false);
-        return;
-    }
-
-    if (scene_get_game_state() == GAME_STATE_TITLE || scene_get_game_state() == GAME_STATE_TITLE_TRANSITION)
-    {
-        sword_trail_update(deltaTime, false, NULL, NULL);
-
-        if (scene_get_game_state() == GAME_STATE_TITLE) {
-            if (characterState != CHAR_STATE_TITLE_IDLE) {
-                characterState = CHAR_STATE_TITLE_IDLE;
-                walkThroughFog = false;
-                if (character.animations && character.animations[ANIM_IDLE_TITLE]) {
-                    t3d_anim_set_time(character.animations[ANIM_IDLE_TITLE], 0.0f);
-                    t3d_anim_set_playing(character.animations[ANIM_IDLE_TITLE], true);
-                }
-            }
-        }
-
-        apply_friction(deltaTime, 1.0f);
-        update_current_speed(0.0f, deltaTime);
-        float animationSpeedRatio = currentSpeed;
-
-        if (scene_get_game_state() == GAME_STATE_TITLE_TRANSITION && walkThroughFog == false)
-        {
-            characterState = CHAR_STATE_FOG_WALK;
-            walkThroughFog = true;
-
-            if (character.animations && character.animations[ANIM_FOG_OF_WAR]) {
-                t3d_anim_set_time(character.animations[ANIM_FOG_OF_WAR], 0.0f);
-                t3d_anim_set_playing(character.animations[ANIM_FOG_OF_WAR], true);
-            }
-        }
-
-        update_animations(animationSpeedRatio, characterState, deltaTime, 0.0f, 0.0f);
-
-        character.pos[0] += movementVelocityX * deltaTime;
-        character.pos[2] += movementVelocityZ * deltaTime;
-
-        character_anim_apply_pose();
-        character_finalize_frame(false);
-        return;
-    }
-
-    if (scene_is_cutscene_active()) {
-        sword_trail_update(deltaTime, false, NULL, NULL);
-
-        apply_friction(deltaTime, 1.0f);
-        update_current_speed(0.0f, deltaTime);
-        float animationSpeedRatio = currentSpeed;
-
-        update_animations(animationSpeedRatio, characterState, deltaTime, 0.0f, 0.0f);
-
-        character.pos[0] += movementVelocityX * deltaTime;
-        character.pos[2] += movementVelocityZ * deltaTime;
-
-        character_update_camera();
-        character_anim_apply_pose();
-        character_finalize_frame(false);
+    if (characterState == CHAR_STATE_DEAD ||
+        characterState == CHAR_STATE_TITLE_IDLE ||
+        characterState == CHAR_STATE_FOG_WALK) {
+        character_update_cinematic();
         return;
     }
 
@@ -2539,7 +2541,9 @@ void character_update(void)
                         }
 
                         float strength = (characterState == CHAR_STATE_ATTACKING_STRONG) ? 1.8f : 1.0f;
-                        scene_spawn_blood_burst(impact[0], impact[1], impact[2], strength);
+                        /* TODO: move blood spawning to an effects/blood system outside character.c. */
+                        (void)impact;
+                        (void)strength;
                     }
                 }
                 character.currentAttackHasHit = true;
@@ -2941,8 +2945,7 @@ void character_apply_damage(float amount)
     joypad_rumble_pulse_seconds(1.0f);
 
     if (character.health <= 0.0f) {
-        characterState = CHAR_STATE_DEAD;
-        scene_set_game_state(GAME_STATE_DEAD);
+        character_set_state(CHAR_STATE_DEAD);
         return;
     }
 
