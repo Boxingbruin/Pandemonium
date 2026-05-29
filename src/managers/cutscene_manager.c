@@ -13,9 +13,17 @@
 #include "video_layout.h"
 #include "scene.h"
 #include "joypad_utility.h"
+#include "camera_controller.h"
 
 #include "cutscene_guardian_phase1.h"
 #include "cutscene_guardian_phase2.h"
+
+// ----------------------------------------------------------------------------
+// Constants
+// ----------------------------------------------------------------------------
+
+#define CUTSCENE_CAMERA_FOV      1.544792654048f
+#define CUTSCENE_CAMERA_DISTANCE 4.05f
 
 // ----------------------------------------------------------------------------
 // State
@@ -91,6 +99,9 @@ void cutscene_manager_reset(void)
     cutsceneTimer             = 0.0f;
     cutsceneCameraTimer       = 0.0f;
 
+    cutsceneCamPosStart       = (T3DVec3){{0.0f, 0.0f, 0.0f}};
+    cutsceneCamPosEnd         = (T3DVec3){{0.0f, 0.0f, 0.0f}};
+
     cutsceneDialogActive      = false;
     skipButtonVisible         = false;
     lastCutsceneAPressed      = false;
@@ -102,6 +113,52 @@ void cutscene_manager_reset(void)
 
     cutscene_guardian_phase1_unload();
     cutscene_guardian_phase2_unload();
+}
+
+// ----------------------------------------------------------------------------
+// Generic cutscene camera helpers
+// ----------------------------------------------------------------------------
+
+void cutscene_manager_set_camera_shot(
+    SceneContext *ctx,
+    T3DVec3 start,
+    T3DVec3 end,
+    T3DVec3 target
+)
+{
+    (void)ctx;
+
+    cutsceneCameraTimer = 0.0f;
+    cutsceneCamPosStart = start;
+    cutsceneCamPosEnd = end;
+
+    camera_mode(CAMERA_CUSTOM);
+
+    camera_initialize(
+        &cutsceneCamPosStart,
+        &(T3DVec3){{0, 0, 1}},
+        CUTSCENE_CAMERA_FOV,
+        CUTSCENE_CAMERA_DISTANCE
+    );
+
+    customCamTarget = target;
+}
+
+void cutscene_manager_update_camera(float duration)
+{
+    if (duration <= 0.0f) {
+        customCamPos = cutsceneCamPosEnd;
+        return;
+    }
+
+    float t = cutsceneCameraTimer / duration;
+    if (t > 1.0f) t = 1.0f;
+
+    float easeT = t * t * (3.0f - 2.0f * t);
+
+    customCamPos.v[0] = cutsceneCamPosStart.v[0] + (cutsceneCamPosEnd.v[0] - cutsceneCamPosStart.v[0]) * easeT;
+    customCamPos.v[1] = cutsceneCamPosStart.v[1] + (cutsceneCamPosEnd.v[1] - cutsceneCamPosStart.v[1]) * easeT;
+    customCamPos.v[2] = cutsceneCamPosStart.v[2] + (cutsceneCamPosEnd.v[2] - cutsceneCamPosStart.v[2]) * easeT;
 }
 
 // ----------------------------------------------------------------------------

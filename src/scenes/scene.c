@@ -744,9 +744,6 @@ void scene_init(void)
     // Initialize dialog controller
     dialog_controller_init();
 
-    // Initialize cutscene manager
-    cutscene_manager_init();
-
     // Load A button sprite for cutscene skip indicator
     aButtonSprite = sprite_load("rom:/buttons/A.sprite");
     if (aButtonSprite) {
@@ -806,7 +803,6 @@ void scene_init(void)
         healthBottleSurf = sprite_get_pixels(healthBottleSprite);
     }
 
-    //scene_init_cinematic_camera();
     // Start boss music
     // TODO: Its turned off for now as it gets annoying to listen to and it crackles
     // audio_play_music("rom:/audio/music/boss_final_phase.wav64", true);
@@ -1413,21 +1409,6 @@ void scene_dev_warp_to_pre_phase2(void)
     }
 }
 
-void scene_set_cinematic_camera(T3DVec3 posStart, T3DVec3 posEnd, T3DVec3 posTarget)
-{
-    cutsceneCamPosStart = posStart;
-    cutsceneCamPosEnd = posEnd;
-
-    camera_initialize(
-        &cutsceneCamPosStart, 
-        &(T3DVec3){{0,0,1}}, 
-        1.544792654048f, 
-        4.05f
-    );
-
-    customCamTarget = posTarget;  // Look at boss center/chest area
-}
-
 // End-of-phase-2-cutscene teardown: drop cutscene-only effects and hand control
 // back to the fight at phase 2. Used both when the cutscene completes naturally
 // and when the player skips it via the A-button overlay.
@@ -1528,7 +1509,6 @@ static void scene_update_context(void)
     sceneContext.bossChainsGlowMatrix = bossChainsGlowMatrix;
     sceneContext.bossChainsGlowScrollParams = &bossChainsGlowScrollParams;
 
-    sceneContext.set_cinematic_camera = scene_set_cinematic_camera;
     sceneContext.init_playing = scene_init_playing;
     sceneContext.finish_phase2_cutscene = scene_finish_phase2_cutscene;
 }

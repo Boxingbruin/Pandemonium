@@ -27,24 +27,14 @@
 #include "../utilities/joypad_utility.h"
 #include "../utilities/letterbox_utility.h"
 
-/*
- * Guardian phase-1 intro cutscene.
- *
- * Owns phase-1 cinematic-only assets:
- *   - cinematic ceiling chains
- *   - chain-break cutscene model
- *
- * Borrows persistent boss-room/gameplay assets through SceneContext.
- */
-
 #define CINEMATIC_CHAINS_ANIM_COUNT 2
 #define CHAIN_BREAK_ANIM_COUNT 1
 
 static bool s_loaded = false;
 
-/* ------------------------------------------------------------
- * Dialog
- * ------------------------------------------------------------ */
+// ------------------------------------------------------------
+// Dialog
+// ------------------------------------------------------------
 
 static const char *s_phase1Dialogs[] = {
     "^Those who approach the\nthrone of gold~ ^fall at my\nblade.",
@@ -59,9 +49,9 @@ static const char *cutscene_guardian_phase1_get_dialog(int idx)
     return s_phase1Dialogs[idx];
 }
 
-/* ------------------------------------------------------------
- * Owned phase-1 assets
- * ------------------------------------------------------------ */
+// ------------------------------------------------------------
+// Phase 1 assets
+// ------------------------------------------------------------
 
 static T3DModel *s_cinematicChainsModel = NULL;
 static rspq_block_t *s_cinematicChainsDpl = NULL;
@@ -77,9 +67,9 @@ static T3DMat4FP *s_chainBreakMatrix = NULL;
 static T3DSkeleton *s_chainBreakSkeleton = NULL;
 static T3DAnim **s_chainBreakAnimations = NULL;
 
-/* ------------------------------------------------------------
- * Asset helpers
- * ------------------------------------------------------------ */
+// ------------------------------------------------------------
+// Helpers
+// ------------------------------------------------------------
 
 static T3DMat4FP *cutscene_guardian_phase1_alloc_matrix(void)
 {
@@ -166,10 +156,6 @@ static void cutscene_guardian_phase1_free_chain_break_anim(void)
     }
 }
 
-/* ------------------------------------------------------------
- * Generic helpers
- * ------------------------------------------------------------ */
-
 bool cutscene_guardian_phase1_handles(CutsceneState state)
 {
     return state == CUTSCENE_PHASE1_INTRO ||
@@ -189,23 +175,6 @@ static void cutscene_guardian_phase1_next_state(SceneContext *ctx, CutsceneState
     cutsceneState = nextState;
 
     cutscene_guardian_phase1_enter(ctx, nextState);
-}
-
-static void cutscene_guardian_phase1_update_camera(float duration)
-{
-    if (duration <= 0.0f) {
-        customCamPos = cutsceneCamPosEnd;
-        return;
-    }
-
-    float t = cutsceneCameraTimer / duration;
-    if (t > 1.0f) t = 1.0f;
-
-    float easeT = t * t * (3.0f - 2.0f * t);
-
-    customCamPos.v[0] = cutsceneCamPosStart.v[0] + (cutsceneCamPosEnd.v[0] - cutsceneCamPosStart.v[0]) * easeT;
-    customCamPos.v[1] = cutsceneCamPosStart.v[1] + (cutsceneCamPosEnd.v[1] - cutsceneCamPosStart.v[1]) * easeT;
-    customCamPos.v[2] = cutsceneCamPosStart.v[2] + (cutsceneCamPosEnd.v[2] - cutsceneCamPosStart.v[2]) * easeT;
 }
 
 static void cutscene_guardian_phase1_update_boss_transform(SceneContext *ctx)
@@ -282,17 +251,15 @@ static void cutscene_guardian_phase1_draw_chain_break(void)
     rspq_block_run(s_chainBreakDpl);
 }
 
-/* ------------------------------------------------------------
- * Load / unload
- * ------------------------------------------------------------ */
+// ------------------------------------------------------------
+// Load / unload
+// ------------------------------------------------------------
 
 void cutscene_guardian_phase1_load(void)
 {
     if (s_loaded) return;
 
-    /*
-     * Cinematic chains
-     */
+    // Cinematic chains
     s_cinematicChainsModel = t3d_model_load("rom:/boss_room/chains.t3dm");
 
     if (s_cinematicChainsModel) {
@@ -324,9 +291,7 @@ void cutscene_guardian_phase1_load(void)
         cutscene_guardian_phase1_set_origin_matrix(s_cinematicChainsMatrix);
     }
 
-    /*
-     * Chain break
-     */
+    // Chain break
     s_chainBreakModel = t3d_model_load("rom:/cutscene/shatter_chain.t3dm");
 
     if (s_chainBreakModel) {
@@ -381,9 +346,9 @@ void cutscene_guardian_phase1_unload(void)
     s_loaded = false;
 }
 
-/* ------------------------------------------------------------
- * Enter
- * ------------------------------------------------------------ */
+// ------------------------------------------------------------
+// Enter
+// ------------------------------------------------------------
 
 void cutscene_guardian_phase1_enter(SceneContext *ctx, CutsceneState state)
 {
@@ -395,8 +360,9 @@ void cutscene_guardian_phase1_enter(SceneContext *ctx, CutsceneState state)
 
     switch (state) {
         case CUTSCENE_PHASE1_INTRO: {
-            if (ctx->set_cinematic_camera && ctx->boss) {
-                ctx->set_cinematic_camera(
+            if (ctx->boss) {
+                cutscene_manager_set_camera_shot(
+                    ctx,
                     (T3DVec3){{-700.0f, 120.4f, 0.0f}},
                     (T3DVec3){{-600.0f, 120.4f, 0.0f}},
                     (T3DVec3){{ctx->boss->pos[0], ctx->boss->pos[1] + 100.0f, ctx->boss->pos[2]}}
@@ -426,35 +392,32 @@ void cutscene_guardian_phase1_enter(SceneContext *ctx, CutsceneState state)
                 *ctx->screenTransition = false;
             }
 
-            if (ctx->set_cinematic_camera) {
-                ctx->set_cinematic_camera(
+            cutscene_manager_set_camera_shot(
+                ctx,
                     (T3DVec3){{-239.0f, 239.4f, -133.7f}},
                     (T3DVec3){{-239.0f, 239.4f, -133.7f}},
                     (T3DVec3){{-151.9f, 208.0f, -96.0f}}
-                );
-            }
+            );
         } break;
 
         case CUTSCENE_PHASE1_SWORDS_CLOSEUP: {
-            if (ctx->set_cinematic_camera) {
-                ctx->set_cinematic_camera(
+            cutscene_manager_set_camera_shot(
+                ctx,
                     (T3DVec3){{-197.86f, 20.0f, 191.45f}},
                     (T3DVec3){{-220.97f, 20.0f, 190.0f}},
                     (T3DVec3){{-142.32f, 55.14f, 114.76f}}
-                );
-            }
+            );
         } break;
 
         case CUTSCENE_PHASE1_FILLER: {
             cutsceneDialogActive = true;
 
-            if (ctx->set_cinematic_camera) {
-                ctx->set_cinematic_camera(
+            cutscene_manager_set_camera_shot(
+                ctx,
                     (T3DVec3){{-0.47f, 6.89f, 70.0f}},
                     (T3DVec3){{-0.15f, 22.99f, 32.26f}},
                     (T3DVec3){{0.476f, 55.54f, -71.29f}}
-                );
-            }
+            );
 
             dialog_controller_speak(
                 cutscene_guardian_phase1_get_dialog(0),
@@ -468,13 +431,12 @@ void cutscene_guardian_phase1_enter(SceneContext *ctx, CutsceneState state)
         case CUTSCENE_PHASE1_LOYALTY: {
             cutsceneDialogActive = true;
 
-            if (ctx->set_cinematic_camera) {
-                ctx->set_cinematic_camera(
+            cutscene_manager_set_camera_shot(
+                ctx,
                     (T3DVec3){{-18.28f, 11.45f, 2.0f}},
                     (T3DVec3){{-18.28f, 11.45f, -2.0f}},
                     (T3DVec3){{80.4f, -1.0f, -11.0f}}
-                );
-            }
+            );
 
             dialog_controller_speak(
                 cutscene_guardian_phase1_get_dialog(1),
@@ -488,13 +450,12 @@ void cutscene_guardian_phase1_enter(SceneContext *ctx, CutsceneState state)
         case CUTSCENE_PHASE1_FEAR: {
             cutsceneDialogActive = true;
 
-            if (ctx->set_cinematic_camera) {
-                ctx->set_cinematic_camera(
+            cutscene_manager_set_camera_shot(
+                ctx,
                     (T3DVec3){{-13.454f, 13.41f, -24.27f}},
                     (T3DVec3){{-13.454f, 25.41f, -24.27f}},
                     (T3DVec3){{400.0f, 43.41f, -29.67f}}
-                );
-            }
+            );
 
             dialog_controller_speak(
                 cutscene_guardian_phase1_get_dialog(2),
@@ -517,13 +478,12 @@ void cutscene_guardian_phase1_enter(SceneContext *ctx, CutsceneState state)
                 t3d_anim_set_playing(s_chainBreakAnimations[0], true);
             }
 
-            if (ctx->set_cinematic_camera) {
-                ctx->set_cinematic_camera(
+            cutscene_manager_set_camera_shot(
+                ctx,
                     (T3DVec3){{-22.31f, 1.7f, 0.65f}},
                     (T3DVec3){{-42.31f, 1.7f, 0.65f}},
                     (T3DVec3){{-12.31f, 1.7f, 0.65f}}
-                );
-            }
+            );
 
             joypad_rumble_pulse_seconds(0.5f);
         } break;
@@ -551,13 +511,12 @@ void cutscene_guardian_phase1_enter(SceneContext *ctx, CutsceneState state)
 
             cutsceneDialogActive = false;
 
-            if (ctx->set_cinematic_camera) {
-                ctx->set_cinematic_camera(
+            cutscene_manager_set_camera_shot(
+                ctx,
                     (T3DVec3){{-22.0f, 29.0f, -10.0f}},
                     (T3DVec3){{-150.0f, 29.0f, -10.0f}},
                     (T3DVec3){{100.0f, 29.0f, 0.0f}}
-                );
-            }
+            );
         } break;
 
         default:
@@ -565,9 +524,9 @@ void cutscene_guardian_phase1_enter(SceneContext *ctx, CutsceneState state)
     }
 }
 
-/* ------------------------------------------------------------
- * Update
- * ------------------------------------------------------------ */
+// ------------------------------------------------------------
+// Update
+// ------------------------------------------------------------
 
 void cutscene_guardian_phase1_update(SceneContext *ctx, float dt)
 {
@@ -601,7 +560,7 @@ void cutscene_guardian_phase1_update(SceneContext *ctx, float dt)
 
     switch (cutsceneState) {
         case CUTSCENE_PHASE1_INTRO: {
-            cutscene_guardian_phase1_update_camera(9.0f);
+            cutscene_manager_update_camera(9.0f);
 
             if (cutsceneTimer >= 9.0f) {
                 cutscene_guardian_phase1_next_state(ctx, CUTSCENE_PHASE1_CHAIN_CLOSEUP);
@@ -610,7 +569,7 @@ void cutscene_guardian_phase1_update(SceneContext *ctx, float dt)
         } break;
 
         case CUTSCENE_PHASE1_CHAIN_CLOSEUP: {
-            cutscene_guardian_phase1_update_camera(6.0f);
+            cutscene_manager_update_camera(6.0f);
 
             if (cutsceneTimer >= 6.0f) {
                 cutscene_guardian_phase1_next_state(ctx, CUTSCENE_PHASE1_SWORDS_CLOSEUP);
@@ -619,7 +578,7 @@ void cutscene_guardian_phase1_update(SceneContext *ctx, float dt)
         } break;
 
         case CUTSCENE_PHASE1_SWORDS_CLOSEUP: {
-            cutscene_guardian_phase1_update_camera(4.0f);
+            cutscene_manager_update_camera(4.0f);
 
             if (cutsceneTimer >= 5.0f) {
                 cutscene_guardian_phase1_next_state(ctx, CUTSCENE_PHASE1_FILLER);
@@ -628,7 +587,7 @@ void cutscene_guardian_phase1_update(SceneContext *ctx, float dt)
         } break;
 
         case CUTSCENE_PHASE1_FILLER: {
-            cutscene_guardian_phase1_update_camera(13.0f);
+            cutscene_manager_update_camera(13.0f);
             dialog_controller_update();
 
             if (cutsceneTimer >= 10.0f) {
@@ -638,7 +597,7 @@ void cutscene_guardian_phase1_update(SceneContext *ctx, float dt)
         } break;
 
         case CUTSCENE_PHASE1_LOYALTY: {
-            cutscene_guardian_phase1_update_camera(5.0f);
+            cutscene_manager_update_camera(5.0f);
             dialog_controller_update();
 
             if (cutsceneTimer >= 5.0f) {
@@ -648,7 +607,7 @@ void cutscene_guardian_phase1_update(SceneContext *ctx, float dt)
         } break;
 
         case CUTSCENE_PHASE1_FEAR: {
-            cutscene_guardian_phase1_update_camera(7.5f);
+            cutscene_manager_update_camera(7.5f);
             dialog_controller_update();
 
             if (cutsceneTimer >= 6.5f &&
@@ -672,7 +631,7 @@ void cutscene_guardian_phase1_update(SceneContext *ctx, float dt)
         } break;
 
         case CUTSCENE_PHASE1_BREAK_CHAINS: {
-            cutscene_guardian_phase1_update_camera(5.0f);
+            cutscene_manager_update_camera(5.0f);
 
             if (cutsceneTimer >= 3.0f) {
                 if (ctx->screenTransition && !*ctx->screenTransition) {
@@ -688,7 +647,7 @@ void cutscene_guardian_phase1_update(SceneContext *ctx, float dt)
         } break;
 
         case CUTSCENE_PHASE1_INTRO_END: {
-            cutscene_guardian_phase1_update_camera(10.0f);
+            cutscene_manager_update_camera(10.0f);
 
             if (cutsceneTimer >= 10.0f) {
                 cutsceneTimer = 0.0f;
@@ -721,9 +680,9 @@ void cutscene_guardian_phase1_skip(SceneContext *ctx)
     cutscene_guardian_phase1_unload();
 }
 
-/* ------------------------------------------------------------
- * Draw
- * ------------------------------------------------------------ */
+// ------------------------------------------------------------
+// Draw
+// ------------------------------------------------------------
 
 void cutscene_guardian_phase1_draw(SceneContext *ctx, T3DViewport *viewport)
 {
@@ -1046,9 +1005,9 @@ void cutscene_guardian_phase1_draw(SceneContext *ctx, T3DViewport *viewport)
     }
 }
 
-/* ------------------------------------------------------------
- * Fog
- * ------------------------------------------------------------ */
+// ------------------------------------------------------------
+// Fog
+// ------------------------------------------------------------
 
 void cutscene_guardian_phase1_draw_fog(void)
 {

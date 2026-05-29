@@ -65,9 +65,7 @@ typedef struct SceneContext {
     T3DMat4FP *bossChainsGlowMatrix;
     ScrollParams *bossChainsGlowScrollParams;
 
-    // Callbacks into scene.c.
-
-    void (*set_cinematic_camera)(T3DVec3 start, T3DVec3 end, T3DVec3 target);
+    // Callbacks into scene.c.  TODO: there should be no callbacks in this file.
     void (*init_playing)(bool skippedCutscene);
     void (*finish_phase2_cutscene)(void);
 } SceneContext;

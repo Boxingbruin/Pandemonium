@@ -43,7 +43,6 @@ typedef enum {
 // ----------------------------------------------------------------------------
 // Lifecycle. Called from scene_init / scene_cleanup / scene_reset.
 // ----------------------------------------------------------------------------
-void cutscene_manager_init(void);
 void cutscene_manager_cleanup(void);
 void cutscene_manager_reset(void);
 
@@ -59,6 +58,18 @@ void cutscene_manager_enter(SceneContext *ctx, CutsceneState state);
 void cutscene_manager_update(SceneContext *ctx, float dt);
 void cutscene_manager_draw(SceneContext *ctx, T3DViewport *viewport);
 void cutscene_manager_skip(SceneContext *ctx);
+
+// ----------------------------------------------------------------------------
+// Generic cutscene camera helpers.
+// ----------------------------------------------------------------------------
+void cutscene_manager_set_camera_shot(
+    SceneContext *ctx,
+    T3DVec3 start,
+    T3DVec3 end,
+    T3DVec3 target
+);
+
+void cutscene_manager_update_camera(float duration);
 
 // ----------------------------------------------------------------------------
 // Queries used by callers across the codebase.
