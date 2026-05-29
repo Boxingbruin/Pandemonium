@@ -87,19 +87,29 @@ static inline bool circle_vs_circle_push_xz(
 
 static inline void update_character_capsule_world(void)
 {
+    /*
+     * Character capsule values are gameplay/world-unit local offsets.
+     *
+     * Do not multiply these by character.scale. character.scale is render/model
+     * scale, and applying it here shrinks the gameplay collider dramatically
+     * when the character is visually scaled by MODEL_SCALE.
+     *
+     * This also matches the boss collider path below, which treats capsule
+     * offsets/radius as gameplay units.
+     */
     charCapA = (T3DVec3){{
-        character.pos[0] + character.capsuleCollider.localCapA.v[0] * character.scale[0],
-        character.pos[1] + character.capsuleCollider.localCapA.v[1] * character.scale[1],
-        character.pos[2] + character.capsuleCollider.localCapA.v[2] * character.scale[2],
+        character.pos[0] + character.capsuleCollider.localCapA.v[0],
+        character.pos[1] + character.capsuleCollider.localCapA.v[1],
+        character.pos[2] + character.capsuleCollider.localCapA.v[2],
     }};
 
     charCapB = (T3DVec3){{
-        character.pos[0] + character.capsuleCollider.localCapB.v[0] * character.scale[0],
-        character.pos[1] + character.capsuleCollider.localCapB.v[1] * character.scale[1],
-        character.pos[2] + character.capsuleCollider.localCapB.v[2] * character.scale[2],
+        character.pos[0] + character.capsuleCollider.localCapB.v[0],
+        character.pos[1] + character.capsuleCollider.localCapB.v[1],
+        character.pos[2] + character.capsuleCollider.localCapB.v[2],
     }};
 
-    charRadius = character.capsuleCollider.radius * character.scale[0];
+    charRadius = character.capsuleCollider.radius;
 }
 
 void collision_get_character_capsule_world(float outA[3], float outB[3], float *outR)

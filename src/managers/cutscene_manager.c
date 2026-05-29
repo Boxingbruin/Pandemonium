@@ -2,20 +2,33 @@
 #include "cutscene_manager_internal.h"
 
 #include <libdragon.h>
-#include <rdpq.h>
-#include <rdpq_mode.h>
-#include <rdpq_sprite.h>
-#include <rdpq_text.h>
 
 #include <t3d/t3d.h>
+#include <t3d/t3danim.h>
 
 #include "globals.h"
-#include "video_layout.h"
-#include "scene.h"
 #include "joypad_utility.h"
+
+#include "../controllers/camera_controller.h"
+#include "../controllers/dialog_controller.h"
 
 #include "cutscene_guardian_phase1.h"
 #include "cutscene_guardian_phase2.h"
+
+#include "scene_context.h"
+
+#include "../utilities/button_prompt_utility.h"
+
+// TODO: These should be removed once cutscene animations are handled directly
+// by the boss scripts.
+#include "../game/bosses/boss_anim.h"
+
+// ----------------------------------------------------------------------------
+// Constants
+// ----------------------------------------------------------------------------
+
+#define CUTSCENE_CAMERA_FOV      1.544792654048f
+#define CUTSCENE_CAMERA_DISTANCE 4.05f
 
 // ----------------------------------------------------------------------------
 // State
@@ -70,15 +83,6 @@ const PostBossChat *cutscene_manager_get_post_boss_chat(int idx)
 // Lifecycle
 // ----------------------------------------------------------------------------
 
-void cutscene_manager_init(void)
-{
-    /*
-     * No heavy cutscene assets are loaded here anymore.
-     *
-     * Guardian phase 1 and phase 2 load/unload their own cinematic assets.
-     */
-}
-
 void cutscene_manager_cleanup(void)
 {
     cutscene_guardian_phase1_unload();
@@ -91,6 +95,9 @@ void cutscene_manager_reset(void)
     cutsceneTimer             = 0.0f;
     cutsceneCameraTimer       = 0.0f;
 
+    cutsceneCamPosStart       = (T3DVec3){{0.0f, 0.0f, 0.0f}};
+    cutsceneCamPosEnd         = (T3DVec3){{0.0f, 0.0f, 0.0f}};
+
     cutsceneDialogActive      = false;
     skipButtonVisible         = false;
     lastCutsceneAPressed      = false;
@@ -102,6 +109,132 @@ void cutscene_manager_reset(void)
 
     cutscene_guardian_phase1_unload();
     cutscene_guardian_phase2_unload();
+}
+
+// ----------------------------------------------------------------------------
+// Camera helpers
+// ----------------------------------------------------------------------------
+
+void cutscene_manager_set_camera_shot(
+    SceneContext *ctx,
+    T3DVec3 start,
+    T3DVec3 end,
+    T3DVec3 target
+)
+{
+    (void)ctx;
+
+    cutsceneCameraTimer = 0.0f;
+    cutsceneCamPosStart = start;
+    cutsceneCamPosEnd = end;
+
+    camera_mode(CAMERA_CUSTOM);
+
+    camera_initialize(
+        &cutsceneCamPosStart,
+        &(T3DVec3){{0, 0, 1}},
+        CUTSCENE_CAMERA_FOV,
+        CUTSCENE_CAMERA_DISTANCE
+    );
+
+    customCamTarget = target;
+}
+
+void cutscene_manager_update_camera(float duration)
+{
+    if (duration <= 0.0f) {
+        customCamPos = cutsceneCamPosEnd;
+        return;
+    }
+
+    float t = cutsceneCameraTimer / duration;
+    if (t > 1.0f) t = 1.0f;
+
+    float easeT = t * t * (3.0f - 2.0f * t);
+
+    customCamPos.v[0] = cutsceneCamPosStart.v[0] + (cutsceneCamPosEnd.v[0] - cutsceneCamPosStart.v[0]) * easeT;
+    customCamPos.v[1] = cutsceneCamPosStart.v[1] + (cutsceneCamPosEnd.v[1] - cutsceneCamPosStart.v[1]) * easeT;
+    customCamPos.v[2] = cutsceneCamPosStart.v[2] + (cutsceneCamPosEnd.v[2] - cutsceneCamPosStart.v[2]) * easeT;
+}
+
+// ----------------------------------------------------------------------------
+// Dialog helpers
+// ----------------------------------------------------------------------------
+
+void cutscene_manager_begin_dialog(const char *text, float holdSec)
+{
+    if (!text) {
+        cutsceneDialogActive = false;
+        return;
+    }
+
+    cutsceneDialogActive = true;
+
+    dialog_controller_speak(
+        text,
+        0,
+        holdSec,
+        false,
+        false
+    );
+}
+
+void cutscene_manager_update_dialog(void)
+{
+    if (!cutsceneDialogActive) return;
+
+    dialog_controller_update();
+}
+
+void cutscene_manager_draw_dialog(void)
+{
+    if (!cutsceneDialogActive) return;
+
+    int height = 70;
+    int width = 220;
+    int x = (SCREEN_WIDTH - width) / 2;
+    int y = 240 - height - 10;
+
+    dialog_controller_draw(false, x, y, width, height);
+}
+
+void cutscene_manager_clear_dialog(void)
+{
+    cutsceneDialogActive = false;
+    dialog_controller_stop_speaking();
+}
+
+// ----------------------------------------------------------------------------
+// Boss helpers
+// ----------------------------------------------------------------------------
+
+void cutscene_manager_update_boss_transform(SceneContext *ctx)
+{
+    if (!ctx || !ctx->boss) return;
+
+    boss_anim_update(ctx->boss);
+
+    T3DMat4FP *mat = (T3DMat4FP*)ctx->boss->modelMat;
+    if (mat) {
+        t3d_mat4fp_from_srt_euler(
+            mat,
+            ctx->boss->scale,
+            ctx->boss->rot,
+            ctx->boss->pos
+        );
+    }
+}
+
+void cutscene_manager_set_boss_anim(SceneContext *ctx, int animIndex)
+{
+    if (!ctx || !ctx->boss || !ctx->boss->animations) return;
+
+    T3DAnim **anims = (T3DAnim**)ctx->boss->animations;
+
+    t3d_anim_set_playing(anims[animIndex], true);
+
+    ctx->boss->currentAnimation = animIndex;
+    ctx->boss->currentAnimState = animIndex;
 }
 
 // ----------------------------------------------------------------------------
@@ -253,59 +386,17 @@ void cutscene_manager_draw_fog(void)
 }
 
 // ----------------------------------------------------------------------------
-// A-button + "skip" overlay. Drawn during in-engine cutscenes AND during FMV.
+// A-button + "skip" overlay.
+// The button_prompt_utility owns the A-button sprite and actual prompt drawing.
+// The caller owns visibility because this prompt is used by both actual cutscenes
+// and the title-screen fog-door transition.
 // ----------------------------------------------------------------------------
 
-void cutscene_manager_draw_skip_overlay(void)
+void cutscene_manager_draw_skip_overlay(bool visible)
 {
-    sprite_t *sprite = scene_get_a_button_sprite();
-    if (!sprite) return;
-
-    bool isTitleTransition = (scene_get_game_state() == GAME_STATE_TITLE_TRANSITION);
-    bool isCutsceneActive  = cutscene_manager_is_active();
-
-    if (!skipButtonVisible || (!isCutsceneActive && !isTitleTransition)) {
+    if (!visible) {
         return;
     }
 
-    surface_t surf = sprite_get_pixels(sprite);
-
-    const float kTargetPx = 20.0f;
-    int srcMax = (surf.width > surf.height) ? surf.width : surf.height;
-    float s = (srcMax > 0) ? (kTargetPx / (float)srcMax) : 1.0f;
-
-    int buttonWidth  = (int)((float)surf.width  * s);
-    int buttonHeight = (int)((float)surf.height * s);
-
-    const int marginX = ui_safe_margin_x();
-    const int marginY = ui_safe_margin_y();
-
-    int buttonX = SCREEN_WIDTH  - buttonWidth  - marginX;
-    int buttonY = SCREEN_HEIGHT - buttonHeight - marginY;
-
-    rdpq_sync_pipe();
-    rdpq_set_mode_standard();
-    rdpq_mode_alphacompare(0);
-    rdpq_mode_blender(RDPQ_BLENDER_MULTIPLY);
-    rdpq_mode_filter(FILTER_BILINEAR);
-
-    rdpq_sprite_blit(sprite, buttonX, buttonY, &(rdpq_blitparms_t){
-        .scale_x = s,
-        .scale_y = s,
-    });
-
-    const int gap = 6;
-    const int textRight = buttonX - gap;
-
-    if (textRight > 0) {
-        const int textY = buttonY + (buttonHeight / 2) + 6;
-
-        rdpq_set_prim_color(RGBA32(255, 255, 255, 255));
-
-        rdpq_text_printf(&(rdpq_textparms_t){
-            .align = ALIGN_RIGHT,
-            .width = textRight,
-            .wrap  = WRAP_WORD,
-        }, FONT_UNBALANCED, 0, textY, "%s", "skip");
-    }
+    button_prompt_draw_skip_bottom_right();
 }

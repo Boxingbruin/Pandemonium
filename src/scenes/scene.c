@@ -4,7 +4,6 @@
 #include <t3d/t3danim.h>
 #include <t3d/t3dmath.h>
 #include <t3d/t3dmodel.h>
-#include <t3d/t3ddebug.h>
 #include <math.h>
 #include <string.h>
 #include <stdio.h>
@@ -24,7 +23,8 @@
 #include "game_math.h"
 
 #include "globals.h"
-#include "video_layout.h"
+#include "../utilities/video_layout.h"
+#include "../utilities/button_prompt_utility.h"
 
 #include "../managers/cutscene_manager.h"
 #include "../managers/cutscene_manager_internal.h"
@@ -33,7 +33,6 @@
 #include "character.h"
 #include "../game/bosses/boss.h"
 #include "../game/bosses/boss_ai.h"
-#include "../game/bosses/boss_anim.h"
 #include "../game/bosses/boss_render.h"
 #include "../game/bosses/environmental_effects/boss_ground_crush.h"
 #include "../controllers/dialog_controller.h"
@@ -305,13 +304,6 @@ typedef enum {
 
 // Current lock target selection (cycled via held-Z + C-left/C-right)
 static int s_lockTargetIndex = LOCK_TARGET_WAIST;
-
-// Cutscene skip - toggle button visibility.
-// (skipButtonVisible and lastCutsceneAPressed are owned by cutscene_manager.c
-// — see the internal header above. aButtonSprite is loaded here because it is
-// also reused by the dialog "press A" prompt and the title-screen hint.)
-static sprite_t* aButtonSprite = NULL;
-static surface_t aButtonSurf;
 
 // Victory title card background ("Enemy restored")
 static sprite_t* victoryTitleBgSprite = NULL;
@@ -744,14 +736,7 @@ void scene_init(void)
     // Initialize dialog controller
     dialog_controller_init();
 
-    // Initialize cutscene manager
-    cutscene_manager_init();
-
-    // Load A button sprite for cutscene skip indicator
-    aButtonSprite = sprite_load("rom:/buttons/A.sprite");
-    if (aButtonSprite) {
-        aButtonSurf = sprite_get_pixels(aButtonSprite);
-    }
+    button_prompt_init();
 
     // Load victory title background (used for "Enemy restored")
     victoryTitleBgSprite = sprite_load("rom:/dialog-gradient.ia8.sprite");
@@ -806,7 +791,6 @@ void scene_init(void)
         healthBottleSurf = sprite_get_pixels(healthBottleSprite);
     }
 
-    //scene_init_cinematic_camera();
     // Start boss music
     // TODO: Its turned off for now as it gets annoying to listen to and it crackles
     // audio_play_music("rom:/audio/music/boss_final_phase.wav64", true);
@@ -1056,7 +1040,7 @@ static void scene_debug_force_boss_defeated(void)
 static void draw_post_boss_a_prompt(T3DViewport *viewport)
 {
     // Show "A" above the boss only after defeat, when close enough to interact.
-    if (!viewport || !aButtonSprite) return;
+    if (!viewport || !button_prompt_has_a_button()) return;
     if (scene_is_cutscene_active() || !scene_is_boss_active() || !g_boss) return;
     if (g_boss->state != BOSS_STATE_DEAD) return;
 
@@ -1086,23 +1070,7 @@ static void draw_post_boss_a_prompt(T3DViewport *viewport)
         return;
     }
 
-    // Source sprite is 64×64; scale down to a readable on-screen size.
-    const float kTargetPx = 20.0f;
-    int srcMax = (aButtonSurf.width > aButtonSurf.height) ? aButtonSurf.width : aButtonSurf.height;
-    float s = (srcMax > 0) ? (kTargetPx / (float)srcMax) : 1.0f;
-    int drawW = (int)((float)aButtonSurf.width  * s);
-    int drawH = (int)((float)aButtonSurf.height * s);
-    int x = px - (drawW / 2);
-    int y = py - (drawH / 2);
-
-    rdpq_sync_pipe();
-    rdpq_set_mode_standard();
-    rdpq_mode_alphacompare(0);
-    rdpq_mode_blender(RDPQ_BLENDER_MULTIPLY);
-    rdpq_mode_filter(FILTER_BILINEAR);
-    rdpq_sprite_blit(aButtonSprite, x, y, &(rdpq_blitparms_t){
-        .scale_x = s, .scale_y = s,
-    });
+    button_prompt_draw_a_icon_centered(px, py, 20.0f);
 }
 
 static void draw_cbutton_hud(void)
@@ -1221,10 +1189,6 @@ bool scene_is_boss_active(void) {
 
 GameState scene_get_game_state(void) {
     return gameState;
-}
-
-sprite_t *scene_get_a_button_sprite(void) {
-    return aButtonSprite;
 }
 
 void scene_set_game_state(GameState state) {
@@ -1413,21 +1377,6 @@ void scene_dev_warp_to_pre_phase2(void)
     }
 }
 
-void scene_set_cinematic_camera(T3DVec3 posStart, T3DVec3 posEnd, T3DVec3 posTarget)
-{
-    cutsceneCamPosStart = posStart;
-    cutsceneCamPosEnd = posEnd;
-
-    camera_initialize(
-        &cutsceneCamPosStart, 
-        &(T3DVec3){{0,0,1}}, 
-        1.544792654048f, 
-        4.05f
-    );
-
-    customCamTarget = posTarget;  // Look at boss center/chest area
-}
-
 // End-of-phase-2-cutscene teardown: drop cutscene-only effects and hand control
 // back to the fight at phase 2. Used both when the cutscene completes naturally
 // and when the player skips it via the A-button overlay.
@@ -1528,7 +1477,6 @@ static void scene_update_context(void)
     sceneContext.bossChainsGlowMatrix = bossChainsGlowMatrix;
     sceneContext.bossChainsGlowScrollParams = &bossChainsGlowScrollParams;
 
-    sceneContext.set_cinematic_camera = scene_set_cinematic_camera;
     sceneContext.init_playing = scene_init_playing;
     sceneContext.finish_phase2_cutscene = scene_finish_phase2_cutscene;
 }
@@ -2735,9 +2683,9 @@ void scene_draw_title(T3DViewport *viewport)
         {
             display_utility_solid_black_transition(false, 200.0f);
         }
-        
-        // Draw skip button on top during title transition (fog part)
-        cutscene_manager_draw_skip_overlay();
+
+        // Draw skip button on top during title transition (fog door)
+        cutscene_manager_draw_skip_overlay(skipButtonVisible);
     }
 }
 
@@ -2914,7 +2862,7 @@ void scene_draw(T3DViewport *viewport)
         // Draw letterbox bars during cutscenes
         letterbox_draw();
         // Draw skip indicator on top of letterbox bars
-        cutscene_manager_draw_skip_overlay();
+        cutscene_manager_draw_skip_overlay(skipButtonVisible);
         return;
     }
     // ===== DRAW 3D =====
@@ -3150,25 +3098,14 @@ void scene_draw(T3DViewport *viewport)
 
                 // Source sprite is 64×64; scale down to match other UI button sizes.
                 const float kTargetPx = 20.0f;
-                int srcMax = aButtonSprite
-                    ? ((aButtonSurf.width > aButtonSurf.height) ? aButtonSurf.width : aButtonSurf.height)
-                    : 0;
-                float s = (srcMax > 0) ? (kTargetPx / (float)srcMax) : 1.0f;
-                int buttonW = aButtonSprite ? (int)((float)aButtonSurf.width  * s) : 0;
-                int buttonH = aButtonSprite ? (int)((float)aButtonSurf.height * s) : 0;
+                int buttonW = button_prompt_a_icon_width(kTargetPx);
+                int buttonH = button_prompt_a_icon_height(kTargetPx);
                 int x0 = (SCREEN_WIDTH / 2) - 44;
 
-                if (aButtonSprite) {
+                if (button_prompt_has_a_button()) {
                     int buttonX = x0;
                     int buttonY = y - (buttonH / 2) - 6;
-                    rdpq_sync_pipe();
-                    rdpq_set_mode_standard();
-                    rdpq_mode_alphacompare(0);
-                    rdpq_mode_blender(RDPQ_BLENDER_MULTIPLY);
-                    rdpq_mode_filter(FILTER_BILINEAR);
-                    rdpq_sprite_blit(aButtonSprite, buttonX, buttonY, &(rdpq_blitparms_t){
-                        .scale_x = s, .scale_y = s,
-                    });
+                    button_prompt_draw_a_icon(buttonX, buttonY, kTargetPx);
                 }
 
                 // Text baseline aligned to match other UI codepaths (roughly icon vertical center)
@@ -3349,12 +3286,7 @@ void scene_cleanup(void) // Realistically we never want to call this for the jam
     }
 
     cutscene_manager_cleanup();
-
-    if (aButtonSprite) {
-        sprite_free(aButtonSprite);
-        aButtonSprite = NULL;
-        surface_free(&aButtonSurf);
-    }
+    button_prompt_cleanup();
 
     if (victoryTitleBgSprite) {
         sprite_free(victoryTitleBgSprite);

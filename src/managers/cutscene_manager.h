@@ -43,7 +43,6 @@ typedef enum {
 // ----------------------------------------------------------------------------
 // Lifecycle. Called from scene_init / scene_cleanup / scene_reset.
 // ----------------------------------------------------------------------------
-void cutscene_manager_init(void);
 void cutscene_manager_cleanup(void);
 void cutscene_manager_reset(void);
 
@@ -61,6 +60,32 @@ void cutscene_manager_draw(SceneContext *ctx, T3DViewport *viewport);
 void cutscene_manager_skip(SceneContext *ctx);
 
 // ----------------------------------------------------------------------------
+// Cutscene camera helpers.
+// ----------------------------------------------------------------------------
+void cutscene_manager_set_camera_shot(
+    SceneContext *ctx,
+    T3DVec3 start,
+    T3DVec3 end,
+    T3DVec3 target
+);
+
+void cutscene_manager_update_camera(float duration);
+
+// ----------------------------------------------------------------------------
+// Cutscene dialog helpers.
+// ----------------------------------------------------------------------------
+void cutscene_manager_begin_dialog(const char *text, float holdSec);
+void cutscene_manager_update_dialog(void);
+void cutscene_manager_draw_dialog(void);
+void cutscene_manager_clear_dialog(void);
+
+// ----------------------------------------------------------------------------
+// Cutscene boss helpers. TODO: This needs to live in the boss scripts eventually.
+// ----------------------------------------------------------------------------
+void cutscene_manager_update_boss_transform(SceneContext *ctx);
+void cutscene_manager_set_boss_anim(SceneContext *ctx, int animIndex);
+
+// ----------------------------------------------------------------------------
 // Queries used by callers across the codebase.
 // ----------------------------------------------------------------------------
 CutsceneState cutscene_manager_get_state(void);
@@ -75,7 +100,7 @@ void cutscene_manager_mark_phase2_triggered(void);
 // ----------------------------------------------------------------------------
 // Drawing helpers.
 // ----------------------------------------------------------------------------
-void cutscene_manager_draw_skip_overlay(void);
+void cutscene_manager_draw_skip_overlay(bool visible);
 void cutscene_manager_draw_fog(void);
 
 // Post-boss dialog.
