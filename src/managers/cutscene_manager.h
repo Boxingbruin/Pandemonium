@@ -100,7 +100,7 @@ void cutscene_manager_mark_phase2_triggered(void);
 // ----------------------------------------------------------------------------
 // Drawing helpers.
 // ----------------------------------------------------------------------------
-void cutscene_manager_draw_skip_overlay(void);
+void cutscene_manager_draw_skip_overlay(bool visible);
 void cutscene_manager_draw_fog(void);
 
 // Post-boss dialog.

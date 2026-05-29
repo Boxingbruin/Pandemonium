@@ -2,16 +2,11 @@
 #include "cutscene_manager_internal.h"
 
 #include <libdragon.h>
-#include <rdpq.h>
-#include <rdpq_mode.h>
-#include <rdpq_sprite.h>
-#include <rdpq_text.h>
 
 #include <t3d/t3d.h>
+#include <t3d/t3danim.h>
 
 #include "globals.h"
-#include "video_layout.h"
-#include "scene.h"
 #include "joypad_utility.h"
 
 #include "../controllers/camera_controller.h"
@@ -21,10 +16,12 @@
 #include "cutscene_guardian_phase2.h"
 
 #include "scene_context.h"
-// TODO: These should be removed once cutscene animations are handled directly to the boss scripts.
-#include <t3d/t3danim.h>
-#include "../game/bosses/boss_anim.h"
 
+#include "../utilities/button_prompt_utility.h"
+
+// TODO: These should be removed once cutscene animations are handled directly
+// by the boss scripts.
+#include "../game/bosses/boss_anim.h"
 
 // ----------------------------------------------------------------------------
 // Constants
@@ -389,59 +386,17 @@ void cutscene_manager_draw_fog(void)
 }
 
 // ----------------------------------------------------------------------------
-// A-button + "skip" overlay. Drawn during in-engine cutscenes AND during FMV.
+// A-button + "skip" overlay.
+// The button_prompt_utility owns the A-button sprite and actual prompt drawing.
+// The caller owns visibility because this prompt is used by both actual cutscenes
+// and the title-screen fog-door transition.
 // ----------------------------------------------------------------------------
 
-void cutscene_manager_draw_skip_overlay(void)
+void cutscene_manager_draw_skip_overlay(bool visible)
 {
-    sprite_t *sprite = scene_get_a_button_sprite();
-    if (!sprite) return;
-
-    bool isTitleTransition = (scene_get_game_state() == GAME_STATE_TITLE_TRANSITION);
-    bool isCutsceneActive  = cutscene_manager_is_active();
-
-    if (!skipButtonVisible || (!isCutsceneActive && !isTitleTransition)) {
+    if (!visible) {
         return;
     }
 
-    surface_t surf = sprite_get_pixels(sprite);
-
-    const float kTargetPx = 20.0f;
-    int srcMax = (surf.width > surf.height) ? surf.width : surf.height;
-    float s = (srcMax > 0) ? (kTargetPx / (float)srcMax) : 1.0f;
-
-    int buttonWidth  = (int)((float)surf.width  * s);
-    int buttonHeight = (int)((float)surf.height * s);
-
-    const int marginX = ui_safe_margin_x();
-    const int marginY = ui_safe_margin_y();
-
-    int buttonX = SCREEN_WIDTH  - buttonWidth  - marginX;
-    int buttonY = SCREEN_HEIGHT - buttonHeight - marginY;
-
-    rdpq_sync_pipe();
-    rdpq_set_mode_standard();
-    rdpq_mode_alphacompare(0);
-    rdpq_mode_blender(RDPQ_BLENDER_MULTIPLY);
-    rdpq_mode_filter(FILTER_BILINEAR);
-
-    rdpq_sprite_blit(sprite, buttonX, buttonY, &(rdpq_blitparms_t){
-        .scale_x = s,
-        .scale_y = s,
-    });
-
-    const int gap = 6;
-    const int textRight = buttonX - gap;
-
-    if (textRight > 0) {
-        const int textY = buttonY + (buttonHeight / 2) + 6;
-
-        rdpq_set_prim_color(RGBA32(255, 255, 255, 255));
-
-        rdpq_text_printf(&(rdpq_textparms_t){
-            .align = ALIGN_RIGHT,
-            .width = textRight,
-            .wrap  = WRAP_WORD,
-        }, FONT_UNBALANCED, 0, textY, "%s", "skip");
-    }
+    button_prompt_draw_skip_bottom_right();
 }

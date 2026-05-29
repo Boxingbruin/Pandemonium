@@ -8,7 +8,7 @@
  */
 
 #include "globals.h"
-#include "video_controller.h"
+#include "../controllers/video_controller.h"
 
 // Safe-area margins
 // Action safe: 90% area => 5% margin per side
