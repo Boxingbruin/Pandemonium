@@ -10,24 +10,17 @@
 #include "boss.h"
 
 #include <math.h>
-#include <stdlib.h>
 
 #include <libdragon.h>
-#include <t3d/t3d.h>
-#include <t3d/t3dskeleton.h>
 #include <t3d/t3dmath.h>
 
 #include "systems/collision_system.h"
 
-#include "game_time.h"
 #include "character.h"
 #include "scene_sfx.h" // TODO: make sfx entity specific
-#include "scene.h"
 #include "environmental_effects/boss_ground_crush.h"
+#include "fx/dust_particles_fx.h"
 
-#include "utilities/collision_mesh.h"
-#include "utilities/simple_collision_utility.h"
-#include "utilities/game_math.h"
 #include "utilities/animation_utility.h"
 
 #include "environmental_mechanics/multi_sword_attacks.h"
@@ -56,7 +49,7 @@ static inline void boss_spawn_dust_toward_player(Boss *boss, float forwardDist, 
 
     float cx = boss->pos[0] + dirX * forwardDist;
     float cz = boss->pos[2] + dirZ * forwardDist;
-    scene_spawn_dust_burst(cx, boss->pos[1], cz, strength);
+    dust_particles_fx_spawn_burst(cx, boss->pos[1], cz, strength);
 }
 
 // Spawn ground crushed decal at the same biased impact point as the dust burst.
@@ -1244,7 +1237,7 @@ static void boss_attacks_update_aerial_swords(Boss* boss, float dt) {
                 }
                 
                 // Impact effect
-                scene_spawn_dust_burst(targetX, targetY, targetZ, 1.5f);
+                dust_particles_fx_spawn_burst(targetX, targetY, targetZ, 1.5f);
                 
                 // Deactivate sword
                 boss->aerialSwordActive[i] = false;

@@ -1795,17 +1795,6 @@ static void draw_lockon_indicator(T3DViewport *viewport)
     }
 }
 
-/* -----------------------------------------------------------------------------
- * Dust particles
- * -------------------------------------------------------------------------- */
-
-void scene_spawn_dust_burst(float x, float y, float z, float strength)
-{
-    dust_particles_fx_spawn_burst(x, y, z, strength);
-}
-
-
-
 void scene_draw_cutscene(T3DViewport *viewport)
 {
     scene_update_context();
@@ -1947,7 +1936,7 @@ void scene_draw(T3DViewport *viewport)
 
     // Fog
     color_t fogColor = (color_t){0, 0, 0, 0xFF};
-    //rdpq_set_prim_color((color_t){0xFF, 0xFF, 0xFF, 0xFF});
+
     rdpq_mode_fog(RDPQ_FOG_STANDARD);
     rdpq_set_fog_color(fogColor);
 
@@ -1963,9 +1952,7 @@ void scene_draw(T3DViewport *viewport)
 
     // Lighting
     t3d_light_set_ambient(colorAmbient);
-    // T3DVec3 negCamDir = {{-camDir.x, -camDir.y, -camDir.z}};
-    // t3d_light_set_directional(0, (uint8_t[4]){0x00, 0x00, 0x00, 0xFF}, &negCamDir);
-    // t3d_light_set_count(1);
+
     if(cutsceneState != CUTSCENE_NONE)
     {
         scene_draw_cutscene(viewport);
@@ -1991,28 +1978,15 @@ void scene_draw(T3DViewport *viewport)
     t3d_matrix_pop(1);
 
 
-    // if(g_boss->isAttacking || g_boss->health <= 0 || g_boss->state == BOSS_STATE_COMBO_ATTACK || g_boss->state == BOSS_STATE_STOMP) // TODO: Hacky fix but something weird is going on with comnbo1 and we dont have time
-    // {
-        //Draw depth environment
-        rdpq_sync_pipe();
-        rdpq_mode_zbuf(true, true);
+    //Draw depth environment
+    rdpq_sync_pipe();
+    rdpq_mode_zbuf(true, true);
 
-        t3d_matrix_push_pos(1);
-            t3d_matrix_set(roomFloorMatrix, true);
-            rspq_block_run(roomFloorDpl);
-        t3d_matrix_pop(1);
-    // }
-    // else
-    // {
-    //     //Draw depth environment
-    //     rdpq_sync_pipe();
-    //     rdpq_mode_zbuf(false, false);
+    t3d_matrix_push_pos(1);
+        t3d_matrix_set(roomFloorMatrix, true);
+        rspq_block_run(roomFloorDpl);
+    t3d_matrix_pop(1);
 
-    //     t3d_matrix_push_pos(1);
-    //         t3d_matrix_set(roomFloorMatrix, true);
-    //         rspq_block_run(roomFloorDpl);
-    //     t3d_matrix_pop(1);
-    // }
 
     rdpq_sync_pipe();
     rdpq_mode_zbuf(false, false);
