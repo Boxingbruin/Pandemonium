@@ -13,17 +13,15 @@
 #include "game_math.h"
 #include "globals.h"
 
-#include "debug_draw.h"
 #include "game/bosses/boss.h"
-#include "simple_collision_utility.h"
 #include "collision_system.h"
-#include "game_math.h"
 #include "display_utility.h"
 #include "controllers/audio_controller.h"
 #include "scenes/scene_sfx.h"
 #include "utilities/general_utility.h"
 #include "utilities/sword_trail.h"
 #include "animation_utility.h"
+#include "fx/blood_particles_fx.h"
 
 /*
  Character Controller
@@ -2541,9 +2539,7 @@ void character_update(void)
                         }
 
                         float strength = (characterState == CHAR_STATE_ATTACKING_STRONG) ? 1.8f : 1.0f;
-                        /* TODO: move blood spawning to an effects/blood system outside character.c. */
-                        (void)impact;
-                        (void)strength;
+                        blood_particles_fx_spawn_burst(impact[0], impact[1], impact[2], strength);
                     }
                 }
                 character.currentAttackHasHit = true;

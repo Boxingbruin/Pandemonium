@@ -1,13 +1,11 @@
 #include <libdragon.h>
 #include <t3d/t3d.h>
 #include <t3d/t3dskeleton.h>
-#include <t3d/t3danim.h>
 #include <t3d/t3dmath.h>
 #include <t3d/t3dmodel.h>
 #include <math.h>
 #include <string.h>
 #include <stdio.h>
-#include <stdint.h>
 
 #include "scene.h"
 #include "scene_sfx.h"
@@ -55,12 +53,8 @@
 #include "multi_sword_attacks.h" // TODO: call only from boss
 #include "fx/lightning_fx.h"
 #include "fx/dust_particles_fx.h"
+#include "fx/blood_particles_fx.h"
 //#include "boulder_hazard.h" // close-range ground-boulder hazard
-
-// Blood (implemented after dust)
-static void blood_reset(void);
-static void blood_update(float dt);
-static void blood_draw(T3DViewport *viewport);
 
 // Forward declaration: scene_init() and scene_restart() start the Guardian intro.
 void scene_init_cutscene(void);
@@ -287,21 +281,6 @@ static int s_lockTargetIndex = LOCK_TARGET_WAIST;
 // Victory title card background ("Enemy restored")
 static sprite_t* victoryTitleBgSprite = NULL;
 static surface_t victoryTitleBgSurf = {0};
-
-// Blood splatter sprites (large + medium variants + tiny variants).
-// Loaded as IA8 so they can be tinted red via prim color and stay TMEM-cheap.
-enum {
-    BLOOD_SPRITE_LARGE = 0,
-    BLOOD_SPRITE_MEDIUM_A,
-    BLOOD_SPRITE_MEDIUM_B,
-    BLOOD_SPRITE_MEDIUM_C,
-    BLOOD_SPRITE_TINY_A,
-    BLOOD_SPRITE_TINY_B,
-    BLOOD_SPRITE_TINY_C,
-    BLOOD_SPRITE_COUNT
-};
-static sprite_t* bloodSprites[BLOOD_SPRITE_COUNT] = {0};
-static surface_t bloodSurfs[BLOOD_SPRITE_COUNT] = {0};
 
 // Z-target lock-on icon sprite
 static sprite_t* zTargetIconSprite = NULL;
@@ -632,23 +611,7 @@ void scene_init(void)
     }
 
     dust_particles_fx_init();
-
-    // Load blood splatter sprites (IA8 - tinted red at draw time)
-    static const char* bloodPaths[BLOOD_SPRITE_COUNT] = {
-        "rom:/blood/blood_large.ia8.sprite",
-        "rom:/blood/blood_medium_a.ia8.sprite",
-        "rom:/blood/blood_medium_b.ia8.sprite",
-        "rom:/blood/blood_medium_c.ia8.sprite",
-        "rom:/blood/blood_tiny_a.ia8.sprite",
-        "rom:/blood/blood_tiny_b.ia8.sprite",
-        "rom:/blood/blood_tiny_c.ia8.sprite",
-    };
-    for (int i = 0; i < BLOOD_SPRITE_COUNT; i++) {
-        bloodSprites[i] = sprite_load(bloodPaths[i]);
-        if (bloodSprites[i]) {
-            bloodSurfs[i] = sprite_get_pixels(bloodSprites[i]);
-        }
-    }
+    blood_particles_fx_init();
 
     // Load Z-target lock-on icon (IA8 so the alpha gradient is preserved)
     zTargetIconSprite = sprite_load("rom:/ztargetIcon.ia8.sprite");
@@ -689,7 +652,7 @@ void scene_init(void)
 
 
     dust_particles_fx_reset();
-    blood_reset();
+    blood_particles_fx_reset();
 
     msa_init();
 
@@ -831,8 +794,8 @@ void scene_reset(void)
     s_bossRunStartS = 0.0;
 
     dust_particles_fx_reset();
+    blood_particles_fx_reset();
     boss_ground_crush_reset();
-    blood_reset();
 }
 
 static void scene_sync_input_edge_state(void)
@@ -1839,235 +1802,7 @@ void scene_spawn_dust_burst(float x, float y, float z, float strength)
     dust_particles_fx_spawn_burst(x, y, z, strength);
 }
 
-/* -----------------------------------------------------------------------------
- * Blood splatters (sword-on-boss impact)
- * -------------------------------------------------------------------------- */
 
-typedef struct {
-    bool  active;
-    float pos[3];     // world
-    float vel[3];     // world units/sec
-    float age;        // sec
-    float life;       // sec
-    float size_px;    // base pixel size (height of sprite drawn)
-    uint8_t spriteIdx;
-    uint8_t r, g, b;  // tint (per-particle variation)
-} BloodParticle;
-
-enum { BLOOD_MAX = 48 };
-static BloodParticle s_blood[BLOOD_MAX];
-
-static inline float blood_clampf(float x, float lo, float hi) {
-    if (x < lo) return lo;
-    if (x > hi) return hi;
-    return x;
-}
-
-static inline float blood_alpha01(const BloodParticle *p) {
-    if (!p || p->life <= 0.0f) return 0.0f;
-    float t = blood_clampf(p->age / p->life, 0.0f, 1.0f);
-    // Mostly opaque for the first half, then fade out (quadratic).
-    if (t < 0.55f) return 1.0f;
-    float u = (t - 0.55f) / 0.45f;
-    return (1.0f - u) * (1.0f - u);
-}
-
-static void blood_reset(void) {
-    memset(s_blood, 0, sizeof(s_blood));
-}
-
-static int blood_alloc_slot(void) {
-    for (int i = 0; i < BLOOD_MAX; i++) {
-        if (!s_blood[i].active) return i;
-    }
-    int oldest = 0;
-    float bestAge = s_blood[0].age;
-    for (int i = 1; i < BLOOD_MAX; i++) {
-        if (s_blood[i].age > bestAge) {
-            bestAge = s_blood[i].age;
-            oldest = i;
-        }
-    }
-    return oldest;
-}
-
-void scene_spawn_blood_burst(float x, float y, float z, float strength) {
-    if (strength < 0.05f) return;
-    if (strength > 3.0f) strength = 3.0f;
-
-    // One "large" anchor splatter, several mediums, several tinies.
-    int largeCount  = 1;
-    int mediumCount = 3 + (int)(strength * 1.5f);
-    int tinyCount   = 6 + (int)(strength * 3.0f);
-    if (mediumCount > 6) mediumCount = 6;
-    if (tinyCount   > 12) tinyCount  = 12;
-
-    int total = largeCount + mediumCount + tinyCount;
-
-    for (int i = 0; i < total; i++) {
-        int idx = blood_alloc_slot();
-        BloodParticle *p = &s_blood[idx];
-
-        // Pick which sprite tier this particle belongs to and randomize within tier.
-        uint8_t spriteIdx;
-        float baseSize;
-        if (i < largeCount) {
-            spriteIdx = BLOOD_SPRITE_LARGE;
-            baseSize  = 22.0f + 4.0f * strength;
-        } else if (i < largeCount + mediumCount) {
-            int variant = (int)(rand_custom_float() * 3.0f);
-            if (variant > 2) variant = 2;
-            spriteIdx = (uint8_t)(BLOOD_SPRITE_MEDIUM_A + variant);
-            baseSize  = 14.0f + 4.0f * strength;
-        } else {
-            int variant = (int)(rand_custom_float() * 3.0f);
-            if (variant > 2) variant = 2;
-            spriteIdx = (uint8_t)(BLOOD_SPRITE_TINY_A + variant);
-            baseSize  = 7.0f + 3.0f * strength;
-        }
-
-        p->active = true;
-        p->age    = 0.0f;
-        // Mediums/tinies fly farther; the large anchor lingers a hair longer to read.
-        p->life   = (i < largeCount) ? 0.55f : (0.35f + rand_custom_float() * 0.30f);
-        p->size_px  = baseSize + rand_custom_float() * 3.0f;
-        p->spriteIdx = spriteIdx;
-
-        // Random red tint (darker arterial through brighter splatter).
-        int rJitter = (int)((rand_custom_float() - 0.5f) * 30.0f);
-        int gJitter = (int)(rand_custom_float() * 14.0f);
-        int rr = 165 + rJitter;
-        int gg = 12  + gJitter;
-        int bb = 18;
-        if (rr < 110) rr = 110;
-        if (rr > 210) rr = 210;
-        if (gg <   0) gg = 0;
-        if (gg >  40) gg = 40;
-        p->r = (uint8_t)rr;
-        p->g = (uint8_t)gg;
-        p->b = (uint8_t)bb;
-
-        // Spawn directly at the contact point with a small jitter so all the sprites
-        // don't overlap into one blob on screen.
-        float jitterR = (rand_custom_float() * 4.0f) - 2.0f;
-        float jitterU = (rand_custom_float() * 4.0f) - 2.0f;
-        p->pos[0] = x + jitterR;
-        p->pos[1] = y + jitterU;
-        p->pos[2] = z + jitterR * 0.5f;
-
-        // Pick an outward direction in a full 3D cone biased upward + outward.
-        // Yaw is uniformly distributed; pitch leans up (toward the player's swing).
-        float yaw   = rand_custom_float() * (2.0f * T3D_PI);
-        float pitch = (T3D_PI * 0.20f) + rand_custom_float() * (T3D_PI * 0.30f); // 36° to 90°
-        float c = cosf(pitch);
-        float dirX = c * cosf(yaw);
-        float dirY = sinf(pitch);
-        float dirZ = c * sinf(yaw);
-
-        // Speeds: big anchor moves slow (looks like a heavy gout), mediums fast, tinies fastest spray.
-        float baseSpeed;
-        if (i < largeCount)                      baseSpeed = 30.0f + 20.0f * strength;
-        else if (i < largeCount + mediumCount)   baseSpeed = 110.0f + 60.0f * strength;
-        else                                     baseSpeed = 170.0f + 90.0f * strength;
-        float speed = baseSpeed * (0.75f + rand_custom_float() * 0.5f);
-
-        p->vel[0] = dirX * speed;
-        p->vel[1] = dirY * speed;
-        p->vel[2] = dirZ * speed;
-    }
-}
-
-static void blood_update(float dt) {
-    if (dt < 0.0f) dt = 0.0f;
-    if (dt > 0.25f) dt = 0.25f;
-
-    // Gravity in world units / s^2. Tuned to feel snappy at the small scale of a burst
-    // (particles only live ~0.4-0.6s, so heavy gravity makes them clearly arc).
-    const float GRAVITY = 900.0f;
-
-    for (int i = 0; i < BLOOD_MAX; i++) {
-        BloodParticle *p = &s_blood[i];
-        if (!p->active) continue;
-
-        p->age += dt;
-        if (p->age >= p->life) {
-            p->active = false;
-            continue;
-        }
-
-        // Light air drag on the lateral axes only - keeps the arc readable.
-        float dampXZ = expf(-1.5f * dt);
-        p->vel[0] *= dampXZ;
-        p->vel[2] *= dampXZ;
-
-        // Gravity.
-        p->vel[1] -= GRAVITY * dt;
-
-        p->pos[0] += p->vel[0] * dt;
-        p->pos[1] += p->vel[1] * dt;
-        p->pos[2] += p->vel[2] * dt;
-    }
-}
-
-static void blood_draw(T3DViewport *viewport) {
-    if (!viewport) return;
-
-    rdpq_sync_pipe();
-    rdpq_set_mode_standard();
-    rdpq_mode_zbuf(true, false);
-    rdpq_mode_alphacompare(1);
-    rdpq_mode_combiner(RDPQ_COMBINER_TEX_FLAT);
-    rdpq_mode_blender(RDPQ_BLENDER_MULTIPLY);
-
-    for (int i = 0; i < BLOOD_MAX; i++) {
-        const BloodParticle *p = &s_blood[i];
-        if (!p->active) continue;
-
-        sprite_t *sp = bloodSprites[p->spriteIdx];
-        surface_t *sf = &bloodSurfs[p->spriteIdx];
-        if (!sp || sf->width <= 0 || sf->height <= 0) continue;
-
-        T3DVec3 worldPos = {{ p->pos[0], p->pos[1], p->pos[2] }};
-        T3DVec3 screenPos;
-        t3d_viewport_calc_viewspace_pos(viewport, &screenPos, &worldPos);
-        if (screenPos.v[2] >= 1.0f) continue;
-
-        float z01 = blood_clampf(screenPos.v[2], 0.0f, 0.9999f);
-        rdpq_mode_zoverride(true, z01, 0);
-
-        float a01 = blood_alpha01(p);
-        uint8_t a = (uint8_t)blood_clampf(a01 * 230.0f, 0.0f, 255.0f);
-        if (a == 0) continue;
-
-        rdpq_set_prim_color(RGBA32(p->r, p->g, p->b, a));
-
-        // Slight shrink as the particle ages (droplets thin out).
-        float shrink = 1.0f - 0.25f * (p->age / p->life);
-        if (shrink < 0.5f) shrink = 0.5f;
-
-        int h = (int)(p->size_px * shrink);
-        if (h < 3) h = 3;
-        if (h > 40) h = 40;
-
-        // Preserve sprite aspect ratio.
-        float aspect = (sf->height > 0) ? ((float)sf->width / (float)sf->height) : 1.0f;
-        int w = (int)(h * aspect);
-        if (w < 3) w = 3;
-
-        int px = (int)screenPos.v[0];
-        int py = (int)screenPos.v[1];
-
-        float sx = (sf->width  > 0) ? ((float)w / (float)sf->width)  : 1.0f;
-        float sy = (sf->height > 0) ? ((float)h / (float)sf->height) : 1.0f;
-        rdpq_tex_blit(sf, px - (w / 2), py - (h / 2), &(rdpq_blitparms_t){
-            .scale_x = sx,
-            .scale_y = sy,
-        });
-    }
-
-    rdpq_mode_zoverride(false, 0.0f, 0);
-    rdpq_mode_zbuf(false, false);
-}
 
 void scene_draw_cutscene(T3DViewport *viewport)
 {
@@ -2383,8 +2118,8 @@ void scene_draw(T3DViewport *viewport)
     dust_particles_fx_draw(viewport);
 
     // Blood splatters from boss hits (drawn after dust so red reads on top of puffs)
-    blood_update(deltaTime);
-    blood_draw(viewport);
+    blood_particles_fx_update(deltaTime);
+    blood_particles_fx_draw(viewport);
 
     // Post-boss interaction prompt ("A") above the defeated boss when close enough to interact
     draw_post_boss_a_prompt(viewport);
@@ -2646,6 +2381,7 @@ void scene_cleanup(void)
     }
 
     dust_particles_fx_cleanup();
+    blood_particles_fx_cleanup();
 
     dialog_controller_free();
     audio_scene_unload_sfx();
@@ -2656,14 +2392,6 @@ void scene_cleanup(void)
         sprite_free(victoryTitleBgSprite);
         victoryTitleBgSprite = NULL;
         surface_free(&victoryTitleBgSurf);
-    }
-
-    for (int i = 0; i < BLOOD_SPRITE_COUNT; i++) {
-        if (bloodSprites[i]) {
-            sprite_free(bloodSprites[i]);
-            bloodSprites[i] = NULL;
-            surface_free(&bloodSurfs[i]);
-        }
     }
 
     if (zTargetIconSprite) {
