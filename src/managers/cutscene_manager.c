@@ -19,6 +19,8 @@
 
 #include "../utilities/button_prompt_utility.h"
 
+#include "../game/bosses/boss.h"
+
 // TODO: These should be removed once cutscene animations are handled directly
 // by the boss scripts.
 #include "../game/bosses/boss_anim.h"
@@ -255,11 +257,19 @@ void cutscene_manager_enter(SceneContext *ctx, CutsceneState state)
     lastCutsceneAPressed = false;
 
     if (cutscene_guardian_phase1_handles(state)) {
+        if (ctx->boss) {
+            boss_activate_cinematic(ctx->boss);
+        }
+
         cutscene_guardian_phase1_enter(ctx, state);
         return;
     }
 
     if (cutscene_guardian_phase2_handles(state)) {
+        if (ctx->boss) {
+            boss_activate_cinematic(ctx->boss);
+        }
+
         cutscene_guardian_phase2_enter(ctx, state);
         return;
     }

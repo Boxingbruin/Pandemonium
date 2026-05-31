@@ -54,12 +54,8 @@
 
 #include "multi_sword_attacks.h" // TODO: call only from boss
 #include "fx/lightning_fx.h"
+#include "fx/dust_particles_fx.h"
 //#include "boulder_hazard.h" // close-range ground-boulder hazard
-
-// Dust (implemented later near lock-on indicator)
-static void dust_reset(void);
-static void dust_update(float dt);
-static void dust_draw(T3DViewport *viewport);
 
 // Blood (implemented after dust)
 static void blood_reset(void);
@@ -251,7 +247,6 @@ static float uiIntroSpeed = 1.5f;
 
 // (cutsceneState, cutsceneTimer, cutsceneCameraTimer, cutsceneCamPosStart/End
 // live in cutscene_manager.c — accessed via the internal header above.)
-static bool bossActivated = false;
 static Boss* g_boss = NULL;  // Boss instance pointer
 
 // Game state management
@@ -292,10 +287,6 @@ static int s_lockTargetIndex = LOCK_TARGET_WAIST;
 // Victory title card background ("Enemy restored")
 static sprite_t* victoryTitleBgSprite = NULL;
 static surface_t victoryTitleBgSurf = {0};
-
-// Dust particle sprite (simple puffs)
-static sprite_t* dustParticleSprite = NULL;
-static surface_t dustParticleSurf = {0};
 
 // Blood splatter sprites (large + medium variants + tiny variants).
 // Loaded as IA8 so they can be tinted red via prim color and stay TMEM-cheap.
@@ -619,6 +610,10 @@ void scene_init(void)
         return;
     }
 
+    // The scene owns when the boss is commanded into/out of gameplay,
+    // but the boss owns the actual active/cinematic/combat mode internally.
+    boss_deactivate(g_boss);
+
     boss_ground_crush_init();
 
     // reset character
@@ -636,11 +631,7 @@ void scene_init(void)
         victoryTitleBgSurf = sprite_get_pixels(victoryTitleBgSprite);
     }
 
-    // Load dust particle sprite
-    dustParticleSprite = sprite_load("rom:/dustParticle.ia8.sprite");
-    if (dustParticleSprite) {
-        dustParticleSurf = sprite_get_pixels(dustParticleSprite);
-    }
+    dust_particles_fx_init();
 
     // Load blood splatter sprites (IA8 - tinted red at draw time)
     static const char* bloodPaths[BLOOD_SPRITE_COUNT] = {
@@ -697,7 +688,7 @@ void scene_init(void)
     collision_init();
 
 
-    dust_reset();
+    dust_particles_fx_reset();
     blood_reset();
 
     msa_init();
@@ -778,7 +769,9 @@ void scene_reset(void)
     skipButtonVisible = false;
     lastCutsceneAPressed = false;
     // Note: skipButtonVisible is also used for title transition, so we reset it here
-    bossActivated = false;
+    if (g_boss) {
+        boss_deactivate(g_boss);
+    }
     phase2CutsceneTriggered = false;
     gameState = GAME_STATE_PLAYING;
     lastMenuActive = false;
@@ -837,7 +830,7 @@ void scene_reset(void)
     s_bossRunActive = false;
     s_bossRunStartS = 0.0;
 
-    dust_reset();
+    dust_particles_fx_reset();
     boss_ground_crush_reset();
     blood_reset();
 }
@@ -907,6 +900,7 @@ static void scene_debug_force_boss_defeated(void)
 
     // If the boss had any pending external AI requests, clear them too.
     g_boss->pendingRequests = 0;
+    boss_set_mode(g_boss, BOSS_MODE_POST_DEFEAT);
 
     // Enter victory state so the "Enemy restored" end-card renders/advances.
     // This is primarily for debugging (L-trigger skip).
@@ -934,7 +928,7 @@ static void draw_post_boss_a_prompt(T3DViewport *viewport)
 {
     // Show "A" above the boss only after defeat, when close enough to interact.
     if (!viewport || !button_prompt_has_a_button()) return;
-    if (scene_is_cutscene_active() || !scene_is_boss_active() || !g_boss) return;
+    if (scene_is_cutscene_active() || !boss_is_interactable(g_boss)) return;
     if (g_boss->state != BOSS_STATE_DEAD) return;
 
     // Show whenever we're near the boss, regardless of facing. The A press itself
@@ -1077,7 +1071,7 @@ bool scene_is_cutscene_active(void) {
 }
 
 bool scene_is_boss_active(void) {
-    return bossActivated;
+    return boss_is_active(g_boss);
 }
 
 GameState scene_get_game_state(void) {
@@ -1181,7 +1175,9 @@ void scene_init_playing(bool skippedCutscene)
     skipButtonVisible = false;
     lastCutsceneAPressed = false;
 
-    bossActivated = true;
+    if (g_boss) {
+        boss_activate_combat(g_boss);
+    }
 
     // Starting a new run (boss attempt).
     // Default save slot is 0 ("Save 1") until we have a UI to pick slots.
@@ -1268,6 +1264,8 @@ static void scene_finish_phase2_cutscene(void)
     cutsceneDialogActive = false;
 
     if (g_boss) {
+        boss_activate_combat(g_boss);
+
         g_boss->phaseIndex = 2;
         g_boss->handAttackColliderActive = false;
         g_boss->sphereAttackColliderActive = false;
@@ -1428,7 +1426,7 @@ void scene_cutscene_update(void)
             // Post-boss dialog runs while gameplay continues to animate without player input.
             character_update_cinematic();
 
-            if (bossActivated && g_boss) {
+            if (boss_is_active(g_boss)) {
                 boss_update(g_boss);
             }
 
@@ -1530,7 +1528,7 @@ void scene_update(void)
         character_update_cinematic();
 
         // Keep boss AI updating so it continues moving during end screen.
-        if (bossActivated && g_boss) {
+        if (boss_is_active(g_boss)) {
             boss_update(g_boss);
         }
 
@@ -1553,7 +1551,7 @@ void scene_update(void)
     // bool lHeld = joypad.btn.l;
     // bool lJustPressed = lHeld && !lastLPressed;
     // lastLPressed = lHeld;
-    // if (lJustPressed && bossActivated && g_boss) {
+    // if (lJustPressed && boss_is_active(g_boss)) {
     //     scene_debug_force_boss_defeated();
     // }
 
@@ -1562,7 +1560,7 @@ void scene_update(void)
         // Post-boss interaction trigger: after defeat, when Z-targeted and close enough,
         // start the dialog/camera only when player presses A (held-edge).
         // IMPORTANT: check this BEFORE character_update so A doesn't also trigger a roll.
-        if (bossActivated && g_boss && g_boss->state == BOSS_STATE_DEAD) {
+        if (boss_is_interactable(g_boss) && g_boss->state == BOSS_STATE_DEAD) {
             bool aHeld = joypad.btn.a;
             bool aJustPressed = aHeld && !lastInteractAHeld;
             lastInteractAHeld = aHeld;
@@ -1587,14 +1585,15 @@ void scene_update(void)
 
         boss_ground_crush_update(deltaTime);
 
-        if (bossActivated && g_boss) {
+        if (boss_is_active(g_boss)) {
             boss_update(g_boss);
             // Boss death no longer forces GAME_STATE_VICTORY.
             // The boss will play its collapse and remain still; the player can keep moving.
 
             // Phase 2 transition: trigger cutscene when boss health drops to 40%.
 #if PHASE_2_ENABLED
-            if (!phase2CutsceneTriggered && g_boss->phaseIndex == 1
+            if (boss_is_combat_active(g_boss)
+                && !phase2CutsceneTriggered && g_boss->phaseIndex == 1
                 && g_boss->health <= g_boss->maxHealth * 0.4f
                 && g_boss->health > 0.0f) {
                 phase2CutsceneTriggered = true;
@@ -1652,7 +1651,7 @@ void scene_update(void)
 
     // Post-boss cleanup: once the boss becomes dead, clear Z-targeting so the player is untargeted
     // after the fight. The player can still re-target by pressing Z as normal.
-    if (bossActivated && g_boss) {
+    if (boss_is_active(g_boss)) {
         bool bossDeadNow = (g_boss->state == BOSS_STATE_DEAD);
         if (bossDeadNow && !bossWasDead) {
             // Record fastest clear time per save slot (once, on death edge).
@@ -1684,7 +1683,7 @@ void scene_update(void)
     // Z-target:
     // - Tap Z toggles lock-on on/off
     // - Hold Z keeps lock-on active and allows cycling targets with C-left/C-right
-    bool lockonAllowed = cutsceneState == CUTSCENE_NONE && scene_is_boss_active() && g_boss;
+    bool lockonAllowed = cutsceneState == CUTSCENE_NONE && boss_is_active(g_boss);
     bool zHeld = joypad.btn.z;
     bool zJustPressed = zHeld && !lastZPressed;
     bool zJustReleased = !zHeld && lastZPressed;
@@ -1766,7 +1765,7 @@ static void draw_lockon_indicator(T3DViewport *viewport)
 {
     // Show during gameplay when Z-targeting is active.
     // Allow the defeated boss to still be targetable (useful for post-fight dialog).
-    if (!cameraLockOnActive || scene_is_cutscene_active() || !scene_is_boss_active() || !g_boss) {
+    if (!cameraLockOnActive || scene_is_cutscene_active() || !boss_is_active(g_boss)) {
         return;
     }
 
@@ -1832,250 +1831,12 @@ static void draw_lockon_indicator(T3DViewport *viewport)
 }
 
 /* -----------------------------------------------------------------------------
- * Dust particles (simple world->screen puffs)
+ * Dust particles
  * -------------------------------------------------------------------------- */
 
-typedef struct {
-    bool  active;
-    float pos[3];   // world
-    float vel[3];   // world units/sec
-    float age;      // sec
-    float life;     // sec
-    float size_px;  // base pixel size
-} DustParticle;
-
-enum { DUST_MAX = 64 };
-static DustParticle s_dust[DUST_MAX];
-
-static inline float dust_clampf(float x, float lo, float hi) {
-    if (x < lo) return lo;
-    if (x > hi) return hi;
-    return x;
-}
-
-static inline float dust_alpha01(const DustParticle *p) {
-    if (!p || p->life <= 0.0f) return 0.0f;
-    float t = dust_clampf(p->age / p->life, 0.0f, 1.0f);
-    // Nice falloff (not linear).
-    float a = 1.0f - t;
-    return a * a;
-}
-
-static void dust_reset(void) {
-    memset(s_dust, 0, sizeof(s_dust));
-}
-
-static int dust_alloc_slot(void) {
-    for (int i = 0; i < DUST_MAX; i++) {
-        if (!s_dust[i].active) return i;
-    }
-    // No free slot; evict the oldest.
-    int oldest = 0;
-    float bestAge = s_dust[0].age;
-    for (int i = 1; i < DUST_MAX; i++) {
-        if (s_dust[i].age > bestAge) {
-            bestAge = s_dust[i].age;
-            oldest = i;
-        }
-    }
-    return oldest;
-}
-
-void scene_spawn_dust_burst(float x, float y, float z, float strength) {
-    // Safe to call even before init/reset.
-    if (strength < 0.05f) return;
-    if (strength > 3.0f) strength = 3.0f;
-
-    // Prefer readable puffs, but spawn enough to feel like "dust".
-    int count = 6 + (int)(strength * 3.0f);
-    if (count < 6) count = 6;
-    if (count > 18) count = 18;
-
-    // Track spawned positions for this burst so we can avoid stacking.
-    float spawnX[18];
-    float spawnZ[18];
-    int spawned = 0;
-
-    for (int i = 0; i < count; i++) {
-        int idx = dust_alloc_slot();
-        DustParticle *p = &s_dust[idx];
-
-        // Randomized spawn around the impact point.
-        // Use polar sampling so particles don't "stack" near the center.
-        float dirX = 1.0f, dirZ = 0.0f;
-        float radius = 0.0f;
-        float px = x, pz = z;
-
-        // Ensure puffs don't overlap too tightly (helps readability).
-        // Use a small number of retries; if we fail, accept the last sample.
-        //
-        // NOTE: Use evenly spaced angles with jitter so the burst is *visibly* spread
-        // around the boss base (avoids the "only 2 visible" look when several land in
-        // similar screen-space).
-        const float minSep = 18.0f; // world units
-        for (int attempt = 0; attempt < 10; attempt++) {
-            float jitter = (rand_custom_float() - 0.5f) * 0.35f; // +/- ~0.175 of a slot
-            float t = ((float)i + 0.5f + jitter) / (float)count;
-            float ang = t * (2.0f * T3D_PI);
-
-            // Sample radius with sqrt for a more even distribution over area.
-            float r01 = sqrtf(rand_custom_float());
-
-            // Keep puffs near the boss' feet so they stay on-screen and read as "base dust".
-            float rMin = 10.0f;
-            float rMax = 42.0f + (18.0f * strength);
-            radius = rMin + r01 * (rMax - rMin);
-
-            dirX = cosf(ang);
-            dirZ = sinf(ang);
-
-            // Candidate position
-            px = x + dirX * radius;
-            pz = z + dirZ * radius;
-
-            bool ok = true;
-            for (int j = 0; j < spawned; j++) {
-                float dx = px - spawnX[j];
-                float dz = pz - spawnZ[j];
-                if ((dx*dx + dz*dz) < (minSep * minSep)) {
-                    ok = false;
-                    break;
-                }
-            }
-            if (ok) break;
-        }
-
-        p->active = true;
-        p->age = 0.0f;
-        // Last a bit longer so the burst reads.
-        p->life = 0.65f + rand_custom_float() * 0.45f;
-
-        // Large puffs: sizes are in pixels (screen-space) and later scaled from the sprite.
-        // Bias toward bigger particles on the first couple slots, with smaller "filler" puffs after.
-        float bigBias = (i < 2) ? 1.0f : 0.0f;
-        // Tiny bump so they're a touch bigger overall.
-        float base = 16.0f + (bigBias * 11.0f);     // make even the "small" ones readable
-        float var  = 12.0f + (10.0f * strength);
-        p->size_px = base + rand_custom_float() * var;
-
-        p->pos[0] = px;
-        // Use the provided impact Y so this works for any room/floor height.
-        // Slightly above the floor to avoid any numerical weirdness.
-        p->pos[1] = y + 0.5f + rand_custom_float() * 1.0f;
-        p->pos[2] = pz;
-
-        // Radial outward puff + slight upward drift.
-        p->vel[0] = dirX * (35.0f + 35.0f * strength);
-        p->vel[1] = (10.0f + 14.0f * rand_custom_float()) * strength;
-        p->vel[2] = dirZ * (35.0f + 35.0f * strength);
-
-        if (spawned < 18) {
-            spawnX[spawned] = px;
-            spawnZ[spawned] = pz;
-            spawned++;
-        }
-    }
-}
-
-static void dust_update(float dt) {
-    if (dt < 0.0f) dt = 0.0f;
-    if (dt > 0.25f) dt = 0.25f;
-
-    for (int i = 0; i < DUST_MAX; i++) {
-        DustParticle *p = &s_dust[i];
-        if (!p->active) continue;
-
-        p->age += dt;
-        if (p->age >= p->life) {
-            p->active = false;
-            continue;
-        }
-
-        // Simple damped motion: expand quickly then slow, and drift up a bit.
-        float dampXZ = expf(-5.0f * dt);
-        p->vel[0] *= dampXZ;
-        p->vel[2] *= dampXZ;
-        p->vel[1] *= expf(-2.5f * dt);
-
-        p->pos[0] += p->vel[0] * dt;
-        p->pos[1] += p->vel[1] * dt;
-        p->pos[2] += p->vel[2] * dt;
-    }
-}
-
-static void dust_draw(T3DViewport *viewport) {
-    if (!viewport) return;
-
-    const bool useSprite = (dustParticleSprite && dustParticleSurf.width > 0 && dustParticleSurf.height > 0);
-
-    // 2D render state.
-    rdpq_sync_pipe();
-    rdpq_set_mode_standard();
-    // Depth test against the 3D pass so dust doesn't always draw "on top".
-    // We don't write depth (so UI stays unaffected).
-    rdpq_mode_zbuf(true, false);
-    if (useSprite) {
-        // Standard alpha blending so prim alpha can fade particles.
-        rdpq_mode_alphacompare(1);
-        rdpq_mode_combiner(RDPQ_COMBINER_TEX_FLAT);
-        rdpq_mode_blender(RDPQ_BLENDER_MULTIPLY);
-    } else {
-        // Fallback if sprite missing.
-        rdpq_mode_combiner(RDPQ_COMBINER_FLAT);
-        rdpq_mode_blender(RDPQ_BLENDER_MULTIPLY);
-    }
-
-    for (int i = 0; i < DUST_MAX; i++) {
-        const DustParticle *p = &s_dust[i];
-        if (!p->active) continue;
-
-        T3DVec3 worldPos = {{ p->pos[0], p->pos[1], p->pos[2] }};
-        T3DVec3 screenPos;
-        t3d_viewport_calc_viewspace_pos(viewport, &screenPos, &worldPos);
-
-        if (screenPos.v[2] >= 1.0f) continue;
-
-        // Feed a per-primitive Z into RDPQ so depth testing can work for screen-space blits.
-        // Tiny3D provides screenPos.v[2] as a normalized depth (near=0 .. far=1).
-        float z01 = dust_clampf(screenPos.v[2], 0.0f, 0.9999f);
-        rdpq_mode_zoverride(true, z01, 0);
-
-        float a01 = dust_alpha01(p);
-        // Slightly stronger alpha when using the sprite so it reads.
-        uint8_t a = (uint8_t)dust_clampf(a01 * (useSprite ? 180.0f : 170.0f), 0.0f, 255.0f);
-        if (a == 0) continue;
-
-        // Light warm grey "dust".
-        rdpq_set_prim_color(RGBA32(215, 210, 200, a));
-
-        int px = (int)screenPos.v[0];
-        int py = (int)screenPos.v[1];
-
-        // Slight grow then fade.
-        float grow = 1.0f + 0.7f * (p->age / p->life);
-        int half = (int)(p->size_px * grow);
-        if (half < 4) half = 4;
-        if (half > 26) half = 26;
-
-        if (useSprite) {
-            const int src_w = dustParticleSurf.width;
-            const int src_h = dustParticleSurf.height;
-            const int w = half * 2;
-            const int h = half * 2;
-            const float sx = (src_w > 0) ? ((float)w / (float)src_w) : 1.0f;
-            const float sy = (src_h > 0) ? ((float)h / (float)src_h) : 1.0f;
-            rdpq_tex_blit(&dustParticleSurf, px - (w / 2), py - (h / 2), &(rdpq_blitparms_t){
-                .scale_x = sx,
-                .scale_y = sy,
-            });
-        } else {
-            rdpq_fill_rectangle(px - half, py - half, px + half + 1, py + half + 1);
-        }
-    }
-
-    // Restore to non-depth 2D for subsequent overlays.
-    rdpq_mode_zoverride(false, 0.0f, 0);
-    rdpq_mode_zbuf(false, false);
+void scene_spawn_dust_burst(float x, float y, float z, float strength)
+{
+    dust_particles_fx_spawn_burst(x, y, z, strength);
 }
 
 /* -----------------------------------------------------------------------------
@@ -2618,8 +2379,8 @@ void scene_draw(T3DViewport *viewport)
     sword_trail_draw_all(viewport);
 
     // Dust puffs (boss landings/impacts)
-    dust_update(deltaTime);
-    dust_draw(viewport);
+    dust_particles_fx_update(deltaTime);
+    dust_particles_fx_draw(viewport);
 
     // Blood splatters from boss hits (drawn after dust so red reads on top of puffs)
     blood_update(deltaTime);
@@ -2646,7 +2407,7 @@ void scene_draw(T3DViewport *viewport)
     // Keep player UI visible during victory; hide it during death and cutscenes.
     if (!cutsceneActive && !isDead) {
         // Boss UI appears only during normal gameplay, not on victory screens.
-        if (!isVictory && scene_is_boss_active() && g_boss && bossTitleFade <= 0.0f) {
+        if (!isVictory && boss_is_active(g_boss) && bossTitleFade <= 0.0f) {
             boss_draw_ui(g_boss, viewport);
         }
         character_draw_ui();
@@ -2893,12 +2654,6 @@ void scene_cleanup(void)
         sprite_free(victoryTitleBgSprite);
         victoryTitleBgSprite = NULL;
         surface_free(&victoryTitleBgSurf);
-    }
-
-    if (dustParticleSprite) {
-        sprite_free(dustParticleSprite);
-        dustParticleSprite = NULL;
-        surface_free(&dustParticleSurf);
     }
 
     for (int i = 0; i < BLOOD_SPRITE_COUNT; i++) {

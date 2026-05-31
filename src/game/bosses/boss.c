@@ -5,7 +5,6 @@
 #include "boss_attacks.h"
 
 #include <libdragon.h>
-#include <t3d/t3d.h>
 #include <t3d/t3dmath.h>
 #include <t3d/t3dskeleton.h>
 #include <t3d/t3danim.h>
@@ -16,11 +15,8 @@
 
 #include "game_time.h"
 #include "game_math.h"
-#include "scene.h"
 #include "character.h"
-#include "general_utility.h"
 #include "globals.h"
-#include "utilities/collision_mesh.h"
 #include "utilities/sword_trail.h"
 
 // Forward declarations for internal functions
@@ -91,13 +87,13 @@ static inline bool boss_weapon_world_segment(const Boss* boss, float outBase[3],
 // Apply intent from AI to animation system
 static void boss_apply_intent(Boss* boss, const BossIntent* intent) {
     if (!intent) return;
-    
+
     // Apply animation request
     if (intent->anim_req) {
-        boss_anim_request(boss, intent->anim, intent->start_time, 
+        boss_anim_request(boss, intent->anim, intent->start_time,
                          intent->force_restart, intent->priority);
     }
-    
+
     // Attack requests are handled by AI state machine
     // Movement/face requests can be handled here if needed
 }
@@ -105,7 +101,7 @@ static void boss_apply_intent(Boss* boss, const BossIntent* intent) {
 // Update transforms (matrices, hitboxes, bone attachments)
 static void boss_update_transforms(Boss* boss) {
     if (!boss || !boss->modelMat) return;
-    
+
     // Update transformation matrix
     T3DMat4FP* mat = (T3DMat4FP*)boss->modelMat;
     t3d_mat4fp_from_srt_euler(mat, boss->scale, boss->rot, boss->pos);
@@ -117,13 +113,13 @@ static void boss_update_transforms(Boss* boss) {
 // Update movement and physics
 static void boss_update_movement(Boss* boss, float dt) {
     if (!boss) return;
-    
+
     // State-specific movement behavior
     extern Character character; // Global character instance
     float dx = character.pos[0] - boss->pos[0];
     float dz = character.pos[2] - boss->pos[2];
     float dist = sqrtf(dx*dx + dz*dz);
-    
+
     const float ACCEL = 7.0f;
     const float FRICTION = 10.0f;
     // Reduced chase speed to be less aggressive
@@ -132,25 +128,25 @@ static void boss_update_movement(Boss* boss, float dt) {
     const float SPEED_CHARGE = boss->phaseIndex == 1 ? 220.0f : 280.0f;
     // Slow strafe speed for Dark Souls-style behavior
     const float SPEED_STRAFE = boss->phaseIndex == 1 ? 100.0f : 120.0f;
-    
+
     float desiredX = 0.0f, desiredZ = 0.0f;
     float maxSpeed = 0.0f;
-    
-    
-    
+
+
+
     switch (boss->state) {
         case BOSS_STATE_INTRO:
         case BOSS_STATE_NEUTRAL:
             // No movement
             maxSpeed = 0.0f;
             break;
-            
+
         case BOSS_STATE_DEAD:
             // Fully stop after death (collapse animation should play in place).
             boss->velX = 0.0f;
             boss->velZ = 0.0f;
             return;
-            
+
         case BOSS_STATE_CHASE:
             // Move toward player (for when far away)
             if (dist > 0.0f) {
@@ -159,7 +155,7 @@ static void boss_update_movement(Boss* boss, float dt) {
             }
             maxSpeed = SPEED_CHASE;
             break;
-            
+
         case BOSS_STATE_STRAFE:
             if (dist > 0.0f) {
                 float toCharX = dx / dist;
@@ -188,33 +184,33 @@ static void boss_update_movement(Boss* boss, float dt) {
             }
             maxSpeed = SPEED_STRAFE;
             break;
-            
+
         case BOSS_STATE_RECOVER:
             // Slow movement
             maxSpeed = SPEED_ORBIT * 0.5f;
             break;
-            
+
         default:
             // Attack states handle their own movement (or no movement)
             break;
     }
-    
+
     // Apply movement for non-attack states
     // Attack states (POWER_JUMP, FLIP_ATTACK, COMBO_STARTER, TRACKING_SLAM, COMBO_ATTACK, ROAR_STOMP) handle their own movement
-    if (boss->state != BOSS_STATE_POWER_JUMP && 
+    if (boss->state != BOSS_STATE_POWER_JUMP &&
         boss->state != BOSS_STATE_FLIP_ATTACK &&
-        boss->state != BOSS_STATE_COMBO_STARTER && 
-        boss->state != BOSS_STATE_TRACKING_SLAM && 
-        boss->state != BOSS_STATE_COMBO_ATTACK && 
+        boss->state != BOSS_STATE_COMBO_STARTER &&
+        boss->state != BOSS_STATE_TRACKING_SLAM &&
+        boss->state != BOSS_STATE_COMBO_ATTACK &&
         boss->state != BOSS_STATE_COMBO_LUNGE &&
         boss->state != BOSS_STATE_LUNGE_STARTER &&
         boss->state != BOSS_STATE_STOMP &&
         boss->state != BOSS_STATE_ATTACK1) {
-        
+
         boss->velX += (desiredX * maxSpeed - boss->velX) * ACCEL * dt;
         boss->velZ += (desiredZ * maxSpeed - boss->velZ) * ACCEL * dt;
     }
-    
+
     // Apply friction
     float frictionScale = (boss->state >= BOSS_STATE_POWER_JUMP) ? 0.3f : 1.0f;
     if (boss->state == BOSS_STATE_CHASE) {
@@ -223,7 +219,7 @@ static void boss_update_movement(Boss* boss, float dt) {
     float k = FRICTION * frictionScale;
     boss->velX *= expf(-k * dt);
     boss->velZ *= expf(-k * dt);
-    
+
     // Update position with room-bounds collision (slide by axis)
     float nextX = boss->pos[0] + boss->velX * dt;
     float nextZ = boss->pos[2] + boss->velZ * dt;
@@ -271,14 +267,14 @@ static void boss_update_movement(Boss* boss, float dt) {
 
         boss->rot[1] = currentAngle + angleDelta;
     }
-    
+
     else if (
         boss->state == BOSS_STATE_POWER_JUMP ||
         boss->state == BOSS_STATE_FLIP_ATTACK ||
         boss->state == BOSS_STATE_COMBO_STARTER ||
         boss->state == BOSS_STATE_TRACKING_SLAM ||
         boss->state == BOSS_STATE_COMBO_ATTACK ||
-        boss->state == BOSS_STATE_COMBO_LUNGE ||   
+        boss->state == BOSS_STATE_COMBO_LUNGE ||
         boss->state == BOSS_STATE_LUNGE_STARTER  ||
         boss->state == BOSS_STATE_STOMP ||
         boss->state == BOSS_STATE_ATTACK1
@@ -307,12 +303,111 @@ Boss* boss_spawn(void) {
     if (g_boss) {
         return g_boss;  // Already spawned
     }
-    
+
     g_boss = calloc(1, sizeof(Boss));
     if (!g_boss) return NULL;
-    
+
     boss_init(g_boss);
     return g_boss;
+}
+
+
+static void boss_clear_combat_runtime(Boss* boss)
+{
+    if (!boss) return;
+
+    boss->handAttackColliderActive = false;
+    boss->sphereAttackColliderActive = false;
+    boss->isAttacking = false;
+    boss->currentAttackHasHit = false;
+    boss->velX = 0.0f;
+    boss->velZ = 0.0f;
+    boss->currentSpeed = 0.0f;
+}
+
+void boss_set_mode(Boss* boss, BossMode mode)
+{
+    if (!boss) return;
+
+    boss->mode = mode;
+
+    switch (mode) {
+        case BOSS_MODE_INACTIVE:
+            boss_clear_combat_runtime(boss);
+            break;
+
+        case BOSS_MODE_CINEMATIC:
+            boss->visible = true;
+            boss_clear_combat_runtime(boss);
+            break;
+
+        case BOSS_MODE_COMBAT:
+            boss->visible = true;
+            boss->handAttackColliderActive = false;
+            boss->sphereAttackColliderActive = false;
+            boss->currentAttackHasHit = false;
+            break;
+
+        case BOSS_MODE_POST_DEFEAT:
+            boss->visible = true;
+            boss_clear_combat_runtime(boss);
+            break;
+
+        default:
+            boss_clear_combat_runtime(boss);
+            boss->mode = BOSS_MODE_INACTIVE;
+            break;
+    }
+}
+
+BossMode boss_get_mode(const Boss* boss)
+{
+    return boss ? boss->mode : BOSS_MODE_INACTIVE;
+}
+
+void boss_activate(Boss* boss)
+{
+    boss_activate_combat(boss);
+}
+
+void boss_activate_combat(Boss* boss)
+{
+    boss_set_mode(boss, BOSS_MODE_COMBAT);
+}
+
+void boss_activate_cinematic(Boss* boss)
+{
+    boss_set_mode(boss, BOSS_MODE_CINEMATIC);
+}
+
+void boss_deactivate(Boss* boss)
+{
+    boss_set_mode(boss, BOSS_MODE_INACTIVE);
+}
+
+bool boss_is_active(const Boss* boss)
+{
+    return boss && boss->mode != BOSS_MODE_INACTIVE;
+}
+
+bool boss_is_combat_active(const Boss* boss)
+{
+    return boss && boss->mode == BOSS_MODE_COMBAT;
+}
+
+bool boss_is_cinematic_active(const Boss* boss)
+{
+    return boss && boss->mode == BOSS_MODE_CINEMATIC;
+}
+
+bool boss_is_post_defeat(const Boss* boss)
+{
+    return boss && boss->mode == BOSS_MODE_POST_DEFEAT;
+}
+
+bool boss_is_interactable(const Boss* boss)
+{
+    return boss && boss->mode == BOSS_MODE_POST_DEFEAT && boss->state == BOSS_STATE_DEAD;
 }
 
 static inline void boss_update_shadow_mat(Boss* boss)
@@ -342,26 +437,74 @@ static inline void boss_update_shadow_mat(Boss* boss)
 // Public API implementation
 void boss_update(Boss* boss) {
     if (!boss) return;
-    
+
     float dt = deltaTime;
-    
-    // Strict update order:
+
+    switch (boss->mode) {
+        case BOSS_MODE_INACTIVE: {
+            boss_clear_combat_runtime(boss);
+            boss_update_transforms(boss);
+            sword_trail_instance_update(sword_trail_get_boss(), dt, false, NULL, NULL);
+            return;
+        }
+
+        case BOSS_MODE_CINEMATIC: {
+            // Cutscene code owns animation selection/requests. Keep transforms,
+            // shadow, damage flash, and trail state sane, but do not run AI,
+            // attacks, movement, or active gameplay colliders.
+            boss_clear_combat_runtime(boss);
+            boss_update_transforms(boss);
+
+            if (boss->damageFlashTimer > 0.0f) {
+                boss->damageFlashTimer -= dt;
+                if (boss->damageFlashTimer < 0.0f) boss->damageFlashTimer = 0.0f;
+            }
+
+            sword_trail_instance_update(sword_trail_get_boss(), dt, false, NULL, NULL);
+            return;
+        }
+
+        case BOSS_MODE_POST_DEFEAT: {
+            // Defeated boss can keep animating/posing for collapse/restored
+            // interaction, but gameplay combat is over.
+            boss_clear_combat_runtime(boss);
+            boss_anim_update(boss);
+            boss_update_transforms(boss);
+
+            if (boss->damageFlashTimer > 0.0f) {
+                boss->damageFlashTimer -= dt;
+                if (boss->damageFlashTimer < 0.0f) boss->damageFlashTimer = 0.0f;
+            }
+
+            sword_trail_instance_update(sword_trail_get_boss(), dt, false, NULL, NULL);
+            return;
+        }
+
+        case BOSS_MODE_COMBAT:
+            break;
+
+        default:
+            boss_set_mode(boss, BOSS_MODE_INACTIVE);
+            return;
+    }
+
+    // Strict combat update order:
     // 1. AI decides intent
     BossIntent intent = {0};
     boss_ai_update(boss, &intent);
-    
+
     // 2. Apply intent (only place that calls boss_anim_request)
     boss_apply_intent(boss, &intent);
-    
+
     // 3. Attack handlers update (attack-specific logic, position, rotation, velocity)
     boss_attacks_update(boss, dt);
-    
+
     // 4. Movement and physics update (velocity, acceleration, collision)
     boss_update_movement(boss, dt);
-    
+
     // 5. Animation system updates (blend timers, attach clips, update skeleton)
     boss_anim_update(boss);
-    
+
     // 6. Update transforms (matrices, hitboxes, etc.)
     boss_update_transforms(boss);
 
@@ -378,8 +521,6 @@ void boss_update(Boss* boss) {
     } else {
         sword_trail_instance_update(trail, dt, false, NULL, NULL);
     }
-    
-    //boss_update_weapon_collider_from_hand(boss);
 }
 
 void boss_draw(Boss* boss) {
@@ -388,7 +529,7 @@ void boss_draw(Boss* boss) {
 }
 
 void boss_draw_ui(Boss* boss, void* viewport) {
-    if (!boss) return;
+    if (!boss_is_combat_active(boss)) return;
     boss_render_debug(boss, viewport);
 }
 
@@ -410,17 +551,18 @@ BossState boss_get_state(const Boss* boss) {
 
 void boss_apply_damage(Boss* boss, float amount) {
     if (!boss || amount <= 0.0f) return;
-    
+    if (boss->mode != BOSS_MODE_COMBAT) return;
+
     boss->health -= amount;
     if (boss->health < 0.0f) boss->health = 0.0f;
 
     boss->damageFlashTimer = 0.25f;
-    
+
     // // Set pending stagger request if not already dead
     // if (boss->health > 0.0f) {
     //     boss->pendingRequests |= 0x01;  // BOSS_REQ_STAGGER flag
     // }
-    
+
     // Check for death
     if (boss->health <= 0.0f) {
         boss->state = BOSS_STATE_DEAD;
@@ -431,6 +573,8 @@ void boss_apply_damage(Boss* boss, float amount) {
         boss->sphereAttackColliderActive = false;
         boss->velX = 0.0f;
         boss->velZ = 0.0f;
+        boss->currentSpeed = 0.0f;
+        boss_set_mode(boss, BOSS_MODE_POST_DEFEAT);
     }
 }
 
@@ -439,20 +583,20 @@ void boss_init(Boss* boss) {
 
     // Ensure the boss trail starts clean when the boss is created.
     sword_trail_instance_init(sword_trail_get_boss());
-    
+
     // Load model
-    T3DModel* bossModel = t3d_model_load("rom:/boss/boss_anim.t3dm"); 
+    T3DModel* bossModel = t3d_model_load("rom:/boss/boss_anim.t3dm");
     boss->model = bossModel;
-    
+
     // Create skeletons
     T3DSkeleton* skeleton = malloc(sizeof(T3DSkeleton));
     *skeleton = t3d_skeleton_create(bossModel);
     boss->skeleton = skeleton;
-    
+
     T3DSkeleton* skeletonBlend = malloc(sizeof(T3DSkeleton));
     *skeletonBlend = t3d_skeleton_clone(skeleton, false);
     boss->skeletonBlend = skeletonBlend;
-    
+
     // Create animations
     const int animationCount = BOSS_ANIM_COUNT;
     const char* animationNames[] = {
@@ -501,7 +645,7 @@ void boss_init(Boss* boss) {
         false, // Phase2 Reveal - one-shot
         false, // Phase2 WinKneel - one-shot
     };
-    
+
     T3DAnim** animations = malloc_uncached(animationCount * sizeof(T3DAnim*));
     for (int i = 0; i < animationCount; i++) {
         animations[i] = malloc_uncached(sizeof(T3DAnim));
@@ -510,10 +654,10 @@ void boss_init(Boss* boss) {
         t3d_anim_set_playing(animations[i], false);
         t3d_anim_attach(animations[i], skeleton);
     }
-    
+
     boss->animations = (void**)animations;
     boss->animationCount = animationCount;
-        
+
     // Set current animation index
     boss->currentAnimation = BOSS_ANIM_KNEEL;
     boss->currentAnimState = BOSS_ANIM_KNEEL;
@@ -535,7 +679,7 @@ void boss_init(Boss* boss) {
     t3d_model_draw(s_bossShadowModel);
     rspq_block_t* dpl_shadow = rspq_block_end();
     boss->dpl_shadow = dpl_shadow;
-    
+
     // Initialize transform
     boss->pos[0] = 0.0f;
     boss->pos[1] = 1.0f;
@@ -546,7 +690,7 @@ void boss_init(Boss* boss) {
     boss->scale[0] = MODEL_SCALE;
     boss->scale[1] = MODEL_SCALE;
     boss->scale[2] = MODEL_SCALE;
-    
+
     // Initialize capsule collider
     boss->capsuleCollider.localCapA.v[0] = 0.0f;
     boss->capsuleCollider.localCapA.v[1] = 10.0f;
@@ -555,14 +699,14 @@ void boss_init(Boss* boss) {
     boss->capsuleCollider.localCapB.v[1] = 40.0f;
     boss->capsuleCollider.localCapB.v[2] = 0.0f;
     boss->capsuleCollider.radius = 20.0f;
-    
+
     // Find bone indices
     boss->handRightBoneIndex = t3d_skeleton_find_bone(skeleton, "Hand-Right");
     boss->waistBoneIndex = t3d_skeleton_find_bone(skeleton, "Waist");
     boss->headBoneIndex =  t3d_skeleton_find_bone(skeleton, "Head");
     boss->lowerLegLeftBoneIndex = t3d_skeleton_find_bone(skeleton, "LowerLeg-Left");
     boss->lowerLegRightBoneIndex = t3d_skeleton_find_bone(skeleton, "LowerLeg-Right");
-    
+
     // Initialize hand attack collider (local space, will be updated during attacks)
     boss->handAttackCollider.localCapA.v[0] = 0.0f;
     boss->handAttackCollider.localCapA.v[1] = 0.0f;
@@ -575,17 +719,17 @@ void boss_init(Boss* boss) {
     boss->handAttackColliderWorldPos[1] = 0.0f;
     boss->handAttackColliderWorldPos[2] = 0.0f;
     boss->handAttackColliderActive = false;
-    
+
     // Load sword model
     T3DModel* swordModel = t3d_model_load("rom:/boss/bossSword.t3dm");
     boss->swordModel = swordModel;
-    
+
     // Create display list block for sword
     rspq_block_begin();
     t3d_model_draw(swordModel);
     rspq_block_t* swordDpl = rspq_block_end();
     boss->swordDpl = swordDpl;
-    
+
     // Allocate and initialize sword transform matrix (local transform relative to hand bone)
     T3DMat4FP* swordMatFP = malloc_uncached(sizeof(T3DMat4FP));
     // Initialize with identity, will be set properly based on sword model requirements
@@ -596,7 +740,7 @@ void boss_init(Boss* boss) {
         (float[3]){0.0f, 0.0f, 0.0f}   // Position offset - may need adjustment
     );
     boss->swordMatFP = swordMatFP;
-    
+
     // Initialize model matrix
     T3DMat4FP* modelMat = malloc_uncached(sizeof(T3DMat4FP));
     t3d_mat4fp_identity(modelMat);
@@ -606,13 +750,13 @@ void boss_init(Boss* boss) {
     T3DMat4FP* shadowMat = malloc_uncached(sizeof(T3DMat4FP));
     t3d_mat4fp_identity(shadowMat);
     boss->shadowMat = shadowMat;
-    
+
     // Initialize combat stats
     boss->name = "Guardian of the Shackled Sun";
     boss->maxHealth = 100.0f;
     boss->health = 100.0f;
     boss->phaseIndex = 1; // DEBUG: change to 2 to start in phase 2
-    
+
     // Initialize movement
     boss->velX = 0.0f;
     boss->velZ = 0.0f;
@@ -620,7 +764,7 @@ void boss_init(Boss* boss) {
     boss->turnRate = 8.0f;
     boss->orbitRadius = 6.0f;
     boss->strafeDirection = 1.0f;
-    
+
     // Initialize timers
     boss->stateTimer = 0.0f;
     boss->attackCooldown = 0.0f;
@@ -630,13 +774,13 @@ void boss_init(Boss* boss) {
     boss->hitMessageTimer = 0.0f;
     boss->animationTransitionTimer = 0.0f;
     boss->dustImpactDelayS = 0.0f;
-    
+
     // Initialize attack state
     boss->isAttacking = false;
     boss->currentAttackHasHit = false;
     boss->currentAttackId = BOSS_ATTACK_COUNT;
     boss->currentAttackName = NULL;
-    
+
     // Initialize cooldowns
     boss->powerJumpCooldown = 0.0f;
     boss->comboCooldown = 0.0f;
@@ -650,7 +794,7 @@ void boss_init(Boss* boss) {
     boss->comboStep = 0;
     boss->comboInterrupted = false;
     boss->comboVulnerableTimer = 0.0f;
-    
+
     // Initialize combo starter state
     boss->swordThrown = false;
     boss->comboStarterSlamHasHit = false;
@@ -661,7 +805,7 @@ void boss_init(Boss* boss) {
     boss->comboStarterTargetPos[0] = 0.0f;
     boss->comboStarterTargetPos[1] = 0.0f;
     boss->comboStarterTargetPos[2] = 0.0f;
-    
+
     // Initialize targeting
     boss->debugTargetingPos[0] = 0.0f;
     boss->debugTargetingPos[1] = 0.0f;
@@ -676,7 +820,7 @@ void boss_init(Boss* boss) {
     boss->lastPlayerPos[2] = 0.0f;
     boss->lastPlayerVel[0] = 0.0f;
     boss->lastPlayerVel[1] = 0.0f;
-    
+
     // Initialize flip attack state
     boss->flipAttackStartPos[0] = 0.0f;
     boss->flipAttackStartPos[1] = 0.0f;
@@ -694,11 +838,12 @@ void boss_init(Boss* boss) {
     boss->postTurnDir      = 0;
 
     boss->visible = true;
+    boss->mode = BOSS_MODE_INACTIVE;
     boss->pendingRequests = 0;
-    
+
     // Initialize animation system
     boss_anim_init(boss);
-    
+
     // Initialize AI
     boss_ai_init(boss);
 
@@ -721,12 +866,12 @@ void boss_reset(Boss* boss) {
     boss->scale[0] = MODEL_SCALE;
     boss->scale[1] = MODEL_SCALE;
     boss->scale[2] = MODEL_SCALE;
-    
+
     boss->state = BOSS_STATE_INTRO;
     boss->health = boss->maxHealth;
 
     boss->phaseIndex = 1;
-    
+
     // Initialize movement
     boss->velX = 0.0f;
     boss->velZ = 0.0f;
@@ -734,7 +879,7 @@ void boss_reset(Boss* boss) {
     boss->turnRate = 8.0f;
     boss->orbitRadius = 6.0f;
     boss->strafeDirection = 1.0f;
-    
+
     // Initialize timers
     boss->stateTimer = 0.0f;
     boss->attackCooldown = 0.0f;
@@ -744,13 +889,13 @@ void boss_reset(Boss* boss) {
     boss->hitMessageTimer = 0.0f;
     boss->animationTransitionTimer = 0.0f;
     boss->dustImpactDelayS = 0.0f;
-    
+
     // Initialize attack state
     boss->isAttacking = false;
     boss->currentAttackHasHit = false;
     boss->currentAttackId = BOSS_ATTACK_COUNT;
     boss->currentAttackName = NULL;
-    
+
     // Initialize cooldowns
     boss->powerJumpCooldown = 0.0f;
     boss->comboCooldown = 0.0f;
@@ -764,7 +909,7 @@ void boss_reset(Boss* boss) {
     boss->comboStep = 0;
     boss->comboInterrupted = false;
     boss->comboVulnerableTimer = 0.0f;
-    
+
     // Initialize combo starter state
     boss->swordThrown = false;
     boss->comboStarterSlamHasHit = false;
@@ -775,7 +920,7 @@ void boss_reset(Boss* boss) {
     boss->comboStarterTargetPos[0] = 0.0f;
     boss->comboStarterTargetPos[1] = 0.0f;
     boss->comboStarterTargetPos[2] = 0.0f;
-    
+
     // Initialize targeting
     boss->debugTargetingPos[0] = 0.0f;
     boss->debugTargetingPos[1] = 0.0f;
@@ -790,7 +935,7 @@ void boss_reset(Boss* boss) {
     boss->lastPlayerPos[2] = 0.0f;
     boss->lastPlayerVel[0] = 0.0f;
     boss->lastPlayerVel[1] = 0.0f;
-    
+
     // Initialize flip attack state
     boss->flipAttackStartPos[0] = 0.0f;
     boss->flipAttackStartPos[1] = 0.0f;
@@ -803,6 +948,8 @@ void boss_reset(Boss* boss) {
     boss->flipAttackTravelYaw = boss->rot[1];
     boss->flipAttackPastDist  = 0.0f;
 
+    boss->visible = true;
+    boss->mode = BOSS_MODE_INACTIVE;
     boss->pendingRequests = 0;
     
     boss_ai_init(boss);

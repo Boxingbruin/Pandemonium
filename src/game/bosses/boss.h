@@ -1,9 +1,7 @@
 #ifndef BOSS_H
 #define BOSS_H
 
-#include <stdbool.h>
 #include <libdragon.h>
-#include "general_utility.h"
 #include "character.h" // For CapsuleCollider definition
 
 // Shared enums that AI and Anim agree on - must be defined before Boss struct
@@ -78,24 +76,35 @@ typedef enum {
     BOSS_ANIM_PRIORITY_CRITICAL  // Death, stagger - always interrupts
 } BossAnimPriority;
 
+// Boss runtime mode. The scene/cutscene systems command this mode, but the
+// boss owns it internally. Boss modules should check this instead of asking
+// scene/cutscene code whether gameplay is active.
+typedef enum {
+    BOSS_MODE_INACTIVE = 0,   // loaded/staged, no AI/attacks/damage
+    BOSS_MODE_CINEMATIC,      // cutscene owns pose/animation requests
+    BOSS_MODE_COMBAT,         // full gameplay AI/attacks/damage/UI
+    BOSS_MODE_POST_DEFEAT,    // defeated/restored interaction state
+} BossMode;
+
 // Boss structure - modules access fields directly but respect ownership:
 // - Animation fields (skeleton, animations, blend state): owned by boss_anim.c
-// - AI fields (state, timers, cooldowns): owned by boss_ai.c  
+// - AI fields (state, timers, cooldowns): owned by boss_ai.c
 // - Render fields (modelMat, dpl): owned by boss_render.c
 typedef struct Boss {
     // Transform
     float pos[3];
     float rot[3];
     float scale[3];
-    
+
     // Model and rendering (owned by boss_render.c)
     void *model;  // T3DModel* (avoiding header dependency)
-    void *modelMat;  // T3DMat4FP* 
+    void *modelMat;  // T3DMat4FP*
     void *dpl;  // rspq_block_t*
     void *shadowMat; // T3DMat4FP*
     void *dpl_shadow; // rspq_block_t*
     bool visible;
-    
+    BossMode mode;
+
     // Animation system (owned by boss_anim.c - ONLY boss_anim.c touches these)
     void *skeleton;  // T3DSkeleton*
     void *skeletonBlend;  // T3DSkeleton*
@@ -112,17 +121,17 @@ typedef struct Boss {
     BossAnimState currentAnimState;
     BossAnimPriority currentPriority;
     int lockFrames;
-    
+
     // Collision
     CapsuleCollider capsuleCollider;
-    
+
     // Hand attack collider (attached to Hand-Right bone)
     int handRightBoneIndex;
     CapsuleCollider handAttackCollider;
     float handAttackColliderWorldPos[3];
     bool handAttackColliderActive;
     bool sphereAttackColliderActive;
-    
+
     // waist bone index (for z-targeting)
     int waistBoneIndex;
 
@@ -132,18 +141,18 @@ typedef struct Boss {
     // Lower leg bone indices (for Z-target cycling)
     int lowerLegLeftBoneIndex;
     int lowerLegRightBoneIndex;
-    
+
     // Sword model (attached to Hand-Right bone)
     void* swordModel;  // T3DModel*
     void* swordDpl;  // rspq_block_t*
     void* swordMatFP;  // T3DMat4FP*
-    
+
     // Combat stats
     const char *name;
     float maxHealth;
     float health;
     int phaseIndex;
-    
+
     // Movement
     float velX;
     float velZ;
@@ -151,12 +160,12 @@ typedef struct Boss {
     float turnRate;
     float orbitRadius;
     float strafeDirection;
-    
+
     // AI state (owned by boss_ai.c)
     BossState state;
     float stateTimer;
     float attackCooldown;
-    
+
     // Attack-specific cooldowns
     float powerJumpCooldown;
     float comboCooldown;
@@ -184,7 +193,7 @@ typedef struct Boss {
     int comboStep;
     bool comboInterrupted;
     float comboVulnerableTimer;
-    
+
     float swordProjectilePos[3];
     bool swordThrown;
 
@@ -192,7 +201,7 @@ typedef struct Boss {
     bool comboStarterSlamHasHit;
     float comboStarterTargetPos[3];
     bool comboStarterCompleted; // Flag to track if combo starter has finished
-    
+
     bool comboLungeTracksPlayer;   // false = distance closer (yaw locked), true = close-range (tracks)
     float comboLungeLockedYaw;     // yaw to hold in distance-closer mode
     float comboLungeFixedDir[2];
@@ -202,12 +211,12 @@ typedef struct Boss {
 
     // Tracking slam state
     float trackingSlamTargetAngle;
-    
+
     // Power jump state
     float powerJumpStartPos[3];
     float powerJumpTargetPos[3];
     float powerJumpHeight;
-    
+
     // Flip attack state
     float flipAttackStartPos[3];
     float flipAttackTargetPos[3];
@@ -215,7 +224,7 @@ typedef struct Boss {
     bool  flipAttackMidReaimed;     // ensures mid re-aim happens only once
     float flipAttackTravelYaw;      // baseline yaw used for +/- clamp
     float flipAttackPastDist;       // cached overshoot distance
-    
+
     // Aerial Sword Barrage state
     int consecutiveSwordRingUses;   // Track consecutive uses (max 2)
     int currentBarrageVariation;    // 0 = simultaneous, 1 = sequential
@@ -228,11 +237,11 @@ typedef struct Boss {
     int swordRingFiredCount;        // Number of swords that have fired
     float swordRingFireTimer;       // Timer for sequential firing
     float aerialSwordPositions[12][3]; // Starting positions of aerial swords [index][xyz]
-    float aerialSwordTargets[12][3]; // Target positions for aerial swords [index][xyz]  
+    float aerialSwordTargets[12][3]; // Target positions for aerial swords [index][xyz]
     float aerialSwordProgress[12];   // Progress [0-1] for each aerial sword
     bool aerialSwordActive[12];      // Whether each aerial sword is active
     bool preTelegraphFX;            // Flag for telegraph effects
-    
+
     // Targeting system
     float debugTargetingPos[3];
     bool targetingLocked;
@@ -240,7 +249,7 @@ typedef struct Boss {
     float targetingUpdateTimer;
     float lastPlayerPos[3];
     float lastPlayerVel[2];
-    
+
     // Visual feedback
     float damageFlashTimer;
     float attackNameDisplayTimer;
@@ -250,10 +259,10 @@ typedef struct Boss {
 
     float postTurnTimer;
     float postTurnDuration;
-    int   postTurnDir;  
+    int   postTurnDir;
 
     float dustImpactDelayS;
-    
+
     // Pending requests (set by external triggers, read by AI)
     unsigned int pendingRequests;
 } Boss;
@@ -266,7 +275,7 @@ typedef struct {
     bool force_restart;
     float start_time;
     BossAnimPriority priority;
-    
+
     // Attack request
     bool attack_req;
     BossAttackId attack;
@@ -274,6 +283,22 @@ typedef struct {
 
 // Public API - only what other game code needs
 Boss* boss_spawn(void);
+
+// Mode/lifecycle API. These replace scene-owned boss-active/cutscene flags.
+void boss_set_mode(Boss* boss, BossMode mode);
+BossMode boss_get_mode(const Boss* boss);
+
+void boss_activate(Boss* boss);            // compatibility alias for combat
+void boss_activate_combat(Boss* boss);
+void boss_activate_cinematic(Boss* boss);
+void boss_deactivate(Boss* boss);
+
+bool boss_is_active(const Boss* boss);     // any non-inactive mode
+bool boss_is_combat_active(const Boss* boss);
+bool boss_is_cinematic_active(const Boss* boss);
+bool boss_is_post_defeat(const Boss* boss);
+bool boss_is_interactable(const Boss* boss);
+
 void boss_update(Boss* boss);
 void boss_draw(Boss* boss);
 void boss_draw_ui(Boss* boss, void* viewport);  // T3DViewport* but avoiding header dependency
