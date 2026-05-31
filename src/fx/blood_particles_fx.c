@@ -8,11 +8,10 @@
 
 #include <math.h>
 #include <stdbool.h>
+#include <stdint.h>
 #include <string.h>
 
 #include "../utilities/general_utility.h"
-
-#define BLOOD_PARTICLES_FX_FORCE_UNTEXTURED 0
 
 #define BLOOD_PARTICLES_FX_CUTOUT 0
 
@@ -21,17 +20,6 @@ enum {
     BLOOD_PARTICLES_FX_FB_COUNT = 3,
     BLOOD_PARTICLES_FX_ALPHA_BUCKETS = 6
 };
-
-typedef enum {
-    BLOOD_PARTICLE_SPRITE_LARGE = 0,
-    BLOOD_PARTICLE_SPRITE_MEDIUM_A,
-    BLOOD_PARTICLE_SPRITE_MEDIUM_B,
-    BLOOD_PARTICLE_SPRITE_MEDIUM_C,
-    BLOOD_PARTICLE_SPRITE_TINY_A,
-    BLOOD_PARTICLE_SPRITE_TINY_B,
-    BLOOD_PARTICLE_SPRITE_TINY_C,
-    BLOOD_PARTICLE_SPRITE_COUNT
-} BloodParticleSpriteId;
 
 typedef struct {
     bool active;
@@ -44,8 +32,6 @@ typedef struct {
 
     float size;
 
-    uint8_t spriteIdx;
-
     uint8_t r;
     uint8_t g;
     uint8_t b;
@@ -53,24 +39,15 @@ typedef struct {
 
 static BloodParticleFx s_blood[BLOOD_PARTICLES_FX_MAX];
 
-static TPXParticleS16 *s_tpxParticles = NULL;
+static TPXParticleS16 *s_tpxBucketParticles[BLOOD_PARTICLES_FX_ALPHA_BUCKETS] = {0};
+
 static T3DMat4FP *s_particleMatrices = NULL;
 
-static sprite_t *s_bloodSprites[BLOOD_PARTICLE_SPRITE_COUNT] = {0};
-static surface_t s_bloodSurfs[BLOOD_PARTICLE_SPRITE_COUNT] = {0};
+static sprite_t *s_bloodSprite = NULL;
+static surface_t s_bloodSurf = {0};
 
 static int s_frameIdx = 0;
 static bool s_initialized = false;
-
-static const char *s_bloodSpritePaths[BLOOD_PARTICLE_SPRITE_COUNT] = {
-    [BLOOD_PARTICLE_SPRITE_LARGE]    = "rom:/blood/blood_large.ia8.sprite",
-    [BLOOD_PARTICLE_SPRITE_MEDIUM_A] = "rom:/blood/blood_medium_a.ia8.sprite",
-    [BLOOD_PARTICLE_SPRITE_MEDIUM_B] = "rom:/blood/blood_medium_b.ia8.sprite",
-    [BLOOD_PARTICLE_SPRITE_MEDIUM_C] = "rom:/blood/blood_medium_c.ia8.sprite",
-    [BLOOD_PARTICLE_SPRITE_TINY_A]   = "rom:/blood/blood_tiny_a.ia8.sprite",
-    [BLOOD_PARTICLE_SPRITE_TINY_B]   = "rom:/blood/blood_tiny_b.ia8.sprite",
-    [BLOOD_PARTICLE_SPRITE_TINY_C]   = "rom:/blood/blood_tiny_c.ia8.sprite",
-};
 
 static inline float blood_particles_fx_clampf(float x, float lo, float hi)
 {
@@ -122,12 +99,16 @@ static int blood_particles_fx_alpha_bucket(float alpha01)
         return alpha01 > 0.0f ? BLOOD_PARTICLES_FX_ALPHA_BUCKETS - 1 : -1;
     }
 
-    // Skip very low alpha particles to avoid nearly invisible draw calls.
-    if (alpha01 < 0.06f) return -1;
+    if (alpha01 < 0.06f) {
+        return -1;
+    }
 
-    if (alpha01 > 1.0f) alpha01 = 1.0f;
+    if (alpha01 > 1.0f) {
+        alpha01 = 1.0f;
+    }
 
     int bucket = (int)(alpha01 * (float)BLOOD_PARTICLES_FX_ALPHA_BUCKETS);
+
     if (bucket >= BLOOD_PARTICLES_FX_ALPHA_BUCKETS) {
         bucket = BLOOD_PARTICLES_FX_ALPHA_BUCKETS - 1;
     }
@@ -156,11 +137,11 @@ static int blood_particles_fx_alloc_slot(void)
     }
 
     int oldest = 0;
-    float bestAge = s_blood[0].age;
+    float oldestAge = s_blood[0].age;
 
     for (int i = 1; i < BLOOD_PARTICLES_FX_MAX; i++) {
-        if (s_blood[i].age > bestAge) {
-            bestAge = s_blood[i].age;
+        if (s_blood[i].age > oldestAge) {
+            oldestAge = s_blood[i].age;
             oldest = i;
         }
     }
@@ -168,36 +149,67 @@ static int blood_particles_fx_alloc_slot(void)
     return oldest;
 }
 
-static void blood_particles_fx_clear_tpx_buffer(void)
+static uint32_t blood_particles_fx_pair_count(void)
 {
-    if (!s_tpxParticles) return;
+    return (BLOOD_PARTICLES_FX_MAX + 1) / 2;
+}
 
-    uint32_t pairCount = (BLOOD_PARTICLES_FX_MAX + 1) / 2;
-    memset(s_tpxParticles, 0, sizeof(TPXParticleS16) * pairCount);
+static bool blood_particles_fx_alloc_tpx_bucket_buffers(void)
+{
+    uint32_t pairCount = blood_particles_fx_pair_count();
+
+    for (int bucket = 0; bucket < BLOOD_PARTICLES_FX_ALPHA_BUCKETS; bucket++) {
+        s_tpxBucketParticles[bucket] = malloc_uncached(sizeof(TPXParticleS16) * pairCount);
+
+        if (!s_tpxBucketParticles[bucket]) {
+            return false;
+        }
+
+        memset(s_tpxBucketParticles[bucket], 0, sizeof(TPXParticleS16) * pairCount);
+    }
+
+    return true;
+}
+
+static void blood_particles_fx_free_tpx_bucket_buffers(void)
+{
+    for (int bucket = 0; bucket < BLOOD_PARTICLES_FX_ALPHA_BUCKETS; bucket++) {
+        if (s_tpxBucketParticles[bucket]) {
+            free_uncached(s_tpxBucketParticles[bucket]);
+            s_tpxBucketParticles[bucket] = NULL;
+        }
+    }
+}
+
+static void blood_particles_fx_clear_tpx_bucket_buffers(void)
+{
+    uint32_t pairCount = blood_particles_fx_pair_count();
+
+    for (int bucket = 0; bucket < BLOOD_PARTICLES_FX_ALPHA_BUCKETS; bucket++) {
+        TPXParticleS16 *buffer = s_tpxBucketParticles[bucket];
+        if (!buffer) continue;
+
+        memset(buffer, 0, sizeof(TPXParticleS16) * pairCount);
+    }
 }
 
 static uint32_t blood_particles_fx_write_tpx_particle(
+    TPXParticleS16 *buffer,
     uint32_t particleIdx,
     const BloodParticleFx *p
 ) {
+    if (!buffer) return particleIdx;
     if (!p) return particleIdx;
 
-    float t = blood_particles_fx_life01(p);
-
-    float shrink = 1.0f - 0.25f * t;
-    if (shrink < 0.5f) shrink = 0.5f;
-
-    float size = p->size * shrink;
-
-    int16_t *pos = tpx_buffer_s16_get_pos(s_tpxParticles, particleIdx);
-    int8_t *particleSize = tpx_buffer_s16_get_size(s_tpxParticles, particleIdx);
-    uint8_t *rgba = tpx_buffer_s16_get_rgba(s_tpxParticles, particleIdx);
+    int16_t *pos = tpx_buffer_s16_get_pos(buffer, particleIdx);
+    int8_t *particleSize = tpx_buffer_s16_get_size(buffer, particleIdx);
+    uint8_t *rgba = tpx_buffer_s16_get_rgba(buffer, particleIdx);
 
     pos[0] = blood_particles_fx_to_s16(p->pos[0]);
     pos[1] = blood_particles_fx_to_s16(p->pos[1]);
     pos[2] = blood_particles_fx_to_s16(p->pos[2]);
 
-    *particleSize = blood_particles_fx_to_s8_size(size);
+    *particleSize = blood_particles_fx_to_s8_size(p->size);
 
     rgba[0] = p->r;
     rgba[1] = p->g;
@@ -205,33 +217,33 @@ static uint32_t blood_particles_fx_write_tpx_particle(
     rgba[3] = 0;
 
     if (particleIdx & 1) {
-        s_tpxParticles[particleIdx / 2].texOffsetB = 0;
+        buffer[particleIdx / 2].texOffsetB = 0;
     } else {
-        s_tpxParticles[particleIdx / 2].texOffsetA = 0;
+        buffer[particleIdx / 2].texOffsetA = 0;
     }
 
     return particleIdx + 1;
 }
 
-static void blood_particles_fx_hide_tpx_particle(uint32_t particleIdx)
+static void blood_particles_fx_hide_tpx_particle(TPXParticleS16 *buffer, uint32_t particleIdx)
 {
-    if (!s_tpxParticles) return;
+    if (!buffer) return;
 
-    int8_t *particleSize = tpx_buffer_s16_get_size(s_tpxParticles, particleIdx);
+    int8_t *particleSize = tpx_buffer_s16_get_size(buffer, particleIdx);
     *particleSize = 0;
 
     if (particleIdx & 1) {
-        s_tpxParticles[particleIdx / 2].texOffsetB = 0;
+        buffer[particleIdx / 2].texOffsetB = 0;
     } else {
-        s_tpxParticles[particleIdx / 2].texOffsetA = 0;
+        buffer[particleIdx / 2].texOffsetA = 0;
     }
 }
 
-static int blood_particles_fx_texture_scale_log(sprite_t *sprite)
+static int blood_particles_fx_texture_scale_log(void)
 {
-    if (!sprite) return 0;
+    if (!s_bloodSprite) return 0;
 
-    int h = sprite->height;
+    int h = s_bloodSprite->height;
     if (h <= 8) return 0;
 
     int sections = h / 8;
@@ -240,28 +252,25 @@ static int blood_particles_fx_texture_scale_log(sprite_t *sprite)
     return -__builtin_ctz((unsigned int)sections);
 }
 
-static float blood_particles_fx_sprite_aspect(uint8_t spriteIdx)
+static bool blood_particles_fx_has_texture(void)
 {
-    if (spriteIdx >= BLOOD_PARTICLE_SPRITE_COUNT) return 1.0f;
+    if (!s_bloodSprite) return false;
+    if (s_bloodSurf.width <= 0 || s_bloodSurf.height <= 0) return false;
+    return true;
+}
 
-    surface_t *sf = &s_bloodSurfs[spriteIdx];
-    if (sf->width <= 0 || sf->height <= 0) return 1.0f;
+static float blood_particles_fx_sprite_aspect(void)
+{
+    if (s_bloodSurf.width <= 0 || s_bloodSurf.height <= 0) {
+        return 1.0f;
+    }
 
-    float aspect = (float)sf->width / (float)sf->height;
+    float aspect = (float)s_bloodSurf.width / (float)s_bloodSurf.height;
+
     if (aspect < 0.25f) aspect = 0.25f;
     if (aspect > 4.0f)  aspect = 4.0f;
 
     return aspect;
-}
-
-static bool blood_particles_fx_has_sprite(uint8_t spriteIdx)
-{
-    if (BLOOD_PARTICLES_FX_FORCE_UNTEXTURED) return false;
-    if (spriteIdx >= BLOOD_PARTICLE_SPRITE_COUNT) return false;
-    if (!s_bloodSprites[spriteIdx]) return false;
-    if (s_bloodSurfs[spriteIdx].width <= 0) return false;
-    if (s_bloodSurfs[spriteIdx].height <= 0) return false;
-    return true;
 }
 
 static void blood_particles_fx_prepare_matrix(void)
@@ -276,30 +285,29 @@ static void blood_particles_fx_prepare_matrix(void)
     );
 }
 
-static void blood_particles_fx_upload_sprite(uint8_t spriteIdx)
+static void blood_particles_fx_upload_texture(void)
 {
-    if (spriteIdx >= BLOOD_PARTICLE_SPRITE_COUNT) return;
-
-    sprite_t *sprite = s_bloodSprites[spriteIdx];
-    if (!sprite) return;
+    if (!s_bloodSprite) return;
 
     rdpq_texparms_t p = {0};
 
     p.s.repeats = REPEAT_INFINITE;
     p.t.repeats = REPEAT_INFINITE;
-    p.s.scale_log = blood_particles_fx_texture_scale_log(sprite);
-    p.t.scale_log = blood_particles_fx_texture_scale_log(sprite);
+    p.s.scale_log = blood_particles_fx_texture_scale_log();
+    p.t.scale_log = blood_particles_fx_texture_scale_log();
     p.s.mirror = false;
     p.t.mirror = false;
 
-    rdpq_sprite_upload(TILE0, sprite, &p);
+    rdpq_sprite_upload(TILE0, s_bloodSprite, &p);
 }
 
 static void blood_particles_fx_draw_tpx_textured(
+    TPXParticleS16 *buffer,
     uint32_t drawCount,
-    uint8_t spriteIdx,
     uint8_t globalAlpha
 ) {
+    if (!buffer) return;
+
     rdpq_set_env_color(RGBA32(255, 255, 255, globalAlpha));
 
     rdpq_mode_combiner(
@@ -313,18 +321,23 @@ static void blood_particles_fx_draw_tpx_textured(
 
     tpx_matrix_push(&s_particleMatrices[s_frameIdx]);
 
-    float aspect = blood_particles_fx_sprite_aspect(spriteIdx);
+    float aspect = blood_particles_fx_sprite_aspect();
     tpx_state_set_scale(aspect, 1.0f);
 
     tpx_state_set_tex_params(0, 0);
 
-    tpx_particle_draw_tex_s16(s_tpxParticles, drawCount);
+    tpx_particle_draw_tex_s16(buffer, drawCount);
 
     tpx_matrix_pop(1);
 }
 
-static void blood_particles_fx_draw_tpx_untextured(uint32_t drawCount, uint8_t globalAlpha)
-{
+static void blood_particles_fx_draw_tpx_untextured(
+    TPXParticleS16 *buffer,
+    uint32_t drawCount,
+    uint8_t globalAlpha
+) {
+    if (!buffer) return;
+
     rdpq_set_env_color(RGBA32(255, 255, 255, globalAlpha));
 
     rdpq_mode_combiner(
@@ -338,7 +351,7 @@ static void blood_particles_fx_draw_tpx_untextured(uint32_t drawCount, uint8_t g
 
     tpx_matrix_push(&s_particleMatrices[s_frameIdx]);
     tpx_state_set_scale(1.0f, 1.0f);
-    tpx_particle_draw_s16(s_tpxParticles, drawCount);
+    tpx_particle_draw_s16(buffer, drawCount);
     tpx_matrix_pop(1);
 }
 
@@ -346,37 +359,26 @@ void blood_particles_fx_init(void)
 {
     if (s_initialized) return;
 
-    uint32_t pairCount = (BLOOD_PARTICLES_FX_MAX + 1) / 2;
-
-    s_tpxParticles = malloc_uncached(sizeof(TPXParticleS16) * pairCount);
-    s_particleMatrices = malloc_uncached(sizeof(T3DMat4FP) * BLOOD_PARTICLES_FX_FB_COUNT);
-
-    if (!s_tpxParticles || !s_particleMatrices) {
-        if (s_tpxParticles) {
-            free_uncached(s_tpxParticles);
-            s_tpxParticles = NULL;
-        }
-
-        if (s_particleMatrices) {
-            free_uncached(s_particleMatrices);
-            s_particleMatrices = NULL;
-        }
-
+    if (!blood_particles_fx_alloc_tpx_bucket_buffers()) {
+        blood_particles_fx_free_tpx_bucket_buffers();
         return;
     }
 
-    for (int i = 0; i < BLOOD_PARTICLE_SPRITE_COUNT; i++) {
-        if (!s_bloodSprites[i]) {
-            s_bloodSprites[i] = sprite_load(s_bloodSpritePaths[i]);
+    s_particleMatrices = malloc_uncached(sizeof(T3DMat4FP) * BLOOD_PARTICLES_FX_FB_COUNT);
 
-            if (s_bloodSprites[i]) {
-                s_bloodSurfs[i] = sprite_get_pixels(s_bloodSprites[i]);
-            }
-        }
+    if (!s_particleMatrices) {
+        blood_particles_fx_free_tpx_bucket_buffers();
+        return;
+    }
+
+    s_bloodSprite = sprite_load("rom:/blood/blood_large.ia8.sprite");
+
+    if (s_bloodSprite) {
+        s_bloodSurf = sprite_get_pixels(s_bloodSprite);
     }
 
     memset(s_blood, 0, sizeof(s_blood));
-    blood_particles_fx_clear_tpx_buffer();
+    blood_particles_fx_clear_tpx_bucket_buffers();
 
     for (int i = 0; i < BLOOD_PARTICLES_FX_FB_COUNT; i++) {
         t3d_mat4fp_from_srt_euler(
@@ -395,22 +397,17 @@ void blood_particles_fx_cleanup(void)
 {
     memset(s_blood, 0, sizeof(s_blood));
 
-    if (s_tpxParticles) {
-        free_uncached(s_tpxParticles);
-        s_tpxParticles = NULL;
-    }
+    blood_particles_fx_free_tpx_bucket_buffers();
 
     if (s_particleMatrices) {
         free_uncached(s_particleMatrices);
         s_particleMatrices = NULL;
     }
 
-    for (int i = 0; i < BLOOD_PARTICLE_SPRITE_COUNT; i++) {
-        if (s_bloodSprites[i]) {
-            sprite_free(s_bloodSprites[i]);
-            s_bloodSprites[i] = NULL;
-            s_bloodSurfs[i] = (surface_t){0};
-        }
+    if (s_bloodSprite) {
+        sprite_free(s_bloodSprite);
+        s_bloodSprite = NULL;
+        s_bloodSurf = (surface_t){0};
     }
 
     s_frameIdx = 0;
@@ -420,7 +417,7 @@ void blood_particles_fx_cleanup(void)
 void blood_particles_fx_reset(void)
 {
     memset(s_blood, 0, sizeof(s_blood));
-    blood_particles_fx_clear_tpx_buffer();
+    blood_particles_fx_clear_tpx_bucket_buffers();
 }
 
 void blood_particles_fx_update(float dt)
@@ -428,7 +425,7 @@ void blood_particles_fx_update(float dt)
     if (dt < 0.0f) dt = 0.0f;
     if (dt > 0.25f) dt = 0.25f;
 
-    const float GRAVITY = 900.0f;
+    const float gravity = 900.0f;
 
     for (int i = 0; i < BLOOD_PARTICLES_FX_MAX; i++) {
         BloodParticleFx *p = &s_blood[i];
@@ -442,10 +439,11 @@ void blood_particles_fx_update(float dt)
         }
 
         float dampXZ = expf(-1.5f * dt);
+
         p->vel[0] *= dampXZ;
         p->vel[2] *= dampXZ;
 
-        p->vel[1] -= GRAVITY * dt;
+        p->vel[1] -= gravity * dt;
 
         p->pos[0] += p->vel[0] * dt;
         p->pos[1] += p->vel[1] * dt;
@@ -457,7 +455,9 @@ void blood_particles_fx_draw(T3DViewport *viewport)
 {
     if (!viewport) return;
     if (!s_initialized) return;
-    if (!s_tpxParticles || !s_particleMatrices) return;
+    if (!s_particleMatrices) return;
+
+    bool useTexture = blood_particles_fx_has_texture();
 
     blood_particles_fx_prepare_matrix();
 
@@ -479,47 +479,48 @@ void blood_particles_fx_draw(T3DViewport *viewport)
     rdpq_mode_alphacompare(0);
 #endif
 
-    for (int spriteIdx = 0; spriteIdx < BLOOD_PARTICLE_SPRITE_COUNT; spriteIdx++) {
-        bool useTexture = blood_particles_fx_has_sprite((uint8_t)spriteIdx);
+    if (useTexture) {
+        blood_particles_fx_upload_texture();
+    }
 
-        if (useTexture) {
-            blood_particles_fx_upload_sprite((uint8_t)spriteIdx);
+    for (int bucket = BLOOD_PARTICLES_FX_ALPHA_BUCKETS - 1; bucket >= 0; bucket--) {
+        TPXParticleS16 *buffer = s_tpxBucketParticles[bucket];
+
+        if (!buffer) {
+            continue;
         }
 
-        for (int bucket = BLOOD_PARTICLES_FX_ALPHA_BUCKETS - 1; bucket >= 0; bucket--) {
-            uint32_t drawCount = 0;
+        uint32_t drawCount = 0;
 
-            for (int i = 0; i < BLOOD_PARTICLES_FX_MAX; i++) {
-                const BloodParticleFx *p = &s_blood[i];
-                if (!p->active) continue;
-                if (p->spriteIdx != (uint8_t)spriteIdx) continue;
+        for (int i = 0; i < BLOOD_PARTICLES_FX_MAX; i++) {
+            const BloodParticleFx *p = &s_blood[i];
+            if (!p->active) continue;
 
-                float alpha01 = blood_particles_fx_alpha01(p);
-                int particleBucket = blood_particles_fx_alpha_bucket(alpha01);
+            float alpha01 = blood_particles_fx_alpha01(p);
+            int particleBucket = blood_particles_fx_alpha_bucket(alpha01);
 
-                if (particleBucket != bucket) {
-                    continue;
-                }
-
-                drawCount = blood_particles_fx_write_tpx_particle(drawCount, p);
-            }
-
-            if (drawCount == 0) {
+            if (particleBucket != bucket) {
                 continue;
             }
 
-            if (drawCount & 1) {
-                blood_particles_fx_hide_tpx_particle(drawCount);
-                drawCount++;
-            }
+            drawCount = blood_particles_fx_write_tpx_particle(buffer, drawCount, p);
+        }
 
-            uint8_t globalAlpha = blood_particles_fx_bucket_alpha_u8(bucket);
+        if (drawCount == 0) {
+            continue;
+        }
 
-            if (useTexture) {
-                blood_particles_fx_draw_tpx_textured(drawCount, (uint8_t)spriteIdx, globalAlpha);
-            } else {
-                blood_particles_fx_draw_tpx_untextured(drawCount, globalAlpha);
-            }
+        if (drawCount & 1) {
+            blood_particles_fx_hide_tpx_particle(buffer, drawCount);
+            drawCount++;
+        }
+
+        uint8_t globalAlpha = blood_particles_fx_bucket_alpha_u8(bucket);
+
+        if (useTexture) {
+            blood_particles_fx_draw_tpx_textured(buffer, drawCount, globalAlpha);
+        } else {
+            blood_particles_fx_draw_tpx_untextured(buffer, drawCount, globalAlpha);
         }
     }
 
@@ -532,11 +533,6 @@ void blood_particles_fx_spawn_burst(float x, float y, float z, float strength)
     if (strength < 0.05f) return;
     if (strength > 3.0f) strength = 3.0f;
 
-    /*
-      - 1 large anchor splat
-      - several medium droplets
-      - several tiny spray droplets
-     */
     int largeCount = 1;
     int mediumCount = 3 + (int)(strength * 1.5f);
     int tinyCount = 7 + (int)(strength * 4.0f);
@@ -562,38 +558,25 @@ void blood_particles_fx_spawn_burst(float x, float y, float z, float strength)
         p->active = true;
         p->age = 0.0f;
 
-        // Large splat hangs longer. Tiny spray dies quicker.
         if (isLarge) {
-            p->life = 0.55f + rand_custom_float() * 0.15f;
-            p->spriteIdx = BLOOD_PARTICLE_SPRITE_LARGE;
-            p->size = 24.0f + 8.0f * strength;
+            p->life = 0.60f + rand_custom_float() * 0.18f;
+            p->size = 9.0f + 2.0f * strength;
         } else if (isMedium) {
-            p->life = 0.42f + rand_custom_float() * 0.16f;
-            p->spriteIdx = (uint8_t)(BLOOD_PARTICLE_SPRITE_MEDIUM_A + (int)(rand_custom_float() * 3.0f));
-            if (p->spriteIdx > BLOOD_PARTICLE_SPRITE_MEDIUM_C) {
-                p->spriteIdx = BLOOD_PARTICLE_SPRITE_MEDIUM_C;
-            }
-            p->size = 11.0f + rand_custom_float() * (8.0f + 4.0f * strength);
+            p->life = 0.45f + rand_custom_float() * 0.18f;
+            p->size = 5.5f + rand_custom_float() * (1.25f + 0.5f * strength);
         } else {
             p->life = 0.32f + rand_custom_float() * 0.16f;
-            p->spriteIdx = (uint8_t)(BLOOD_PARTICLE_SPRITE_TINY_A + (int)(rand_custom_float() * 3.0f));
-            if (p->spriteIdx > BLOOD_PARTICLE_SPRITE_TINY_C) {
-                p->spriteIdx = BLOOD_PARTICLE_SPRITE_TINY_C;
-            }
-            p->size = 5.0f + rand_custom_float() * (5.0f + 3.0f * strength);
+            p->size = 2.5f + rand_custom_float() * (1.0f + 0.35f * strength);
         }
 
-        // Red with small variation.
         p->r = (uint8_t)(120 + (int)(rand_custom_float() * 70.0f));
         p->g = (uint8_t)(0   + (int)(rand_custom_float() * 18.0f));
         p->b = (uint8_t)(0   + (int)(rand_custom_float() * 12.0f));
 
-        // Spawn near hit point.
         p->pos[0] = x + (rand_custom_float() - 0.5f) * 5.0f;
         p->pos[1] = y + (rand_custom_float() - 0.5f) * 5.0f;
         p->pos[2] = z + (rand_custom_float() - 0.5f) * 5.0f;
 
-        // Spray outward, biased upward.
         float ang = rand_custom_float() * (2.0f * T3D_PI);
 
         float horiz = isLarge
@@ -620,6 +603,7 @@ void blood_particles_fx_spawn_burst(float x, float y, float z, float strength)
          - tiny drops spray fastest
          */
         float baseSpeed;
+
         if (isLarge) {
             baseSpeed = 30.0f + 20.0f * strength;
         } else if (isMedium) {
