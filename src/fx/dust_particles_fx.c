@@ -8,10 +8,9 @@
 
 #include <math.h>
 #include <stdbool.h>
-#include <stdint.h>
 #include <string.h>
 
-#include "../game_math.h"
+#include "../utilities/general_utility.h"
 
 /*
  * Dust particles using Tiny3D TPX microcode.
