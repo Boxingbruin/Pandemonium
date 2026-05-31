@@ -13,32 +13,13 @@
 
 #include "../utilities/general_utility.h"
 
-/*
- * Dust particles using Tiny3D TPX microcode.
- *
- * Textured TPX notes:
- * - The texture must be uploaded with RDPQ before the TPX draw.
- * - TPX maps particle UVs as if the texture section is 8x8.
- * - For textured particles, the particle alpha byte is used as a per-particle
- *   texture U offset, NOT particle opacity.
- *
- * Because of that, per-particle transparency is approximated by drawing particles
- * in alpha buckets. Each bucket uses ENV alpha as a global fade.
- */
-
 #define DUST_PARTICLES_FX_FORCE_UNTEXTURED 0
 
 enum {
     DUST_PARTICLES_FX_MAX = 64,
     DUST_PARTICLES_FX_FB_COUNT = 3,
 
-    /*
-     * More buckets = smoother fade, more TPX draw calls.
-     *
-     * 4 was visibly stepped.
-     * 8 is a good compromise for 64 max particles.
-     * 16 would be smoother but starts getting wasteful for this effect.
-     */
+    // More buckets = smoother fade, more TPX draw calls.
     DUST_PARTICLES_FX_ALPHA_BUCKETS = 8
 };
 
@@ -51,9 +32,6 @@ typedef struct {
     float age;
     float life;
 
-    /*
-     * TPX size value, not the old screen-space sprite pixel radius.
-     */
     float size;
 } DustParticleFx;
 
@@ -67,7 +45,6 @@ static surface_t s_dustSurf = {0};
 
 static int s_frameIdx = 0;
 static bool s_initialized = false;
-static bool s_tpxInitializedFromHere = false;
 
 static inline float dust_particles_fx_clampf(float x, float lo, float hi)
 {
@@ -101,21 +78,13 @@ static inline float dust_particles_fx_alpha01(const DustParticleFx *p)
     float t = dust_particles_fx_life01(p);
     float a = 1.0f - t;
 
-    /*
-     * Eased fade.
-     *
-     * This is NOT written into TPX particle alpha.
-     * Textured TPX uses particle alpha as texture offset.
-     */
+    // Eased fade.
     return a * a;
 }
 
 static int dust_particles_fx_alpha_bucket(float alpha01)
 {
-    /*
-     * Skip extremely low alpha particles.
-     * This avoids spending a bucket draw on almost invisible dust.
-     */
+    // Skip extremely low alpha particles.
     if (alpha01 < 0.06f) return -1;
 
     if (alpha01 > 1.0f) alpha01 = 1.0f;
@@ -131,19 +100,10 @@ static int dust_particles_fx_alpha_bucket(float alpha01)
 
 static uint8_t dust_particles_fx_bucket_alpha_u8(int bucket)
 {
-    /*
-     * Use bucket + 1 instead of bucket center so the top bucket can reach
-     * the requested max opacity.
-     *
-     * With 8 buckets and max 180, levels are roughly:
-     * 22, 45, 67, 90, 112, 135, 157, 180
-     */
     float a = (float)(bucket + 1) / (float)DUST_PARTICLES_FX_ALPHA_BUCKETS;
     a = dust_particles_fx_clampf(a, 0.0f, 1.0f);
 
-    /*
-     * Cap below 255 so dust never appears like opaque paper.
-     */
+    // Cap below 255 so dust never appears opaque.
     return (uint8_t)(a * 180.0f);
 }
 
@@ -196,19 +156,11 @@ static uint32_t dust_particles_fx_write_tpx_particle(
 
     *particleSize = dust_particles_fx_to_s8_size(size);
 
-    /*
-     * For textured TPX, rgba[3] is texture U offset, not opacity.
-     * Keep it 0 for a single-frame dust texture.
-     */
     rgba[0] = 215;
     rgba[1] = 210;
     rgba[2] = 200;
     rgba[3] = 0;
 
-    /*
-     * Explicitly clear tex offsets. Avoid tpx_buffer_s16_get_tex_offset()
-     * because some Tiny3D versions had A/B reversed for that helper.
-     */
     if (particleIdx & 1) {
         s_tpxParticles[particleIdx / 2].texOffsetB = 0;
     } else {
@@ -242,11 +194,6 @@ static int dust_particles_fx_texture_scale_log(void)
     int sections = h / 8;
     if (sections <= 0) return 0;
 
-    /*
-     * TPX textured particles internally map UVs as 8x8.
-     * Demo formula:
-     *   scale_log = -ctz(texture_height / 8)
-     */
     return -__builtin_ctz((unsigned int)sections);
 }
 
@@ -254,10 +201,6 @@ static void dust_particles_fx_prepare_matrix(void)
 {
     s_frameIdx = (s_frameIdx + 1) % DUST_PARTICLES_FX_FB_COUNT;
 
-    /*
-     * Identity/world matrix. Particle positions are already in world space.
-     * Camera/projection state is copied from T3D with tpx_state_from_t3d().
-     */
     t3d_mat4fp_from_srt_euler(
         &s_particleMatrices[s_frameIdx],
         (float[3]){ 1.0f, 1.0f, 1.0f },
@@ -290,18 +233,6 @@ static void dust_particles_fx_upload_texture(void)
 
 static void dust_particles_fx_draw_tpx_textured(uint32_t drawCount, uint8_t globalAlpha)
 {
-    /*
-     * Transparent textured dust:
-     *
-     * RGB:
-     *   PRIM * TEX0
-     *
-     * Alpha:
-     *   TEX0 alpha * ENV alpha
-     *
-     * ENV alpha is changed per bucket to approximate per-particle fading
-     * without using the TPX particle alpha byte.
-     */
     rdpq_set_env_color(RGBA32(255, 255, 255, globalAlpha));
 
     rdpq_mode_combiner(
@@ -313,15 +244,9 @@ static void dust_particles_fx_draw_tpx_textured(uint32_t drawCount, uint8_t glob
 
     tpx_state_from_t3d();
 
-    /*
-     * First TPX stack operation after tpx_state_from_t3d() should be push.
-     */
     tpx_matrix_push(&s_particleMatrices[s_frameIdx]);
     tpx_state_set_scale(1.0f, 1.0f);
 
-    /*
-     * Static single-frame texture: no global texture offset, no mirror point.
-     */
     tpx_state_set_tex_params(0, 0);
 
     tpx_particle_draw_tex_s16(s_tpxParticles, drawCount);
@@ -352,13 +277,6 @@ void dust_particles_fx_init(void)
 {
     if (s_initialized) return;
 
-    /*
-     * Better long-term: call tpx_init() once globally after t3d_init().
-     * Kept here for now so the effect is self-contained during scene cleanup.
-     */
-    tpx_init((TPXInitParams){});
-    s_tpxInitializedFromHere = true;
-
     uint32_t pairCount = (DUST_PARTICLES_FX_MAX + 1) / 2;
 
     s_tpxParticles = malloc_uncached(sizeof(TPXParticleS16) * pairCount);
@@ -375,17 +293,9 @@ void dust_particles_fx_init(void)
             s_particleMatrices = NULL;
         }
 
-        if (s_tpxInitializedFromHere) {
-            tpx_destroy();
-            s_tpxInitializedFromHere = false;
-        }
-
         return;
     }
 
-    /*
-     * The scene no longer owns this sprite. Load it once here.
-     */
     if (!s_dustSprite) {
         s_dustSprite = sprite_load("rom:/dustParticle.ia8.sprite");
 
@@ -428,15 +338,6 @@ void dust_particles_fx_cleanup(void)
         sprite_free(s_dustSprite);
         s_dustSprite = NULL;
         s_dustSurf = (surface_t){0};
-    }
-
-    /*
-     * If TPX later becomes globally initialized by your renderer/bootstrap,
-     * remove tpx_init() from this module and remove this tpx_destroy() block.
-     */
-    if (s_tpxInitializedFromHere) {
-        tpx_destroy();
-        s_tpxInitializedFromHere = false;
     }
 
     s_frameIdx = 0;
@@ -494,38 +395,20 @@ void dust_particles_fx_draw(T3DViewport *viewport)
     rdpq_mode_antialias(AA_NONE);
     rdpq_mode_dithering(DITHER_NONE_NONE);
 
-    /*
-     * Transparent particles should depth-test but not depth-write.
-     * Otherwise the first dust quad can punch holes in later dust quads.
-     */
     rdpq_mode_zbuf(true, false);
     rdpq_mode_zoverride(true, 0, 0);
 
     rdpq_mode_filter(FILTER_BILINEAR);
 
-    /*
-     * IMPORTANT:
-     * No alpha compare for dust. Alpha compare makes it cutout.
-     */
     rdpq_mode_alphacompare(0);
 
-    /*
-     * Keep using the same blender style as the existing IA8 sprite/UI code.
-     */
     rdpq_mode_blender(RDPQ_BLENDER_MULTIPLY);
 
     if (useTexture) {
         dust_particles_fx_upload_texture();
     }
 
-    /*
-     * Draw from high alpha to low alpha.
-     *
-     * With depth-write disabled this gives stable-enough translucent layering
-     * without sorting every particle.
-     *
-     * Empty buckets are skipped, so 8 buckets is "up to 8 draws", not always 8.
-     */
+    // Draw from high alpha to low alpha.
     for (int bucket = DUST_PARTICLES_FX_ALPHA_BUCKETS - 1; bucket >= 0; bucket--) {
         uint32_t drawCount = 0;
 

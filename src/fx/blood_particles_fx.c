@@ -8,62 +8,17 @@
 
 #include <math.h>
 #include <stdbool.h>
-#include <stdint.h>
 #include <string.h>
 
 #include "../utilities/general_utility.h"
 
-/*
- * Blood particles using Tiny3D TPX microcode.
- *
- * This replaces the old scene-local implementation that projected world
- * positions to screen space and drew individual rdpq_tex_blit sprites.
- *
- * Important TPX textured-particle detail:
- * - The particle alpha byte is used as texture U offset, not opacity.
- * - So fade is approximated with alpha buckets, exactly like dust.
- *
- * This module owns:
- * - blood particle simulation
- * - blood sprite loading
- * - TPX particle buffer
- * - TPX matrix ring
- */
-
 #define BLOOD_PARTICLES_FX_FORCE_UNTEXTURED 0
 
-/*
- * Set this to 1 only if you want hard-edged cutout blood.
- * Set to 0 for transparent IA8 sprite blending/fading.
- *
- * Since the old blood faded with prim alpha, default to transparent.
- */
 #define BLOOD_PARTICLES_FX_CUTOUT 0
-
-/*
- * TPX init ownership:
- *
- * If you later move tpx_init() into a global renderer/bootstrap init,
- * set this to 0 and remove tpx_destroy() ownership here.
- *
- * For now this module is self-contained like dust_particles_fx.
- * If both dust and blood call tpx_init(), test that Tiny3D tolerates it.
- * Long-term, TPX should be initialized globally once.
- */
-#define BLOOD_PARTICLES_FX_INIT_TPX_HERE 1
 
 enum {
     BLOOD_PARTICLES_FX_MAX = 48,
     BLOOD_PARTICLES_FX_FB_COUNT = 3,
-
-    /*
-     * Blood uses fewer particles than dust but multiple sprite textures.
-     * Worst case draw calls = BLOOD_SPRITE_COUNT * ALPHA_BUCKETS.
-     *
-     * Six buckets is a reasonable compromise:
-     * - smoother than hard cutout
-     * - less expensive than 8 buckets across 7 sprites
-     */
     BLOOD_PARTICLES_FX_ALPHA_BUCKETS = 6
 };
 
@@ -87,17 +42,10 @@ typedef struct {
     float age;
     float life;
 
-    /*
-     * TPX size value. We treat this as sprite height, then apply a per-sprite
-     * global X/Y scale to preserve the source sprite aspect ratio.
-     */
     float size;
 
     uint8_t spriteIdx;
 
-    /*
-     * Tint variation.
-     */
     uint8_t r;
     uint8_t g;
     uint8_t b;
@@ -113,7 +61,6 @@ static surface_t s_bloodSurfs[BLOOD_PARTICLE_SPRITE_COUNT] = {0};
 
 static int s_frameIdx = 0;
 static bool s_initialized = false;
-static bool s_tpxInitializedFromHere = false;
 
 static const char *s_bloodSpritePaths[BLOOD_PARTICLE_SPRITE_COUNT] = {
     [BLOOD_PARTICLE_SPRITE_LARGE]    = "rom:/blood/blood_large.ia8.sprite",
@@ -158,10 +105,6 @@ static inline float blood_particles_fx_alpha01(const BloodParticleFx *p)
 
     float t = blood_particles_fx_life01(p);
 
-    /*
-     * Old behavior:
-     * mostly opaque for first half, then fade out quadratically.
-     */
     if (t < 0.55f) {
         return 1.0f;
     }
@@ -179,9 +122,7 @@ static int blood_particles_fx_alpha_bucket(float alpha01)
         return alpha01 > 0.0f ? BLOOD_PARTICLES_FX_ALPHA_BUCKETS - 1 : -1;
     }
 
-    /*
-     * Skip very low alpha particles to avoid nearly invisible draw calls.
-     */
+    // Skip very low alpha particles to avoid nearly invisible draw calls.
     if (alpha01 < 0.06f) return -1;
 
     if (alpha01 > 1.0f) alpha01 = 1.0f;
@@ -200,11 +141,6 @@ static uint8_t blood_particles_fx_bucket_alpha_u8(int bucket)
         return 255;
     }
 
-    /*
-     * Blood should read stronger than dust.
-     * With 6 buckets and max 230, levels are roughly:
-     * 38, 76, 115, 153, 191, 230.
-     */
     float a = (float)(bucket + 1) / (float)BLOOD_PARTICLES_FX_ALPHA_BUCKETS;
     a = blood_particles_fx_clampf(a, 0.0f, 1.0f);
 
@@ -248,9 +184,6 @@ static uint32_t blood_particles_fx_write_tpx_particle(
 
     float t = blood_particles_fx_life01(p);
 
-    /*
-     * Old behavior: slight shrink as the particle ages.
-     */
     float shrink = 1.0f - 0.25f * t;
     if (shrink < 0.5f) shrink = 0.5f;
 
@@ -266,10 +199,6 @@ static uint32_t blood_particles_fx_write_tpx_particle(
 
     *particleSize = blood_particles_fx_to_s8_size(size);
 
-    /*
-     * For textured TPX, rgba[3] is texture U offset, not opacity.
-     * Keep it 0 because each blood sprite is a single frame.
-     */
     rgba[0] = p->r;
     rgba[1] = p->g;
     rgba[2] = p->b;
@@ -308,10 +237,6 @@ static int blood_particles_fx_texture_scale_log(sprite_t *sprite)
     int sections = h / 8;
     if (sections <= 0) return 0;
 
-    /*
-     * TPX textured particle demo formula:
-     *   scale_log = -ctz(texture_height / 8)
-     */
     return -__builtin_ctz((unsigned int)sections);
 }
 
@@ -343,9 +268,6 @@ static void blood_particles_fx_prepare_matrix(void)
 {
     s_frameIdx = (s_frameIdx + 1) % BLOOD_PARTICLES_FX_FB_COUNT;
 
-    /*
-     * Identity/world matrix. Particle positions are already world-space.
-     */
     t3d_mat4fp_from_srt_euler(
         &s_particleMatrices[s_frameIdx],
         (float[3]){ 1.0f, 1.0f, 1.0f },
@@ -378,15 +300,6 @@ static void blood_particles_fx_draw_tpx_textured(
     uint8_t spriteIdx,
     uint8_t globalAlpha
 ) {
-    /*
-     * Transparent textured blood:
-     *
-     * RGB:
-     *   PRIM * TEX0
-     *
-     * Alpha:
-     *   TEX0 alpha * ENV alpha
-     */
     rdpq_set_env_color(RGBA32(255, 255, 255, globalAlpha));
 
     rdpq_mode_combiner(
@@ -400,16 +313,9 @@ static void blood_particles_fx_draw_tpx_textured(
 
     tpx_matrix_push(&s_particleMatrices[s_frameIdx]);
 
-    /*
-     * Per-sprite aspect preservation.
-     * TPX particle size is treated as height.
-     */
     float aspect = blood_particles_fx_sprite_aspect(spriteIdx);
     tpx_state_set_scale(aspect, 1.0f);
 
-    /*
-     * Single-frame sprite, no global UV offset / no mirror point.
-     */
     tpx_state_set_tex_params(0, 0);
 
     tpx_particle_draw_tex_s16(s_tpxParticles, drawCount);
@@ -440,11 +346,6 @@ void blood_particles_fx_init(void)
 {
     if (s_initialized) return;
 
-#if BLOOD_PARTICLES_FX_INIT_TPX_HERE
-    tpx_init((TPXInitParams){});
-    s_tpxInitializedFromHere = true;
-#endif
-
     uint32_t pairCount = (BLOOD_PARTICLES_FX_MAX + 1) / 2;
 
     s_tpxParticles = malloc_uncached(sizeof(TPXParticleS16) * pairCount);
@@ -460,13 +361,6 @@ void blood_particles_fx_init(void)
             free_uncached(s_particleMatrices);
             s_particleMatrices = NULL;
         }
-
-#if BLOOD_PARTICLES_FX_INIT_TPX_HERE
-        if (s_tpxInitializedFromHere) {
-            tpx_destroy();
-            s_tpxInitializedFromHere = false;
-        }
-#endif
 
         return;
     }
@@ -519,13 +413,6 @@ void blood_particles_fx_cleanup(void)
         }
     }
 
-#if BLOOD_PARTICLES_FX_INIT_TPX_HERE
-    if (s_tpxInitializedFromHere) {
-        tpx_destroy();
-        s_tpxInitializedFromHere = false;
-    }
-#endif
-
     s_frameIdx = 0;
     s_initialized = false;
 }
@@ -541,10 +428,6 @@ void blood_particles_fx_update(float dt)
     if (dt < 0.0f) dt = 0.0f;
     if (dt > 0.25f) dt = 0.25f;
 
-    /*
-     * Old behavior:
-     * heavy gravity so short-lived particles visibly arc.
-     */
     const float GRAVITY = 900.0f;
 
     for (int i = 0; i < BLOOD_PARTICLES_FX_MAX; i++) {
@@ -584,10 +467,6 @@ void blood_particles_fx_draw(T3DViewport *viewport)
     rdpq_mode_antialias(AA_NONE);
     rdpq_mode_dithering(DITHER_NONE_NONE);
 
-    /*
-     * Depth-test but no depth-write.
-     * Blood should be occluded by the boss/world, but not punch holes in itself.
-     */
     rdpq_mode_zbuf(true, false);
     rdpq_mode_zoverride(true, 0, 0);
 
@@ -597,17 +476,9 @@ void blood_particles_fx_draw(T3DViewport *viewport)
 #if BLOOD_PARTICLES_FX_CUTOUT
     rdpq_mode_alphacompare(1);
 #else
-    /*
-     * Transparent fade path. This avoids cutout fade artifacts.
-     */
     rdpq_mode_alphacompare(0);
 #endif
 
-    /*
-     * Group by sprite first because TPX can only use one uploaded texture per draw.
-     * Then group by alpha bucket because textured TPX cannot use particle alpha
-     * as opacity.
-     */
     for (int spriteIdx = 0; spriteIdx < BLOOD_PARTICLE_SPRITE_COUNT; spriteIdx++) {
         bool useTexture = blood_particles_fx_has_sprite((uint8_t)spriteIdx);
 
@@ -662,10 +533,9 @@ void blood_particles_fx_spawn_burst(float x, float y, float z, float strength)
     if (strength > 3.0f) strength = 3.0f;
 
     /*
-     * Old-style composition:
-     * - 1 large anchor splat
-     * - several medium droplets
-     * - several tiny spray droplets
+      - 1 large anchor splat
+      - several medium droplets
+      - several tiny spray droplets
      */
     int largeCount = 1;
     int mediumCount = 3 + (int)(strength * 1.5f);
@@ -692,9 +562,7 @@ void blood_particles_fx_spawn_burst(float x, float y, float z, float strength)
         p->active = true;
         p->age = 0.0f;
 
-        /*
-         * Large splat hangs longer. Tiny spray dies quicker.
-         */
+        // Large splat hangs longer. Tiny spray dies quicker.
         if (isLarge) {
             p->life = 0.55f + rand_custom_float() * 0.15f;
             p->spriteIdx = BLOOD_PARTICLE_SPRITE_LARGE;
@@ -715,23 +583,17 @@ void blood_particles_fx_spawn_burst(float x, float y, float z, float strength)
             p->size = 5.0f + rand_custom_float() * (5.0f + 3.0f * strength);
         }
 
-        /*
-         * Deep red with small variation.
-         */
+        // Red with small variation.
         p->r = (uint8_t)(120 + (int)(rand_custom_float() * 70.0f));
         p->g = (uint8_t)(0   + (int)(rand_custom_float() * 18.0f));
         p->b = (uint8_t)(0   + (int)(rand_custom_float() * 12.0f));
 
-        /*
-         * Spawn near hit point.
-         */
+        // Spawn near hit point.
         p->pos[0] = x + (rand_custom_float() - 0.5f) * 5.0f;
         p->pos[1] = y + (rand_custom_float() - 0.5f) * 5.0f;
         p->pos[2] = z + (rand_custom_float() - 0.5f) * 5.0f;
 
-        /*
-         * Spray outward, biased upward.
-         */
+        // Spray outward, biased upward.
         float ang = rand_custom_float() * (2.0f * T3D_PI);
 
         float horiz = isLarge
@@ -752,10 +614,10 @@ void blood_particles_fx_spawn_burst(float x, float y, float z, float strength)
         }
 
         /*
-         * Speeds:
-         * - big anchor moves slowly
-         * - medium drops spray outward
-         * - tiny drops spray fastest
+         Speeds:
+         - big anchor moves slowly
+         - medium drops spray outward
+         - tiny drops spray fastest
          */
         float baseSpeed;
         if (isLarge) {

@@ -52,6 +52,7 @@
 
 #include "multi_sword_attacks.h" // TODO: call only from boss
 #include "fx/lightning_fx.h"
+#include "systems/particle_system.h"
 #include "fx/dust_particles_fx.h"
 #include "fx/blood_particles_fx.h"
 //#include "boulder_hazard.h" // close-range ground-boulder hazard
@@ -610,6 +611,7 @@ void scene_init(void)
         victoryTitleBgSurf = sprite_get_pixels(victoryTitleBgSprite);
     }
 
+    particle_system_init();
     dust_particles_fx_init();
     blood_particles_fx_init();
 
@@ -2380,8 +2382,9 @@ void scene_cleanup(void)
         g_boss = NULL;
     }
 
-    dust_particles_fx_cleanup();
     blood_particles_fx_cleanup();
+    dust_particles_fx_cleanup();
+    particle_system_cleanup();
 
     dialog_controller_free();
     audio_scene_unload_sfx();
