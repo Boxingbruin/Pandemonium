@@ -2645,6 +2645,8 @@ void scene_cleanup(void)
         g_boss = NULL;
     }
 
+    dust_particles_fx_cleanup();
+
     dialog_controller_free();
     audio_scene_unload_sfx();
     cutscene_manager_cleanup();
