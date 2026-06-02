@@ -15,7 +15,6 @@
 
 #include "game/bosses/boss.h"
 #include "collision_system.h"
-#include "display_utility.h"
 #include "controllers/audio_controller.h"
 #include "scenes/scene_sfx.h"
 #include "utilities/general_utility.h"
@@ -118,6 +117,60 @@ static inline void character_consume_stamina(float amount)
     } else {
         character.staminaRegenDelay = STAMINA_REGEN_DELAY;
     }
+}
+
+static inline void character_update_damage_flash(float dt)
+{
+    if (dt < 0.0f) {
+        dt = 0.0f;
+    }
+
+    if (character.damageFlashTimer > 0.0f) {
+        character.damageFlashTimer -= dt;
+
+        if (character.damageFlashTimer < 0.0f) {
+            character.damageFlashTimer = 0.0f;
+        }
+    }
+}
+
+float character_get_health(void)
+{
+    return character.health;
+}
+
+float character_get_max_health(void)
+{
+    return character.maxHealth;
+}
+
+float character_get_stamina(void)
+{
+    return character.stamina;
+}
+
+float character_get_max_stamina(void)
+{
+    return character.maxStamina;
+}
+
+float character_get_damage_flash_ratio(void)
+{
+    if (character.damageFlashTimer <= 0.0f) {
+        return 0.0f;
+    }
+
+    float ratio = character.damageFlashTimer / 0.3f;
+
+    if (ratio < 0.0f) {
+        ratio = 0.0f;
+    }
+
+    if (ratio > 1.0f) {
+        ratio = 1.0f;
+    }
+
+    return ratio;
 }
 
 // Input state tracking
@@ -1303,6 +1356,8 @@ static inline void update_animations(
 
 void character_update_cinematic(void)
 {
+    character_update_damage_flash(deltaTime);
+
     sword_trail_update(deltaTime, false, NULL, NULL);
 
     if (characterState == CHAR_STATE_DEAD) {
@@ -2295,6 +2350,8 @@ void character_update(void)
         return;
     }
 
+    character_update_damage_flash(deltaTime);
+
     bool jumpJustPressed = false;
 
     bool leftJustPressed = (btn.b && !lastBPressed);
@@ -2911,23 +2968,8 @@ void character_draw(void)
 
 void character_draw_ui(void)
 {
-    float ratio = character.maxHealth > 0.0f
-        ? fmaxf(0.0f, fminf(1.0f, character.health / character.maxHealth))
-        : 0.0f;
-
-    float flash = 0.0f;
-    if (character.damageFlashTimer > 0.0f) {
-        flash = fminf(1.0f, character.damageFlashTimer / 0.3f);
-        character.damageFlashTimer -= deltaTime;
-        if (character.damageFlashTimer < 0.0f) character.damageFlashTimer = 0.0f;
-    }
-
-    draw_player_health_bar("Player", ratio, flash);
-
-    float staminaRatio = character.maxStamina > 0.0f
-        ? fmaxf(0.0f, fminf(1.0f, character.stamina / character.maxStamina))
-        : 0.0f;
-    draw_player_stamina_bar(staminaRatio);
+    // Character HUD drawing now lives in character_ui.c.
+    // Scene should call character_ui_draw() during the final 2D UI pass.
 }
 
 void character_apply_damage(float amount)

@@ -1,6 +1,5 @@
 #include <libdragon.h>
 #include <t3d/t3d.h>
-#include <t3d/t3dskeleton.h>
 #include <t3d/t3dmath.h>
 #include <t3d/t3dmodel.h>
 #include <math.h>
@@ -19,10 +18,8 @@
 #include "general_utility.h"
 #include "game_lighting.h"
 #include "game_time.h"
-#include "game_math.h"
 
 #include "globals.h"
-#include "../utilities/video_layout.h"
 #include "../utilities/button_prompt_utility.h"
 
 #include "../managers/cutscene_manager.h"
@@ -30,9 +27,11 @@
 #include "scene_context.h"
 
 #include "character.h"
+#include "character_ui.h"
 #include "../game/bosses/boss.h"
 #include "../game/bosses/boss_ai.h"
 #include "../game/bosses/boss_render.h"
+#include "../game/bosses/boss_ui.h"
 #include "../game/bosses/environmental_effects/boss_ground_crush.h"
 #include "../controllers/dialog_controller.h"
 #include "display_utility.h"
@@ -283,22 +282,6 @@ static int s_lockTargetIndex = LOCK_TARGET_WAIST;
 static sprite_t* victoryTitleBgSprite = NULL;
 static surface_t victoryTitleBgSurf = {0};
 
-// Z-target lock-on icon sprite
-static sprite_t* zTargetIconSprite = NULL;
-static surface_t zTargetIconSurf = {0};
-
-// HUD: C-button item assignment (health potion on C-left)
-static sprite_t* cUpSprite = NULL;
-static sprite_t* cDownSprite = NULL;
-static sprite_t* cLeftSprite = NULL;
-static sprite_t* cRightSprite = NULL;
-static surface_t cUpSurf = {0};
-static surface_t cDownSurf = {0};
-static surface_t cLeftSurf = {0};
-static surface_t cRightSurf = {0};
-
-static sprite_t* healthBottleSprite = NULL;
-static surface_t healthBottleSurf = {0};
 
 static const char *SCENE1_SFX_PATHS[SCENE1_SFX_COUNT] = {
     [SCENE1_SFX_TITLE_WALK]  = "rom:/audio/sfx/title_screen_walk_effect-22k.wav64",
@@ -615,29 +598,8 @@ void scene_init(void)
     dust_particles_fx_init();
     blood_particles_fx_init();
 
-    // Load Z-target lock-on icon (IA8 so the alpha gradient is preserved)
-    zTargetIconSprite = sprite_load("rom:/ztargetIcon.ia8.sprite");
-    if (zTargetIconSprite) {
-        zTargetIconSurf = sprite_get_pixels(zTargetIconSprite);
-    }
-
-    // Load C-button HUD icons.
-    // C-left uses the empty variant because the health potion graphic is drawn over it.
-    // The other three show the arrow icon (unassigned slots), so use the regular variant.
-    cUpSprite = sprite_load("rom:/buttons/CUp.sprite");
-    if (cUpSprite) cUpSurf = sprite_get_pixels(cUpSprite);
-    cDownSprite = sprite_load("rom:/buttons/CDown.sprite");
-    if (cDownSprite) cDownSurf = sprite_get_pixels(cDownSprite);
-    cLeftSprite = sprite_load("rom:/buttons/CButton_empty.sprite");
-    if (cLeftSprite) cLeftSurf = sprite_get_pixels(cLeftSprite);
-    cRightSprite = sprite_load("rom:/buttons/CRight.sprite");
-    if (cRightSprite) cRightSurf = sprite_get_pixels(cRightSprite);
-
-    // Load health potion bottle sprite (IA8)
-    healthBottleSprite = sprite_load("rom:/healthBottle.ia8.sprite");
-    if (healthBottleSprite) {
-        healthBottleSurf = sprite_get_pixels(healthBottleSprite);
-    }
+    character_ui_init();
+    boss_ui_init();
 
     // Start boss music
     // TODO: Its turned off for now as it gets annoying to listen to and it crackles
@@ -671,7 +633,6 @@ void scene_init(void)
     // phase2CutsceneTriggered = true;
 }
 
-static bool scene_get_boss_bone_world_pos(int boneIndex, T3DVec3 *outWorld);
 
 static inline int scene_lockon_bone_index_for_target(LockTargetId target)
 {
@@ -717,12 +678,12 @@ static T3DVec3 get_boss_lock_focus_point(void)
     // 1) Selected target (if available)
     T3DVec3 worldPos;
     int bone = scene_lockon_bone_index_for_target((LockTargetId)s_lockTargetIndex);
-    if (scene_get_boss_bone_world_pos(bone, &worldPos)) {
+    if (boss_get_bone_world_pos(g_boss, bone, &worldPos)) {
         return worldPos;
     }
 
-    // 3) Ultimate fallback: boss position with a small lift so the marker isn't at the feet.
-    return (T3DVec3){{ g_boss->pos[0], g_boss->pos[1] + 40.0f, g_boss->pos[2] }};
+    // Ultimate fallback: boss position with a small lift so the marker is not at the feet.
+    return boss_get_fallback_lock_focus_point(g_boss);
 }
 
 void scene_reset(void)
@@ -764,8 +725,10 @@ void scene_reset(void)
     bossTitleFade = 0.0f;
     bossUiIntro = 1.0f;
     playerUiIntro = 1.0f;
-    display_utility_set_boss_ui_intro(bossUiIntro);
-    display_utility_set_player_ui_intro(playerUiIntro);
+    boss_ui_reset();
+    character_ui_reset();
+    boss_ui_set_intro(bossUiIntro);
+    character_ui_set_intro(playerUiIntro);
 
     // Victory end-card state
     victoryTitleTimer = 0.0f;
@@ -826,26 +789,6 @@ static inline float scene_dist_xz(float ax, float az, float bx, float bz) {
     return sqrtf(dx*dx + dz*dz);
 }
 
-static bool scene_get_boss_bone_world_pos(int boneIndex, T3DVec3 *outWorld)
-{
-    if (!outWorld) return false;
-    if (!g_boss || !g_boss->skeleton || !g_boss->modelMat) return false;
-    if (boneIndex < 0) return false;
-
-    T3DSkeleton* skel = (T3DSkeleton*)g_boss->skeleton;
-    const T3DMat4FP* boneMat = &skel->boneMatricesFP[boneIndex];
-    const T3DMat4FP* modelMat = (const T3DMat4FP*)g_boss->modelMat;
-
-    const float boneLocal[3] = { 0.0f, 0.0f, 0.0f };
-    float boneModel[3];
-    mat4fp_mul_point_f32_row3_colbasis(boneMat, boneLocal, boneModel);
-
-    float boneWorld[3];
-    mat4fp_mul_point_f32_row3_colbasis(modelMat, boneModel, boneWorld);
-
-    *outWorld = (T3DVec3){{ boneWorld[0], boneWorld[1], boneWorld[2] }};
-    return true;
-}
 
 static void scene_debug_force_boss_defeated(void)
 {
@@ -887,148 +830,6 @@ static void scene_debug_force_boss_defeated(void)
     // Keep post-defeat interaction available after skipping.
     bossPostDefeatTalkDone = false;
     bossPostDefeatDialogStep = 0;
-}
-
-static void draw_post_boss_a_prompt(T3DViewport *viewport)
-{
-    // Show "A" above the boss only after defeat, when close enough to interact.
-    if (!viewport || !button_prompt_has_a_button()) return;
-    if (scene_is_cutscene_active() || !boss_is_interactable(g_boss)) return;
-    if (g_boss->state != BOSS_STATE_DEAD) return;
-
-    // Show whenever we're near the boss, regardless of facing. The A press itself
-    // still requires the character to be facing the boss (see interact gate).
-    if (!scene_post_boss_in_range(g_boss)) return;
-
-    // Anchor to the boss head bone (true attachment). Fall back to lock-focus if head bone isn't available.
-    T3DVec3 worldPos;
-    if (!scene_get_boss_bone_world_pos(g_boss->headBoneIndex, &worldPos)) {
-        worldPos = get_boss_lock_focus_point();
-    }
-    // Small lift so the prompt doesn't intersect the head.
-    worldPos.v[1] += 12.0f;
-
-    T3DVec3 screenPos;
-    t3d_viewport_calc_viewspace_pos(viewport, &screenPos, &worldPos);
-
-    // Skip if behind camera
-    if (screenPos.v[2] >= 1.0f) return;
-
-    int px = (int)screenPos.v[0];
-    int py = (int)screenPos.v[1];
-
-    const int margin = 16;
-    if (px < -margin || px > SCREEN_WIDTH + margin || py < -margin || py > SCREEN_HEIGHT + margin) {
-        return;
-    }
-
-    button_prompt_draw_a_icon_centered(px, py, 20.0f);
-}
-
-static void draw_cbutton_hud(void)
-{
-    // Bottom-left C-button diamond. C-left holds the health potion (empty button
-    // sprite with the bottle drawn on top); the other three show their arrow icons.
-    if (!cLeftSprite) return;
-
-    int w = (cLeftSurf.width > 0) ? cLeftSurf.width : 24;
-    int h = (cLeftSurf.height > 0) ? cLeftSurf.height : 24;
-    // Target on-screen button size — source sprites are 64×64.
-    const float kTargetButtonPx = 20.0f;
-    int srcMax = (w > h) ? w : h;
-    const float cScale = (srcMax > 0) ? (kTargetButtonPx / (float)srcMax) : 1.0f;
-    int drawW = (int)((float)w * cScale);
-    int drawH = (int)((float)h * cScale);
-
-    const int marginX = ui_safe_margin_x();
-    const int marginY = ui_safe_margin_y();
-
-    // Diamond spacing: the source sprites have transparent padding, so tighten
-    // the centre-to-centre offset to ~half a button so visible edges touch.
-    const float kSpacingFrac = 0.7f;
-    int spacingX = (int)((float)drawW * kSpacingFrac);
-    int spacingY = (int)((float)drawH * kSpacingFrac);
-
-    // Diamond centre: enough room from the safe bounds that the outer C-left
-    // and C-down icons sit flush against the bottom-left corner.
-    int centerX = marginX + spacingX + (drawW / 2);
-    int centerY = SCREEN_HEIGHT - marginY - spacingY - (drawH / 2);
-
-    int leftX  = centerX - spacingX; int leftY  = centerY;
-    int rightX = centerX + spacingX; int rightY = centerY;
-    int upX    = centerX;            int upY    = centerY - spacingY;
-    int downX  = centerX;            int downY  = centerY + spacingY;
-
-    rdpq_sync_pipe();
-    rdpq_set_mode_standard();
-    rdpq_mode_alphacompare(0);
-    rdpq_mode_blender(RDPQ_BLENDER_MULTIPLY);
-    rdpq_mode_filter(FILTER_BILINEAR);
-
-    if (cUpSprite && cUpSurf.width > 0 && cUpSurf.height > 0) {
-        rdpq_sprite_blit(cUpSprite, upX, upY, &(rdpq_blitparms_t){
-            .scale_x = cScale, .scale_y = cScale,
-            .cx = cUpSurf.width / 2, .cy = cUpSurf.height / 2,
-        });
-    }
-    if (cDownSprite && cDownSurf.width > 0 && cDownSurf.height > 0) {
-        rdpq_sprite_blit(cDownSprite, downX, downY, &(rdpq_blitparms_t){
-            .scale_x = cScale, .scale_y = cScale,
-            .cx = cDownSurf.width / 2, .cy = cDownSurf.height / 2,
-        });
-    }
-    if (cRightSprite && cRightSurf.width > 0 && cRightSurf.height > 0) {
-        rdpq_sprite_blit(cRightSprite, rightX, rightY, &(rdpq_blitparms_t){
-            .scale_x = cScale, .scale_y = cScale,
-            .cx = cRightSurf.width / 2, .cy = cRightSurf.height / 2,
-        });
-    }
-    if (cLeftSurf.width > 0 && cLeftSurf.height > 0) {
-        rdpq_sprite_blit(cLeftSprite, leftX, leftY, &(rdpq_blitparms_t){
-            .scale_x = cScale, .scale_y = cScale,
-            .cx = cLeftSurf.width / 2, .cy = cLeftSurf.height / 2,
-        });
-    }
-
-    // Only show the potion bottle + count when the player still has potions.
-    if (character_get_health_potion_count() > 0) {
-        if (healthBottleSprite && healthBottleSurf.width > 0 && healthBottleSurf.height > 0) {
-            float target = (float)((drawW < drawH) ? drawW : drawH) * 0.80f;
-            float denom = (float)((healthBottleSurf.width > healthBottleSurf.height) ? healthBottleSurf.width : healthBottleSurf.height);
-            float s = (denom > 0.0f) ? (target / denom) : 1.0f;
-            if (s < 0.05f) s = 0.05f;
-            if (s > 4.0f)  s = 4.0f;
-
-            // Tint the IA8 bottle sprite dark red so it contrasts against the yellow button.
-            rdpq_sync_pipe();
-            rdpq_set_mode_standard();
-            rdpq_mode_alphacompare(1);
-            rdpq_mode_combiner(RDPQ_COMBINER_TEX_FLAT);
-            rdpq_mode_blender(RDPQ_BLENDER_MULTIPLY);
-            rdpq_mode_filter(FILTER_BILINEAR);
-            rdpq_set_prim_color(RGBA32(180, 30, 30, 255));
-
-            rdpq_sprite_blit(healthBottleSprite, leftX, leftY, &(rdpq_blitparms_t){
-                .scale_x = s, .scale_y = s,
-                .cx = healthBottleSurf.width / 2, .cy = healthBottleSurf.height / 2,
-            });
-        }
-
-        {
-            int count = character_get_health_potion_count();
-            // Place the count immediately to the right of the potion graphic,
-            // vertically aligned to the button centre.
-            const int textX = leftX + (drawW / 2) + 2;
-            const int textY = leftY + 4;
-
-            rdpq_sync_pipe();
-            rdpq_set_mode_standard();
-            rdpq_mode_combiner(RDPQ_COMBINER_FLAT);
-            rdpq_mode_blender(RDPQ_BLENDER_MULTIPLY);
-            rdpq_set_prim_color(RGBA32(0, 0, 0, 255));
-            rdpq_text_printf(NULL, FONT_UNBALANCED, textX, textY, "%d", count);
-        }
-    }
 }
 
 bool scene_is_cutscene_active(void) {
@@ -1176,8 +977,8 @@ void scene_init_playing(bool skippedCutscene)
     // Reset UI intro animations (they will slide/fade into view)
     bossUiIntro = 0.0f;
     playerUiIntro = 0.0f;
-    display_utility_set_boss_ui_intro(bossUiIntro);
-    display_utility_set_player_ui_intro(playerUiIntro);
+    boss_ui_set_intro(bossUiIntro);
+    character_ui_set_intro(playerUiIntro);
 
 #if DEBUG_BOULDER_ATTACK_FIRST
     // Debug: immediately open phase 1 with the boulder attack so the hazard
@@ -1262,9 +1063,9 @@ static void scene_finish_phase2_cutscene(void)
     // HUD was hidden the whole cutscene — snap intro + trail so it
     // reappears at the current value instead of animating back in.
     bossUiIntro = 1.0f;
-    display_utility_set_boss_ui_intro(1.0f);
+    boss_ui_set_intro(1.0f);
     if (g_boss && g_boss->maxHealth > 0.0f) {
-        display_utility_snap_boss_health_trail(g_boss->health / g_boss->maxHealth);
+        boss_ui_snap_health_trail(g_boss->health / g_boss->maxHealth);
     }
 
     character_reset_button_state();
@@ -1588,12 +1389,12 @@ void scene_update(void)
         if (bossTitleFade <= 0.0f && bossUiIntro < 1.0f) {
             bossUiIntro += deltaTime / uiIntroSpeed;
             if (bossUiIntro > 1.0f) bossUiIntro = 1.0f;
-            display_utility_set_boss_ui_intro(bossUiIntro);
+            boss_ui_set_intro(bossUiIntro);
         }
         if (playerUiIntro < 1.0f) {
             playerUiIntro += deltaTime / uiIntroSpeed;
             if (playerUiIntro > 1.0f) playerUiIntro = 1.0f;
-            display_utility_set_player_ui_intro(playerUiIntro);
+            character_ui_set_intro(playerUiIntro);
         }
     }
     else // Cutscene
@@ -1728,71 +1529,10 @@ void scene_fixed_update(void)
 // Draws a small lock-on marker over the boss when Z-targeting is active.
 static void draw_lockon_indicator(T3DViewport *viewport)
 {
-    // Show during gameplay when Z-targeting is active.
-    // Allow the defeated boss to still be targetable (useful for post-fight dialog).
-    if (!cameraLockOnActive || scene_is_cutscene_active() || !boss_is_active(g_boss)) {
-        return;
-    }
-
-    // Anchor the marker to the boss' mid-body point so it aligns with lock-on aim.
+    bool visible = cameraLockOnActive && !scene_is_cutscene_active() && boss_is_active(g_boss);
     T3DVec3 worldPos = get_boss_lock_focus_point();
 
-    // Project to screen space
-    T3DVec3 screenPos;
-    t3d_viewport_calc_viewspace_pos(viewport, &screenPos, &worldPos);
-
-    // Skip if behind the camera or outside a small margin
-    if (screenPos.v[2] >= 1.0f) {
-        return;
-    }
-    const int margin = 8;
-    int px = (int)screenPos.v[0];
-    int py = (int)screenPos.v[1];
-    if (px < -margin || px > SCREEN_WIDTH + margin || py < -margin || py > SCREEN_HEIGHT + margin) {
-        return;
-    }
-
-    // Draw lock-on icon sprite (fallback to white dot if missing)
-    rdpq_sync_pipe();
-    rdpq_set_mode_standard();
-
-    if (zTargetIconSprite) {
-        // Avoid alpha-compare clipping; rely on the sprite's alpha (IA8).
-        rdpq_mode_alphacompare(0);
-        rdpq_mode_blender(RDPQ_BLENDER_MULTIPLY);
-
-        // Scale with distance so the marker behaves like a world-space attachment
-        // (close = larger, far = smaller) instead of constant screen-space UI size.
-        //
-        // Tiny3D provides screenPos.v[2] as normalized depth (near=0 .. far=1).
-        float z01 = screenPos.v[2];
-        if (z01 < 0.0f) z01 = 0.0f;
-        if (z01 > 0.9999f) z01 = 0.9999f;
-
-        // Keep these in sync with the camera projection (see camera_controller.c).
-        const float nearClip = 4.0f;
-        const float farClip  = 2000.0f;
-        float z = nearClip + z01 * (farClip - nearClip);
-        if (z < nearClip) z = nearClip;
-
-        // Reference distance where we want the icon to be ~8x8 on-screen.
-        const float zRef = 300.0f;
-        float s = 0.125f * (zRef / z);
-        // Clamp for readability (and to avoid enormous icons up close).
-        if (s < 0.05f) s = 0.05f;
-        if (s > 0.275f) s = 0.275f;
-
-        rdpq_sprite_blit(zTargetIconSprite, px, py, &(rdpq_blitparms_t){
-            .scale_x = s, .scale_y = s,
-            .cx = 32, .cy = 32, // center of the 64x64 sprite
-        });
-    } else {
-        rdpq_mode_combiner(RDPQ_COMBINER_FLAT);
-        rdpq_mode_blender(RDPQ_BLENDER_MULTIPLY);
-        rdpq_set_prim_color(RGBA32(255, 255, 255, 255));
-        const int halfSize = 3;
-        rdpq_fill_rectangle(px - halfSize, py - halfSize, px + halfSize + 1, py + halfSize + 1);
-    }
+    boss_ui_draw_lockon_marker(viewport, &worldPos, visible);
 }
 
 void scene_draw_cutscene(T3DViewport *viewport)
@@ -2098,11 +1838,24 @@ void scene_draw(T3DViewport *viewport)
     blood_particles_fx_draw(viewport);
 
     // Post-boss interaction prompt ("A") above the defeated boss when close enough to interact
-    draw_post_boss_a_prompt(viewport);
+    {
+        T3DVec3 postBossPromptPos;
+        bool postBossPromptVisible =
+            !scene_is_cutscene_active()
+            && boss_is_interactable(g_boss)
+            && g_boss
+            && g_boss->state == BOSS_STATE_DEAD
+            && scene_post_boss_in_range(g_boss);
 
-    // Overlay lock-on marker above the boss
-    if(DEV_MODE)
-        draw_lockon_indicator(viewport);
+        if (!boss_get_head_world_pos(g_boss, &postBossPromptPos)) {
+            postBossPromptPos = get_boss_lock_focus_point();
+        }
+
+        boss_ui_draw_post_boss_a_prompt(viewport, &postBossPromptPos, postBossPromptVisible);
+    }
+
+    // Overlay lock-on marker above the boss.
+    draw_lockon_indicator(viewport);
 
     scene_draw_video_trigger(viewport);
 
@@ -2117,12 +1870,13 @@ void scene_draw(T3DViewport *viewport)
     // Draw UI elements after 3D rendering is complete.
     // Keep player UI visible during victory; hide it during death and cutscenes.
     if (!cutsceneActive && !isDead) {
-        // Boss UI appears only during normal gameplay, not on victory screens.
-        if (!isVictory && boss_is_active(g_boss) && bossTitleFade <= 0.0f) {
+        // Boss UI/debug is owned by boss_render/boss_ui now.
+        // Keep scene responsible only for draw order and visibility gating.
+        if (!isVictory && boss_is_active(g_boss) && bossTitleFade <= 0.0f && g_boss->maxHealth > 0.0f) {
             boss_draw_ui(g_boss, viewport);
         }
-        character_draw_ui();
-        draw_cbutton_hud();
+
+        character_ui_draw();
     }
 
     // Slide-up overlay for boss title after fight starts (no fading)
@@ -2352,7 +2106,6 @@ void scene_cleanup(void)
      */
     if (g_boss) {
         boss_free(g_boss);
-        free(g_boss);
         g_boss = NULL;
     }
 
@@ -2371,20 +2124,6 @@ void scene_cleanup(void)
         surface_free(&victoryTitleBgSurf);
     }
 
-    if (zTargetIconSprite) {
-        sprite_free(zTargetIconSprite);
-        zTargetIconSprite = NULL;
-        surface_free(&zTargetIconSurf);
-    }
-
-    if (cUpSprite)    { sprite_free(cUpSprite);    cUpSprite = NULL;    surface_free(&cUpSurf); }
-    if (cDownSprite)  { sprite_free(cDownSprite);  cDownSprite = NULL;  surface_free(&cDownSurf); }
-    if (cLeftSprite)  { sprite_free(cLeftSprite);  cLeftSprite = NULL;  surface_free(&cLeftSurf); }
-    if (cRightSprite) { sprite_free(cRightSprite); cRightSprite = NULL; surface_free(&cRightSurf); }
-
-    if (healthBottleSprite) {
-        sprite_free(healthBottleSprite);
-        healthBottleSprite = NULL;
-        surface_free(&healthBottleSurf);
-    }
+    character_ui_cleanup();
+    boss_ui_cleanup();
 }

@@ -116,7 +116,6 @@ void character_update_camera(void);
 
 void character_draw(void);
 void character_draw_shadow(void);
-void character_draw_ui(void);
 
 void character_update(void);
 void character_update_cinematic(void);
@@ -129,15 +128,22 @@ void character_delete(void);
 
 void character_free(void);
 
-// Get character velocity for prediction (used by boss AI)
+// Get character velocity for prediction, used by boss AI.
 void character_get_velocity(float *outVelX, float *outVelZ);
 void character_set_velocity_xz(float vx, float vz);
 
-// External API to apply damage to the character
+// Character stat getters used by character_ui.
+float character_get_health(void);
+float character_get_max_health(void);
+float character_get_stamina(void);
+float character_get_max_stamina(void);
+float character_get_damage_flash_ratio(void);
+
+// External API to apply damage to the character.
 void character_apply_damage(float amount);
 
-// Health potion API
+// Health potion API.
 int character_get_health_potion_count(void);
 bool character_try_use_health_potion(void);
 
-#endif
+#endif // CHARACTER_H
