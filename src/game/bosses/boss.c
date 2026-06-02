@@ -361,6 +361,19 @@ static void boss_clear_combat_runtime(Boss* boss)
     boss->currentSpeed = 0.0f;
 }
 
+static void boss_request_post_defeat_kneel(Boss* boss)
+{
+    if (!boss) return;
+
+    boss_anim_request(
+        boss,
+        BOSS_ANIM_PHASE2_WIN_KNEEL,
+        0.0f,
+        true,
+        BOSS_ANIM_PRIORITY_CRITICAL
+    );
+}
+
 void boss_set_mode(Boss* boss, BossMode mode)
 {
     if (!boss) return;
@@ -387,6 +400,7 @@ void boss_set_mode(Boss* boss, BossMode mode)
         case BOSS_MODE_POST_DEFEAT:
             boss->visible = true;
             boss_clear_combat_runtime(boss);
+            boss_request_post_defeat_kneel(boss);
             break;
 
         default:

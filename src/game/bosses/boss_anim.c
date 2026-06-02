@@ -13,11 +13,9 @@
 #include "boss.h"
 
 #include <libdragon.h>
-#include <t3d/t3d.h>
 #include <t3d/t3dskeleton.h>
 #include <t3d/t3danim.h>
 #include <math.h>
-#include <stdlib.h>
 #include <string.h>
 
 #include "game_time.h"
