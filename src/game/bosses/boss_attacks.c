@@ -10,24 +10,17 @@
 #include "boss.h"
 
 #include <math.h>
-#include <stdlib.h>
 
 #include <libdragon.h>
-#include <t3d/t3d.h>
-#include <t3d/t3dskeleton.h>
 #include <t3d/t3dmath.h>
 
 #include "systems/collision_system.h"
 
-#include "game_time.h"
 #include "character.h"
 #include "scene_sfx.h" // TODO: make sfx entity specific
-#include "scene.h"
 #include "environmental_effects/boss_ground_crush.h"
+#include "fx/dust_particles_fx.h"
 
-#include "utilities/collision_mesh.h"
-#include "utilities/simple_collision_utility.h"
-#include "utilities/game_math.h"
 #include "utilities/animation_utility.h"
 
 #include "environmental_mechanics/multi_sword_attacks.h"
@@ -56,7 +49,7 @@ static inline void boss_spawn_dust_toward_player(Boss *boss, float forwardDist, 
 
     float cx = boss->pos[0] + dirX * forwardDist;
     float cz = boss->pos[2] + dirZ * forwardDist;
-    scene_spawn_dust_burst(cx, boss->pos[1], cz, strength);
+    dust_particles_fx_spawn_burst(cx, boss->pos[1], cz, strength);
 }
 
 // Spawn ground crushed decal at the same biased impact point as the dust burst.
@@ -90,17 +83,6 @@ static inline void boss_attacks_on_player_hit(float damage)
     // Fixed, noticeable impulse (units are world-space and applied in camera right/up).
     animation_utility_set_screen_shake_mag(20.0f);
 }
-
-// static inline void boss_shake_on_window_end(bool windowActiveNow,
-//                                             bool *prevWindowActive,
-//                                             float damageForThisWindow)
-// {
-//     // We want the *end* edge: active -> inactive
-//     if (*prevWindowActive && !windowActiveNow) {
-//         boss_attacks_play_impact_shake(damageForThisWindow);
-//     }
-//     *prevWindowActive = windowActiveNow;
-// }
 
 // Forward declarations
 static void boss_attacks_handle_power_jump(Boss* boss, float dt);
@@ -645,7 +627,6 @@ static void boss_attacks_handle_roar_stomp(Boss* boss, float dt) {
             float damage = 30.0f * (1.0f - (dist / shockwaveRadius));
             character_apply_damage(damage);
             boss_attacks_on_player_hit(damage);
-            // boss_debug_sound("boss_attack_success");
             boss->currentAttackHasHit = true;
         }
     }
@@ -728,7 +709,6 @@ static void boss_attacks_handle_charge(Boss* boss, float dt) {
     if(boss->stateTimer >= lungeStart && boss->stateTimer < lungeEnd + 0.5f)
     {
         boss->handAttackColliderActive  = true;
-        //boss->sphereAttackColliderActive = true;
         if (!boss->currentAttackHasHit && bossWeaponCollision) {
             character_apply_damage(15.0f);
             boss_attacks_on_player_hit(15.0f);
@@ -865,8 +845,8 @@ static void boss_attacks_handle_stomp(Boss* boss, float dt)
 
         const float radius = 70.0f; // tight radius
         if (dist <= radius) {
-            // float damage = 40.0f * (1.0f - (dist / radius)); // falloff
-            // if (damage < 6.0f) damage = 6.0f;               // minimum chip
+            // float damage = 40.0f * (1.0f - (dist / radius)); falloff
+            // if (damage < 6.0f) damage = 6.0f; minimum chip
             character_apply_damage(45.0f);
             boss_attacks_on_player_hit(45.0f);
             boss->currentAttackHasHit = true;
@@ -930,10 +910,10 @@ static void boss_attacks_handle_flip_attack(Boss* boss, float dt)
     const float sphereDamageWindow3Off = 4.2f;
 
     // ------------------------------------------------------------
-    // Radial damage sphere config (matches your debug sphere)
+    // Radial damage sphere config
     // ------------------------------------------------------------
-    const float SPHERE_OFFSET = 40.0f;   // same as your debug
-    const float SPHERE_RADIUS = 20.0f;   // same as your debug
+    const float SPHERE_OFFSET = 40.0f;
+    const float SPHERE_RADIUS = 20.0f;
 
     // Per-window damage
     const float DMG_W1 = 12.0f;
@@ -970,7 +950,6 @@ static void boss_attacks_handle_flip_attack(Boss* boss, float dt)
         float fwdX = cosf(yaw);
         float fwdZ = sinf(yaw);
 
-        // Matches your debug (pos - fwd * OFFSET)
         float cx = boss->pos[0] - fwdX * SPHERE_OFFSET;
         float cz = boss->pos[2] - fwdZ * SPHERE_OFFSET;
 
@@ -986,7 +965,7 @@ static void boss_attacks_handle_flip_attack(Boss* boss, float dt)
     }
 
     // ------------------------------------------------------------
-    // Existing hand hit windows
+    // Hand hit windows
     // ------------------------------------------------------------
     if(boss->stateTimer >= hitStart && boss->stateTimer < hitEnd)
     {
@@ -1047,7 +1026,7 @@ static void boss_attacks_handle_flip_attack(Boss* boss, float dt)
     // --------------------------------
     else if (boss->stateTimer < idleDuration + jumpDuration) {
 
-        // === Jump start: compute initial travel ===
+        // Jump start: compute initial travel
         if (boss->stateTimer - dt < idleDuration) {
 
             const float leadTime = 0.25f;
@@ -1086,15 +1065,12 @@ static void boss_attacks_handle_flip_attack(Boss* boss, float dt)
 
         float t = (boss->stateTimer - idleDuration) / jumpDuration;
 
-        // === Move along arc ===
+        // Move along arc
         boss->pos[0] = boss->flipAttackStartPos[0]
                      + (boss->flipAttackTargetPos[0] - boss->flipAttackStartPos[0]) * t;
 
         boss->pos[2] = boss->flipAttackStartPos[2]
                      + (boss->flipAttackTargetPos[2] - boss->flipAttackStartPos[2]) * t;
-
-        // boss->pos[1] = boss->flipAttackStartPos[1]
-        //              + boss->flipAttackHeight * sinf(t * T3D_PI);
 
         float mdx = boss->flipAttackTargetPos[0] - boss->flipAttackStartPos[0];
         float mdz = boss->flipAttackTargetPos[2] - boss->flipAttackStartPos[2];
@@ -1104,8 +1080,9 @@ static void boss_attacks_handle_flip_attack(Boss* boss, float dt)
     }
 }
 
+// ------------------------------------------
 // Aerial Sword Barrage Attack Implementation
-// ==========================================
+// ------------------------------------------
 
 static void boss_attacks_spawn_sword_ring(Boss* boss) {
     if (!boss || boss->swordRingSpawned) return;
@@ -1184,9 +1161,6 @@ static void boss_attacks_cleanup_sword_ring(Boss* boss) {
     boss->swordRingFiredCount = 0;
     boss->swordRingFireTimer = 0.0f;
     boss->preTelegraphFX = false;
-    // Restore the default ring size. spawn_sword_ring halves swordRingCount
-    // each time it runs and writes the halved value back, so without this
-    // reset every subsequent aerial barrage spawns fewer swords (12 → 6 → 3 → 1).
     boss->swordRingCount = 12;
 }
 
@@ -1244,7 +1218,7 @@ static void boss_attacks_update_aerial_swords(Boss* boss, float dt) {
                 }
                 
                 // Impact effect
-                scene_spawn_dust_burst(targetX, targetY, targetZ, 1.5f);
+                dust_particles_fx_spawn_burst(targetX, targetY, targetZ, 1.5f);
                 
                 // Deactivate sword
                 boss->aerialSwordActive[i] = false;

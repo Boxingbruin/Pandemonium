@@ -13,18 +13,14 @@
 #include "game_math.h"
 #include "globals.h"
 
-#include "debug_draw.h"
 #include "game/bosses/boss.h"
-#include "scene.h"
-#include "simple_collision_utility.h"
 #include "collision_system.h"
-#include "game_math.h"
-#include "display_utility.h"
 #include "controllers/audio_controller.h"
 #include "scenes/scene_sfx.h"
 #include "utilities/general_utility.h"
 #include "utilities/sword_trail.h"
 #include "animation_utility.h"
+#include "fx/blood_particles_fx.h"
 
 /*
  Character Controller
@@ -121,6 +117,60 @@ static inline void character_consume_stamina(float amount)
     } else {
         character.staminaRegenDelay = STAMINA_REGEN_DELAY;
     }
+}
+
+static inline void character_update_damage_flash(float dt)
+{
+    if (dt < 0.0f) {
+        dt = 0.0f;
+    }
+
+    if (character.damageFlashTimer > 0.0f) {
+        character.damageFlashTimer -= dt;
+
+        if (character.damageFlashTimer < 0.0f) {
+            character.damageFlashTimer = 0.0f;
+        }
+    }
+}
+
+float character_get_health(void)
+{
+    return character.health;
+}
+
+float character_get_max_health(void)
+{
+    return character.maxHealth;
+}
+
+float character_get_stamina(void)
+{
+    return character.stamina;
+}
+
+float character_get_max_stamina(void)
+{
+    return character.maxStamina;
+}
+
+float character_get_damage_flash_ratio(void)
+{
+    if (character.damageFlashTimer <= 0.0f) {
+        return 0.0f;
+    }
+
+    float ratio = character.damageFlashTimer / 0.3f;
+
+    if (ratio < 0.0f) {
+        ratio = 0.0f;
+    }
+
+    if (ratio > 1.0f) {
+        ratio = 1.0f;
+    }
+
+    return ratio;
 }
 
 // Input state tracking
@@ -1251,6 +1301,85 @@ static inline int get_target_animation(CharacterState state, float speedRatio)
     return isBackward ? ANIM_RUN_BACK : ANIM_RUN;
 }
 
+CharacterState character_get_state(void)
+{
+    return characterState;
+}
+
+void character_set_state(CharacterState state)
+{
+    if (characterState == state) {
+        return;
+    }
+
+    characterState = state;
+    actionTimer = 0.0f;
+
+    if (state == CHAR_STATE_TITLE_IDLE) {
+        walkThroughFog = false;
+        movementVelocityX = 0.0f;
+        movementVelocityZ = 0.0f;
+        currentSpeed = 0.0f;
+    } else if (state == CHAR_STATE_FOG_WALK) {
+        walkThroughFog = true;
+        currentSpeed = 1.0f;
+    } else if (state == CHAR_STATE_DEAD) {
+        movementVelocityX = 0.0f;
+        movementVelocityZ = 0.0f;
+        currentSpeed = 0.0f;
+    } else if (state == CHAR_STATE_NORMAL) {
+        walkThroughFog = false;
+    }
+
+    character.currentAnimation = get_target_animation(characterState, currentSpeed);
+    character.previousAnimation = -1;
+    character.isBlending = false;
+    character.blendFactor = 0.0f;
+    character.blendTimer = 0.0f;
+
+    if (character.animations &&
+        character.currentAnimation >= 0 &&
+        character.currentAnimation < character.animationCount &&
+        character.animations[character.currentAnimation]) {
+        t3d_anim_set_time(character.animations[character.currentAnimation], 0.0f);
+        t3d_anim_set_playing(character.animations[character.currentAnimation], true);
+    }
+}
+
+static inline void update_animations(
+    float speedRatio,
+    CharacterState state,
+    float dt,
+    float velMag,
+    float inputMag
+);
+
+void character_update_cinematic(void)
+{
+    character_update_damage_flash(deltaTime);
+
+    sword_trail_update(deltaTime, false, NULL, NULL);
+
+    if (characterState == CHAR_STATE_DEAD) {
+        movementVelocityX = 0.0f;
+        movementVelocityZ = 0.0f;
+        currentSpeed = 0.0f;
+    } else if (characterState == CHAR_STATE_TITLE_IDLE) {
+        apply_friction(deltaTime, 1.0f);
+        update_current_speed(0.0f, deltaTime);
+    }
+
+    float animationSpeedRatio = currentSpeed;
+
+    update_animations(animationSpeedRatio, characterState, deltaTime, 0.0f, 0.0f);
+
+    character.pos[0] += movementVelocityX * deltaTime;
+    character.pos[2] += movementVelocityZ * deltaTime;
+
+    character_anim_apply_pose();
+    character_finalize_frame(false);
+}
+
 static inline bool is_action_state(CharacterState state)
 {
     return (state == CHAR_STATE_ROLLING) ||
@@ -2214,86 +2343,14 @@ void character_init(void)
 
 void character_update(void)
 {
-    GameState state = scene_get_game_state();
-
-    if (state == GAME_STATE_DEAD) {
-        sword_trail_update(deltaTime, false, NULL, NULL);
-        movementVelocityX = 0.0f;
-        movementVelocityZ = 0.0f;
-
-        if (characterState != CHAR_STATE_DEAD) {
-            characterState = CHAR_STATE_DEAD;
-            if (character.animations && ANIM_DEATH < character.animationCount && character.animations[ANIM_DEATH]) {
-                t3d_anim_set_time(character.animations[ANIM_DEATH], 0.0f);
-                t3d_anim_set_playing(character.animations[ANIM_DEATH], true);
-            }
-        }
-
-        update_animations(0.0f, characterState, deltaTime, 0.0f, 0.0f);
-
-        character_update_camera();
-        character_anim_apply_pose();
-        character_finalize_frame(false);
+    if (characterState == CHAR_STATE_DEAD ||
+        characterState == CHAR_STATE_TITLE_IDLE ||
+        characterState == CHAR_STATE_FOG_WALK) {
+        character_update_cinematic();
         return;
     }
 
-    if (scene_get_game_state() == GAME_STATE_TITLE || scene_get_game_state() == GAME_STATE_TITLE_TRANSITION)
-    {
-        sword_trail_update(deltaTime, false, NULL, NULL);
-
-        if (scene_get_game_state() == GAME_STATE_TITLE) {
-            if (characterState != CHAR_STATE_TITLE_IDLE) {
-                characterState = CHAR_STATE_TITLE_IDLE;
-                walkThroughFog = false;
-                if (character.animations && character.animations[ANIM_IDLE_TITLE]) {
-                    t3d_anim_set_time(character.animations[ANIM_IDLE_TITLE], 0.0f);
-                    t3d_anim_set_playing(character.animations[ANIM_IDLE_TITLE], true);
-                }
-            }
-        }
-
-        apply_friction(deltaTime, 1.0f);
-        update_current_speed(0.0f, deltaTime);
-        float animationSpeedRatio = currentSpeed;
-
-        if (scene_get_game_state() == GAME_STATE_TITLE_TRANSITION && walkThroughFog == false)
-        {
-            characterState = CHAR_STATE_FOG_WALK;
-            walkThroughFog = true;
-
-            if (character.animations && character.animations[ANIM_FOG_OF_WAR]) {
-                t3d_anim_set_time(character.animations[ANIM_FOG_OF_WAR], 0.0f);
-                t3d_anim_set_playing(character.animations[ANIM_FOG_OF_WAR], true);
-            }
-        }
-
-        update_animations(animationSpeedRatio, characterState, deltaTime, 0.0f, 0.0f);
-
-        character.pos[0] += movementVelocityX * deltaTime;
-        character.pos[2] += movementVelocityZ * deltaTime;
-
-        character_anim_apply_pose();
-        character_finalize_frame(false);
-        return;
-    }
-
-    if (scene_is_cutscene_active()) {
-        sword_trail_update(deltaTime, false, NULL, NULL);
-
-        apply_friction(deltaTime, 1.0f);
-        update_current_speed(0.0f, deltaTime);
-        float animationSpeedRatio = currentSpeed;
-
-        update_animations(animationSpeedRatio, characterState, deltaTime, 0.0f, 0.0f);
-
-        character.pos[0] += movementVelocityX * deltaTime;
-        character.pos[2] += movementVelocityZ * deltaTime;
-
-        character_update_camera();
-        character_anim_apply_pose();
-        character_finalize_frame(false);
-        return;
-    }
+    character_update_damage_flash(deltaTime);
 
     bool jumpJustPressed = false;
 
@@ -2539,7 +2596,7 @@ void character_update(void)
                         }
 
                         float strength = (characterState == CHAR_STATE_ATTACKING_STRONG) ? 1.8f : 1.0f;
-                        scene_spawn_blood_burst(impact[0], impact[1], impact[2], strength);
+                        blood_particles_fx_spawn_burst(impact[0], impact[1], impact[2], strength);
                     }
                 }
                 character.currentAttackHasHit = true;
@@ -2911,23 +2968,8 @@ void character_draw(void)
 
 void character_draw_ui(void)
 {
-    float ratio = character.maxHealth > 0.0f
-        ? fmaxf(0.0f, fminf(1.0f, character.health / character.maxHealth))
-        : 0.0f;
-
-    float flash = 0.0f;
-    if (character.damageFlashTimer > 0.0f) {
-        flash = fminf(1.0f, character.damageFlashTimer / 0.3f);
-        character.damageFlashTimer -= deltaTime;
-        if (character.damageFlashTimer < 0.0f) character.damageFlashTimer = 0.0f;
-    }
-
-    draw_player_health_bar("Player", ratio, flash);
-
-    float staminaRatio = character.maxStamina > 0.0f
-        ? fmaxf(0.0f, fminf(1.0f, character.stamina / character.maxStamina))
-        : 0.0f;
-    draw_player_stamina_bar(staminaRatio);
+    // Character HUD drawing now lives in character_ui.c.
+    // Scene should call character_ui_draw() during the final 2D UI pass.
 }
 
 void character_apply_damage(float amount)
@@ -2941,8 +2983,7 @@ void character_apply_damage(float amount)
     joypad_rumble_pulse_seconds(1.0f);
 
     if (character.health <= 0.0f) {
-        characterState = CHAR_STATE_DEAD;
-        scene_set_game_state(GAME_STATE_DEAD);
+        character_set_state(CHAR_STATE_DEAD);
         return;
     }
 

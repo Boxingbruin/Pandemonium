@@ -2,9 +2,7 @@
 
 #include <libdragon.h>
 #include <t3d/t3d.h>
-#include <stdbool.h>
 #include <string.h>
-#include <stdlib.h>
 #include <alloca.h>
 #include <sys/stat.h>
 
@@ -17,19 +15,16 @@
 #include <mixer.h>
 #include <subtitles.h>
 #include <graphics.h>
-#include <rdpq.h>
 #include <rdpq_attach.h>
 #include <joypad.h>
 
-#include "globals.h"
 #include "audio_controller.h"
-#include "scene.h"
+#include "scene_controller.h"
 #include "../managers/cutscene_manager.h"
-#include "dev.h"
 
 /*
  * Decoded-picture buffer sizing (see libdragon h264bsdInitDpb): dpbSize includes this many
- * extra *slots* beyond the stream's max DPB. Stock fmv_play uses 8 — very heavy.
+ * extra *slots* beyond the stream's max DPB. Stock fmv_play uses 8 - very heavy.
  *
  * OOM at end-of-stream often hits h264bsdResetDpb/h264bsdInitDpb (SPS activation / flush)
  * when the heap no longer has room for one contiguous DPB layout; keeping this at 0 avoids
@@ -75,9 +70,12 @@ static void pandemonium_fmv_play(const char *video_fn, const fmv_parms_t *parms)
 
     yuv_init();
     yuv_blitter_t yuv = yuv_blitter_new_fmv(
-        info.width, info.height,
-        display_get_width(), display_get_height(),
-        &(yuv_fmv_parms_t){ .cs = &info.colorspace });
+        info.width,
+        info.height,
+        display_get_width(),
+        display_get_height(),
+        &(yuv_fmv_parms_t){ .cs = &info.colorspace }
+    );
 
     display_set_fps_limit(info.framerate);
 
@@ -118,11 +116,13 @@ static void pandemonium_fmv_play(const char *video_fn, const fmv_parms_t *parms)
         if (stat(subs_fn, &st) == 0) {
             subs = subtitles_load(subs_fn);
 
-            if (!subrenderer)
+            if (!subrenderer) {
                 subrenderer = subrenderer_create_rdpq(
                     &(subrenderer_rdpq_parms_t){
                         .bkg_color = RGBA32(0, 0, 0, 128),
-                    });
+                    }
+                );
+            }
         }
     }
 
@@ -131,31 +131,50 @@ static void pandemonium_fmv_play(const char *video_fn, const fmv_parms_t *parms)
     bool abort = false;
     video_sync_t *vsync = NULL;
 
-    void ctrl_pause(fmv_control_t *ctrl, bool pause) { paused = pause; }
-    void ctrl_stop(fmv_control_t *ctrl) { abort = true; }
+    void ctrl_pause(fmv_control_t *ctrl, bool pause)
+    {
+        (void)ctrl;
+        paused = pause;
+    }
+
+    void ctrl_stop(fmv_control_t *ctrl)
+    {
+        (void)ctrl;
+        abort = true;
+    }
+
     int ctrl_seek_frame(fmv_control_t *ctrl, int idx, bool exact)
     {
+        (void)ctrl;
+
         int new_idx = video_seek(video, idx);
         if (new_idx < 0) return -1;
+
         frame_idx = new_idx;
+
         if (exact) {
             while (frame_idx < idx) {
                 if (!video_next_frame(video)) break;
                 frame_idx++;
             }
         }
+
         if (audio) {
             double time_sec = (double)frame_idx / (double)info.framerate;
             wav64_seek(audio, parms->audio_mixer_channel, time_sec);
         }
+
         if (subs) {
             subtitles_seek(subs, frame_idx);
         }
+
         if (vsync) {
             video_sync_reset(vsync, frame_idx);
         }
+
         return frame_idx;
     }
+
     float ctrl_seek_time(fmv_control_t *ctrl, float time_sec, bool exact)
     {
         int f = (int)(time_sec * info.framerate);
@@ -191,6 +210,7 @@ static void pandemonium_fmv_play(const char *video_fn, const fmv_parms_t *parms)
             if (vsync && mixer_ch_playing(parms->audio_mixer_channel)) {
                 double master_time_sec =
                     mixer_ch_get_pos(parms->audio_mixer_channel) / (double)audio->wave.frequency;
+
                 video_sync_action_t a = video_sync_step(vsync, master_time_sec, frame_idx);
 
                 if (a.kind == VIDEO_SYNC_SKIP_NEXT) {
@@ -208,27 +228,41 @@ static void pandemonium_fmv_play(const char *video_fn, const fmv_parms_t *parms)
                 if (parms->loop) {
                     frame_idx = 0;
                     video_rewind(video);
-                    if (audio) wav64_seek(audio, parms->audio_mixer_channel, 0.0);
-                    if (subs) subtitles_seek(subs, 0);
-                    if (vsync) video_sync_reset(vsync, frame_idx);
+
+                    if (audio) {
+                        wav64_seek(audio, parms->audio_mixer_channel, 0.0);
+                    }
+
+                    if (subs) {
+                        subtitles_seek(subs, 0);
+                    }
+
+                    if (vsync) {
+                        video_sync_reset(vsync, frame_idx);
+                    }
+
                     continue;
                 } else {
                     break;
                 }
             }
 
-            if (subs) subtitles_next_frame(subs);
+            if (subs) {
+                subtitles_next_frame(subs);
+            }
         }
 
         mixer_try_play();
 
         if (!skip_render) {
             surface_t *disp = display_try_get();
+
             while (disp == NULL) {
                 if (!paused && !video_poll(video)) {
                     disp = display_get();
                     break;
                 }
+
                 disp = display_try_get();
             }
 
@@ -251,8 +285,9 @@ static void pandemonium_fmv_play(const char *video_fn, const fmv_parms_t *parms)
             rdpq_detach_show();
         }
 
-        if (!paused)
+        if (!paused) {
             frame_idx++;
+        }
     }
 
     rspq_wait();
@@ -264,7 +299,11 @@ static void pandemonium_fmv_play(const char *video_fn, const fmv_parms_t *parms)
 
     yuv_blitter_free(&yuv);
     yuv_close();
-    if (vsync) video_sync_destroy(vsync);
+
+    if (vsync) {
+        video_sync_destroy(vsync);
+    }
+
     video_close(video);
     display_set_fps_limit(0);
 }
@@ -280,6 +319,7 @@ static bool s_video_inited = false;
 static void video_player_init_once(void)
 {
     if (s_video_inited) return;
+
     s_video_inited = true;
 
     // Only needed once
@@ -290,11 +330,9 @@ static void video_player_init_once(void)
     //video_register_codec(&mpeg1_codec);
 }
 
-// If you want different behavior after the video ends, change this:
 static void on_video_finished(void)
 {
-    // Restart after movie.
-    scene_restart();
+    scene_controller_switch_to_title();
 }
 
 // ----------------------------
@@ -326,8 +364,9 @@ bool video_player_pump_and_play(T3DViewport *viewport)
 {
     (void)viewport;
 
-    if (!video_player_is_pending())
+    if (!video_player_is_pending()) {
         return false;
+    }
 
     const char *path = video_path;
     video_pending = false;
@@ -345,8 +384,8 @@ bool video_player_pump_and_play(T3DViewport *viewport)
 
     // Blocking playback on the current display (no extra display alloc/close).
     pandemonium_fmv_play(path, &(fmv_parms_t){
-                                 .osd_callback = video_player_fmv_osd,
-                             });
+        .osd_callback = video_player_fmv_osd,
+    });
 
     // Safe queue drain after FMV finishes.
     rspq_wait();

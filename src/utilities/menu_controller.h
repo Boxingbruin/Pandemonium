@@ -6,8 +6,10 @@
 typedef enum {
     // Pause menu root (in-game)
     MENU_MAIN,
+
     // Title menu root (title screen)
     MENU_TITLE,
+
     // Shared submenus / screens
     MENU_SETTINGS,
     MENU_AUDIO,
@@ -67,14 +69,44 @@ typedef enum {
     MENU_LOAD_GAME_COUNT
 } LoadGameMenuOption;
 
+typedef enum {
+    MENU_ACTION_NONE = 0,
+
+    // Emitted when the title menu selects Continue/Play or a save slot.
+    // The title scene consumes this and starts its transition.
+    MENU_ACTION_TITLE_START_GAME,
+
+    // Reserved for later cleanup. For now restart can still call scene_restart()
+    // directly from the pause menu if you kept that first-pass behavior.
+    MENU_ACTION_RESTART_GAME,
+} MenuAction;
+
 void menu_controller_init(void);
+
+/*
+ * Guardian / in-game update path.
+ * Reads scene_get_game_state() internally for pause/menu behavior.
+ */
 void menu_controller_update(void);
+
+/*
+ * Title-screen update path.
+ * Forces title-menu behavior without asking the guardian scene for GameState.
+ */
+void menu_controller_update_title(void);
+
+/*
+ * Returns and clears the latest one-shot menu action.
+ */
+MenuAction menu_controller_consume_action(void);
+
 void menu_controller_draw(void);
 void menu_controller_free(void);
 
 bool menu_controller_is_active(void);
 bool menu_controller_is_title_submenu_active(void);
 bool menu_controller_is_pause_menu_active(void);
+
 void menu_controller_toggle(void);
 void menu_controller_close(void);
 

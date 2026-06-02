@@ -1,16 +1,14 @@
 #include <libdragon.h>
 #include <t3d/t3d.h>
-#include <t3d/t3dskeleton.h>
-#include <t3d/t3danim.h>
 #include <t3d/t3dmath.h>
 #include <t3d/t3dmodel.h>
 #include <math.h>
 #include <string.h>
 #include <stdio.h>
-#include <stdint.h>
 
 #include "scene.h"
 #include "scene_sfx.h"
+#include "scene_controller.h"
 
 #include "audio_controller.h"
 
@@ -20,10 +18,8 @@
 #include "general_utility.h"
 #include "game_lighting.h"
 #include "game_time.h"
-#include "game_math.h"
 
 #include "globals.h"
-#include "../utilities/video_layout.h"
 #include "../utilities/button_prompt_utility.h"
 
 #include "../managers/cutscene_manager.h"
@@ -31,9 +27,11 @@
 #include "scene_context.h"
 
 #include "character.h"
+#include "character_ui.h"
 #include "../game/bosses/boss.h"
 #include "../game/bosses/boss_ai.h"
 #include "../game/bosses/boss_render.h"
+#include "../game/bosses/boss_ui.h"
 #include "../game/bosses/environmental_effects/boss_ground_crush.h"
 #include "../controllers/dialog_controller.h"
 #include "display_utility.h"
@@ -52,18 +50,14 @@
 #include "video_player_utility.h"
 
 #include "multi_sword_attacks.h" // TODO: call only from boss
-#include "fx/lightning_fx.h" 
+#include "fx/lightning_fx.h"
+#include "systems/particle_system.h"
+#include "fx/dust_particles_fx.h"
+#include "fx/blood_particles_fx.h"
 //#include "boulder_hazard.h" // close-range ground-boulder hazard
 
-// Dust (implemented later near lock-on indicator)
-static void dust_reset(void);
-static void dust_update(float dt);
-static void dust_draw(T3DViewport *viewport);
-
-// Blood (implemented after dust)
-static void blood_reset(void);
-static void blood_update(float dt);
-static void blood_draw(T3DViewport *viewport);
+// Forward declaration: scene_init() and scene_restart() start the Guardian intro.
+void scene_init_cutscene(void);
 
 T3DModel* mapModel;
 rspq_block_t* mapDpl;
@@ -117,13 +111,13 @@ ScrollParams floorGlowScrollParams = {
 
 //======== PHASE 2 ========
 
-static T3DModel* bossChainsModel; 
-static rspq_block_t* bossChainsDpl; 
-static T3DMat4FP* bossChainsMatrix; 
-static T3DSkeleton* bossChainsSkeleton; 
-static T3DAnim** bossChainsAnimations = NULL;
-static int currentBossChainsAnimation = 0;
-static bool bossChainsVisible = true;
+// static T3DModel* bossChainsModel;
+// static rspq_block_t* bossChainsDpl;
+// static T3DMat4FP* bossChainsMatrix;
+// static T3DSkeleton* bossChainsSkeleton;
+// static T3DAnim** bossChainsAnimations = NULL;
+// static int currentBossChainsAnimation = 0;
+// static bool bossChainsVisible = true;
 
 T3DModel* bossChainsGlowModel;
 rspq_block_t* bossChainsGlowDpl;
@@ -136,28 +130,16 @@ ScrollParams bossChainsGlowScrollParams = {
 
 //==========================
 
-// Dynamic Banner (Title Screen)
-static T3DModel* dynamicBannerModel; 
-static rspq_block_t* dynamicBannerDpl; 
-static T3DMat4FP* dynamicBannerMatrix; 
-static T3DSkeleton* dynamicBannerSkeleton; 
-static T3DAnim** dynamicBannerAnimations = NULL;
-
-static int currentTitleDialog = 0;
-static float titleTextActivationTimer = 0.0f;
-static float titleTextActivationTime = 50.0f;
-
-static float titleStartGameTimer = 0.0f;
-static float titleStartGameTime = 10.0f;
-static float titleFadeTime = 7.0f;
-
+// Guardian room vertical offset
 static float roomY = -1.0f;
 
-// Title scene character facing: rotate to face down the hall
-static const float TITLE_CHARACTER_YAW = T3D_PI * 0.5f; // +90° around Y
-
+// Cutscene/screen transition state shared with Guardian cutscene context.
 static bool screenTransition = false;
-static bool screenBreath = false;
+
+// Character yaw used when gameplay begins.
+// The old title-facing yaw was +90 degrees; gameplay faces the opposite direction.
+static const float GUARDIAN_CHARACTER_YAW = T3D_PI * 1.5f;
+
 
 // ------------------------------------------------------------
 // Video trigger AABB at world origin
@@ -177,19 +159,6 @@ static const float VIDEO_BLACK_HOLD_S = 0.5f;
 static const float VIDEO_FADE_SPEED   = 200.0f; // same scale you already use
 static bool bossDeathMusicFadeStarted = false;
 
-#define TITLE_DIALOG_COUNT (sizeof(titleDialogs) / sizeof(titleDialogs[0]))
-
-static const char *titleDialogs[] = {
-    ">The Demon\nking has\nforced\nthe land\ninto a\ncentury long\ndarkness.",
-    ">The King\nhas trained\na legion\nof powerful\nknights\nsworn to\nprotect the\nthrone.",
-    ">These\nbattle born\nknights are\ntaken from\ntheir\nfamilies and\ncast into\nservitude.",
-    ">Enduring\nblade and\ntorment\nuntil nothing\nremains but\nhollow armor."
-};
-
-// (phase1Dialogs / phase2Dialogs and cutsceneDialogActive, phase2CutsceneTriggered,
-// bossPostDefeatDialogStep all live in cutscene_manager.c — accessed via the
-// internal header above.)
-
 // Post-boss interaction ("restored") state
 static bool bossPostDefeatTalkDone = false;
 static bool bossWasDead = false; // Tracks death transition for one-time post-death cleanup
@@ -202,7 +171,7 @@ static double s_bossRunStartS = 0.0;
 static const float POST_BOSS_PROMPT_DIST  = 140.0f;   // show A prompt and allow talk when inside this range
 
 // ------------------------------------------------------------
-// Cutscene music -> looping boss music handoff
+// Cutscene music
 // ------------------------------------------------------------
 static bool s_pendingBossLoopMusic = false;
 static const char *s_bossLoopMusicPath = "rom:/audio/music/boss_phase1-looping-22k.wav64";
@@ -267,11 +236,10 @@ static float uiIntroSpeed = 1.5f;
 
 // (cutsceneState, cutsceneTimer, cutsceneCameraTimer, cutsceneCamPosStart/End
 // live in cutscene_manager.c — accessed via the internal header above.)
-static bool bossActivated = false;
 static Boss* g_boss = NULL;  // Boss instance pointer
 
 // Game state management
-static GameState gameState = GAME_STATE_TITLE;
+static GameState gameState = GAME_STATE_PLAYING;
 static bool lastMenuActive = false;
 
 // Death screen restart lockout (prevents rapid A-mash from instantly restarting)
@@ -309,41 +277,6 @@ static int s_lockTargetIndex = LOCK_TARGET_WAIST;
 static sprite_t* victoryTitleBgSprite = NULL;
 static surface_t victoryTitleBgSurf = {0};
 
-// Dust particle sprite (simple puffs)
-static sprite_t* dustParticleSprite = NULL;
-static surface_t dustParticleSurf = {0};
-
-// Blood splatter sprites (large + medium variants + tiny variants).
-// Loaded as IA8 so they can be tinted red via prim color and stay TMEM-cheap.
-enum {
-    BLOOD_SPRITE_LARGE = 0,
-    BLOOD_SPRITE_MEDIUM_A,
-    BLOOD_SPRITE_MEDIUM_B,
-    BLOOD_SPRITE_MEDIUM_C,
-    BLOOD_SPRITE_TINY_A,
-    BLOOD_SPRITE_TINY_B,
-    BLOOD_SPRITE_TINY_C,
-    BLOOD_SPRITE_COUNT
-};
-static sprite_t* bloodSprites[BLOOD_SPRITE_COUNT] = {0};
-static surface_t bloodSurfs[BLOOD_SPRITE_COUNT] = {0};
-
-// Z-target lock-on icon sprite
-static sprite_t* zTargetIconSprite = NULL;
-static surface_t zTargetIconSurf = {0};
-
-// HUD: C-button item assignment (health potion on C-left)
-static sprite_t* cUpSprite = NULL;
-static sprite_t* cDownSprite = NULL;
-static sprite_t* cLeftSprite = NULL;
-static sprite_t* cRightSprite = NULL;
-static surface_t cUpSurf = {0};
-static surface_t cDownSurf = {0};
-static surface_t cLeftSurf = {0};
-static surface_t cRightSurf = {0};
-
-static sprite_t* healthBottleSprite = NULL;
-static surface_t healthBottleSurf = {0};
 
 static const char *SCENE1_SFX_PATHS[SCENE1_SFX_COUNT] = {
     [SCENE1_SFX_TITLE_WALK]  = "rom:/audio/sfx/title_screen_walk_effect-22k.wav64",
@@ -596,81 +529,10 @@ void scene_load_environment(void)
 
     // Global/system-level effect. Keep loaded if it is used outside one cutscene,
     // or move it later if it is phase-2-only.
-    lightning_fx_system_init("rom:/boss/boss_back_sword_lightning2.t3dm");
+    // lightning_fx_system_init("rom:/boss/boss_back_sword_lightning2.t3dm");
 }
 
-static void scene_title_init_dynamic_banner_assets(void)
-{
-    if (dynamicBannerModel) return;
-
-    // ===== LOAD Dynamic Banner (Title Screen) =====
-    dynamicBannerModel = t3d_model_load("rom:/title_screen/dynamic_banners.t3dm"); 
-    dynamicBannerSkeleton = malloc_uncached(sizeof(T3DSkeleton)); 
-    *dynamicBannerSkeleton = t3d_skeleton_create(dynamicBannerModel); 
-    const char* dynamicBannerAnimationNames[] = {"Wind"}; 
-    const int dynamicBannerAnimationCount = 1;
-
-    dynamicBannerAnimations = malloc_uncached(dynamicBannerAnimationCount * sizeof(T3DAnim*)); 
-    for (int i = 0; i < dynamicBannerAnimationCount; i++) { 
-        dynamicBannerAnimations[i] = malloc_uncached(sizeof(T3DAnim)); 
-        *dynamicBannerAnimations[i] = t3d_anim_create(dynamicBannerModel, dynamicBannerAnimationNames[i]); 
-        t3d_anim_set_looping(dynamicBannerAnimations[i], true); 
-        t3d_anim_set_playing(dynamicBannerAnimations[i], true); 
-        t3d_anim_attach(dynamicBannerAnimations[i], dynamicBannerSkeleton); 
-    }
-
-    rspq_block_begin(); 
-    t3d_model_draw_skinned(dynamicBannerModel, dynamicBannerSkeleton); 
-    dynamicBannerDpl = rspq_block_end(); 
-    dynamicBannerMatrix = malloc_uncached(sizeof(T3DMat4FP)); 
-    t3d_mat4fp_from_srt_euler(dynamicBannerMatrix, (float[3]){MODEL_SCALE, MODEL_SCALE, MODEL_SCALE}, (float[3]){0.0f, 0.0f, 0.0f}, (float[3]){0.0f, roomY, 0.0f} );
-}
-
-static void scene_title_init(void)
-{
-    // Ensure title-only assets are loaded once.
-    scene_title_init_dynamic_banner_assets();
-
-    audio_play_music("rom:/audio/music/demonous-22k.wav64", true);
-
-    // Init to title screen position
-    camera_mode(CAMERA_CUSTOM);
-    camera_initialize(
-        &(T3DVec3){{-580.6f, 75.0f, 0.0f}}, 
-        &(T3DVec3){{-1,0,0}}, 
-        1.544792654048f, 
-        4.05f
-    );
-
-    customCamTarget.v[1] = 90.0f;
-
-    character.pos[0] = -650.0f;
-    character.pos[1] = 44.0f;
-    character.pos[2] = 0.0f;
-
-    character.scale[0] = MODEL_SCALE * 1.5f;
-    character.scale[1] = MODEL_SCALE * 1.5f;
-    character.scale[2] = MODEL_SCALE * 1.5f;
-
-    character.rot[1] = TITLE_CHARACTER_YAW;
-
-    character_update_position();
-
-    // Reset/prime banner animation so restarts start from a consistent pose.
-    if (dynamicBannerAnimations && dynamicBannerAnimations[0]) {
-        t3d_anim_set_time(dynamicBannerAnimations[0], 0.0f);
-        t3d_anim_set_playing(dynamicBannerAnimations[0], true);
-    }
-
-    // Start Dialog
-    currentTitleDialog = 0;
-    titleTextActivationTimer = 0.0f;
-    dialog_controller_speak(titleDialogs[0], 0, 9.0f, false, true);
-
-    startScreenFade = true;
-}
-
-void scene_init(void) 
+void scene_init(void)
 {
     joypad_rumble_stop();
 
@@ -682,7 +544,7 @@ void scene_init(void)
 
     cameraState = CAMERA_CUSTOM;
     lastCameraState = CAMERA_CUSTOM;
-    
+
     // ==== Lighting ====
     game_lighting_initialize();
     colorAmbient[2] = 0xFF;
@@ -695,43 +557,26 @@ void scene_init(void)
     // colorDir[1] = 0xFF;
     // colorDir[0] = 0xFF;
     // colorDir[3] = 0xFF;
-    // lightDirVec = (T3DVec3){{-0.9833f, 0.1790f, -0.0318f}}; 
+    // lightDirVec = (T3DVec3){{-0.9833f, 0.1790f, -0.0318f}};
     // t3d_vec3_norm(&lightDirVec);
 
-    // Load collision mesh
-    // NOTE: If collision wireframe doesn't match the rendered room, adjust this scale.
-    // The exported bossroom.collision is in glb units (~ +/- 100). Using 0.1 made the
-    // collision volume a tiny square; start with 1.0 for now.
-    // collision_mesh_set_transform(6.2f, 0.0f, roomY, 0.0f);
-    // collision_mesh_init();
-
     scene_load_environment();
-    
+
     g_boss = boss_spawn();
     if (!g_boss) {
         // Handle error
         return;
     }
 
+    // The scene owns when the boss is commanded into/out of gameplay,
+    // but the boss owns the actual active/cinematic/combat mode internally.
+    boss_deactivate(g_boss);
+
     boss_ground_crush_init();
 
-    // Transform will be updated in boss_update()
-    
-    // Make character face the boss
-    // Note: dx and dz were calculated but not used - keeping for potential future use
-    // float dx = g_boss->pos[0] - character.pos[0];
-    // float dz = g_boss->pos[2] - character.pos[2];
-
-    // Initialize character
-    character_init();
-    
-    // // Set character initial position to be on the ground
-    // character.pos[0] = 150.0f;
-    // character.pos[1] = -4.8f;  // Position character feet on map surface
-    // // Spawn inside the collision volume.
-    // character.pos[2] = 0.0f;
-    // character.rot[1] = -atan2f(dx, dz);
-    // character_update_position();  // Update transform matrix with new rotation
+    // reset character
+    character_reset();
+    character_reset_button_state();
 
     // Initialize dialog controller
     dialog_controller_init();
@@ -744,59 +589,12 @@ void scene_init(void)
         victoryTitleBgSurf = sprite_get_pixels(victoryTitleBgSprite);
     }
 
-    // Load dust particle sprite
-    dustParticleSprite = sprite_load("rom:/dustParticle.ia8.sprite");
-    if (dustParticleSprite) {
-        dustParticleSurf = sprite_get_pixels(dustParticleSprite);
-    }
+    particle_system_init();
+    dust_particles_fx_init();
+    blood_particles_fx_init();
 
-    // Load blood splatter sprites (IA8 - tinted red at draw time)
-    static const char* bloodPaths[BLOOD_SPRITE_COUNT] = {
-        "rom:/blood/blood_large.ia8.sprite",
-        "rom:/blood/blood_medium_a.ia8.sprite",
-        "rom:/blood/blood_medium_b.ia8.sprite",
-        "rom:/blood/blood_medium_c.ia8.sprite",
-        "rom:/blood/blood_tiny_a.ia8.sprite",
-        "rom:/blood/blood_tiny_b.ia8.sprite",
-        "rom:/blood/blood_tiny_c.ia8.sprite",
-    };
-    for (int i = 0; i < BLOOD_SPRITE_COUNT; i++) {
-        bloodSprites[i] = sprite_load(bloodPaths[i]);
-        if (bloodSprites[i]) {
-            bloodSurfs[i] = sprite_get_pixels(bloodSprites[i]);
-        }
-    }
-
-    // Load Z-target lock-on icon (IA8 so the alpha gradient is preserved)
-    zTargetIconSprite = sprite_load("rom:/ztargetIcon.ia8.sprite");
-    if (zTargetIconSprite) {
-        zTargetIconSurf = sprite_get_pixels(zTargetIconSprite);
-    }
-
-    // Load C-button HUD icons.
-    // C-left uses the empty variant because the health potion graphic is drawn over it.
-    // The other three show the arrow icon (unassigned slots), so use the regular variant.
-    cUpSprite = sprite_load("rom:/buttons/CUp.sprite");
-    if (cUpSprite) cUpSurf = sprite_get_pixels(cUpSprite);
-    cDownSprite = sprite_load("rom:/buttons/CDown.sprite");
-    if (cDownSprite) cDownSurf = sprite_get_pixels(cDownSprite);
-    cLeftSprite = sprite_load("rom:/buttons/CButton_empty.sprite");
-    if (cLeftSprite) cLeftSurf = sprite_get_pixels(cLeftSprite);
-    cRightSprite = sprite_load("rom:/buttons/CRight.sprite");
-    if (cRightSprite) cRightSurf = sprite_get_pixels(cRightSprite);
-
-    // Load health potion bottle sprite (IA8)
-    healthBottleSprite = sprite_load("rom:/healthBottle.ia8.sprite");
-    if (healthBottleSprite) {
-        healthBottleSurf = sprite_get_pixels(healthBottleSprite);
-    }
-
-    // Start boss music
-    // TODO: Its turned off for now as it gets annoying to listen to and it crackles
-    // audio_play_music("rom:/audio/music/boss_final_phase.wav64", true);
-
-    // Start boss intro cutscene after character and boss are loaded and positioned
-    //dialog_controller_speak("^A powerful enemy approaches...~\n<Prepare for battle!", 0, 3.0f, false, true);
+    character_ui_init();
+    boss_ui_init();
 
     // Initialize and show letterbox bars for intro
     letterbox_init();
@@ -804,19 +602,25 @@ void scene_init(void)
 
     collision_init();
 
-    scene_title_init();
 
-    dust_reset();
-    blood_reset();
+    dust_particles_fx_reset();
+    blood_particles_fx_reset();
 
     msa_init();
+
+    // Guardian scene normal startup: entering the scene starts the phase-1 intro.
+    gameState = GAME_STATE_PLAYING;
+    cutsceneState = CUTSCENE_PHASE1_INTRO;
+    cutsceneTimer = 0.0f;
+    cutsceneCameraTimer = 0.0f;
+    scene_init_cutscene();
+    audio_stop_all_sfx();
 
     // DEBUG: uncomment to start the fight in phase 2
     // if (g_boss) g_boss->phaseIndex = 2;
     // phase2CutsceneTriggered = true;
 }
 
-static bool scene_get_boss_bone_world_pos(int boneIndex, T3DVec3 *outWorld);
 
 static inline int scene_lockon_bone_index_for_target(LockTargetId target)
 {
@@ -862,12 +666,12 @@ static T3DVec3 get_boss_lock_focus_point(void)
     // 1) Selected target (if available)
     T3DVec3 worldPos;
     int bone = scene_lockon_bone_index_for_target((LockTargetId)s_lockTargetIndex);
-    if (scene_get_boss_bone_world_pos(bone, &worldPos)) {
+    if (boss_get_bone_world_pos(g_boss, bone, &worldPos)) {
         return worldPos;
     }
 
-    // 3) Ultimate fallback: boss position with a small lift so the marker isn't at the feet.
-    return (T3DVec3){{ g_boss->pos[0], g_boss->pos[1] + 40.0f, g_boss->pos[2] }};
+    // Ultimate fallback: boss position with a small lift so the marker is not at the feet.
+    return boss_get_fallback_lock_focus_point(g_boss);
 }
 
 void scene_reset(void)
@@ -879,9 +683,11 @@ void scene_reset(void)
     skipButtonVisible = false;
     lastCutsceneAPressed = false;
     // Note: skipButtonVisible is also used for title transition, so we reset it here
-    bossActivated = false;
+    if (g_boss) {
+        boss_deactivate(g_boss);
+    }
     phase2CutsceneTriggered = false;
-    gameState = GAME_STATE_TITLE;
+    gameState = GAME_STATE_PLAYING;
     lastMenuActive = false;
     lastAPressed = false;
     lastStartPressed = false;
@@ -901,20 +707,16 @@ void scene_reset(void)
     bossDeathMusicFadeStarted = false;
     videoTrigFired = false;
     videoPendingPlay = false;
-
-    // Title state
+    // Cutscene fade/transition state
     screenTransition = false;
-    screenBreath = false;
-    titleStartGameTimer = 0.0f;
-    titleTextActivationTimer = 0.0f;
-    currentTitleDialog = 0;
-
     // UI state
     bossTitleFade = 0.0f;
     bossUiIntro = 1.0f;
     playerUiIntro = 1.0f;
-    display_utility_set_boss_ui_intro(bossUiIntro);
-    display_utility_set_player_ui_intro(playerUiIntro);
+    boss_ui_reset();
+    character_ui_reset();
+    boss_ui_set_intro(bossUiIntro);
+    character_ui_set_intro(playerUiIntro);
 
     // Victory end-card state
     victoryTitleTimer = 0.0f;
@@ -944,9 +746,9 @@ void scene_reset(void)
     s_bossRunActive = false;
     s_bossRunStartS = 0.0;
 
-    dust_reset();
+    dust_particles_fx_reset();
+    blood_particles_fx_reset();
     boss_ground_crush_reset();
-    blood_reset();
 }
 
 static void scene_sync_input_edge_state(void)
@@ -975,26 +777,6 @@ static inline float scene_dist_xz(float ax, float az, float bx, float bz) {
     return sqrtf(dx*dx + dz*dz);
 }
 
-static bool scene_get_boss_bone_world_pos(int boneIndex, T3DVec3 *outWorld)
-{
-    if (!outWorld) return false;
-    if (!g_boss || !g_boss->skeleton || !g_boss->modelMat) return false;
-    if (boneIndex < 0) return false;
-
-    T3DSkeleton* skel = (T3DSkeleton*)g_boss->skeleton;
-    const T3DMat4FP* boneMat = &skel->boneMatricesFP[boneIndex];
-    const T3DMat4FP* modelMat = (const T3DMat4FP*)g_boss->modelMat;
-
-    const float boneLocal[3] = { 0.0f, 0.0f, 0.0f };
-    float boneModel[3];
-    mat4fp_mul_point_f32_row3_colbasis(boneMat, boneLocal, boneModel);
-
-    float boneWorld[3];
-    mat4fp_mul_point_f32_row3_colbasis(modelMat, boneModel, boneWorld);
-
-    *outWorld = (T3DVec3){{ boneWorld[0], boneWorld[1], boneWorld[2] }};
-    return true;
-}
 
 static void scene_debug_force_boss_defeated(void)
 {
@@ -1014,6 +796,7 @@ static void scene_debug_force_boss_defeated(void)
 
     // If the boss had any pending external AI requests, clear them too.
     g_boss->pendingRequests = 0;
+    boss_set_mode(g_boss, BOSS_MODE_POST_DEFEAT);
 
     // Enter victory state so the "Enemy restored" end-card renders/advances.
     // This is primarily for debugging (L-trigger skip).
@@ -1037,154 +820,12 @@ static void scene_debug_force_boss_defeated(void)
     bossPostDefeatDialogStep = 0;
 }
 
-static void draw_post_boss_a_prompt(T3DViewport *viewport)
-{
-    // Show "A" above the boss only after defeat, when close enough to interact.
-    if (!viewport || !button_prompt_has_a_button()) return;
-    if (scene_is_cutscene_active() || !scene_is_boss_active() || !g_boss) return;
-    if (g_boss->state != BOSS_STATE_DEAD) return;
-
-    // Show whenever we're near the boss, regardless of facing. The A press itself
-    // still requires the character to be facing the boss (see interact gate).
-    if (!scene_post_boss_in_range(g_boss)) return;
-
-    // Anchor to the boss head bone (true attachment). Fall back to lock-focus if head bone isn't available.
-    T3DVec3 worldPos;
-    if (!scene_get_boss_bone_world_pos(g_boss->headBoneIndex, &worldPos)) {
-        worldPos = get_boss_lock_focus_point();
-    }
-    // Small lift so the prompt doesn't intersect the head.
-    worldPos.v[1] += 12.0f;
-
-    T3DVec3 screenPos;
-    t3d_viewport_calc_viewspace_pos(viewport, &screenPos, &worldPos);
-
-    // Skip if behind camera
-    if (screenPos.v[2] >= 1.0f) return;
-
-    int px = (int)screenPos.v[0];
-    int py = (int)screenPos.v[1];
-
-    const int margin = 16;
-    if (px < -margin || px > SCREEN_WIDTH + margin || py < -margin || py > SCREEN_HEIGHT + margin) {
-        return;
-    }
-
-    button_prompt_draw_a_icon_centered(px, py, 20.0f);
-}
-
-static void draw_cbutton_hud(void)
-{
-    // Bottom-left C-button diamond. C-left holds the health potion (empty button
-    // sprite with the bottle drawn on top); the other three show their arrow icons.
-    if (!cLeftSprite) return;
-
-    int w = (cLeftSurf.width > 0) ? cLeftSurf.width : 24;
-    int h = (cLeftSurf.height > 0) ? cLeftSurf.height : 24;
-    // Target on-screen button size — source sprites are 64×64.
-    const float kTargetButtonPx = 20.0f;
-    int srcMax = (w > h) ? w : h;
-    const float cScale = (srcMax > 0) ? (kTargetButtonPx / (float)srcMax) : 1.0f;
-    int drawW = (int)((float)w * cScale);
-    int drawH = (int)((float)h * cScale);
-
-    const int marginX = ui_safe_margin_x();
-    const int marginY = ui_safe_margin_y();
-
-    // Diamond spacing: the source sprites have transparent padding, so tighten
-    // the centre-to-centre offset to ~half a button so visible edges touch.
-    const float kSpacingFrac = 0.7f;
-    int spacingX = (int)((float)drawW * kSpacingFrac);
-    int spacingY = (int)((float)drawH * kSpacingFrac);
-
-    // Diamond centre: enough room from the safe bounds that the outer C-left
-    // and C-down icons sit flush against the bottom-left corner.
-    int centerX = marginX + spacingX + (drawW / 2);
-    int centerY = SCREEN_HEIGHT - marginY - spacingY - (drawH / 2);
-
-    int leftX  = centerX - spacingX; int leftY  = centerY;
-    int rightX = centerX + spacingX; int rightY = centerY;
-    int upX    = centerX;            int upY    = centerY - spacingY;
-    int downX  = centerX;            int downY  = centerY + spacingY;
-
-    rdpq_sync_pipe();
-    rdpq_set_mode_standard();
-    rdpq_mode_alphacompare(0);
-    rdpq_mode_blender(RDPQ_BLENDER_MULTIPLY);
-    rdpq_mode_filter(FILTER_BILINEAR);
-
-    if (cUpSprite && cUpSurf.width > 0 && cUpSurf.height > 0) {
-        rdpq_sprite_blit(cUpSprite, upX, upY, &(rdpq_blitparms_t){
-            .scale_x = cScale, .scale_y = cScale,
-            .cx = cUpSurf.width / 2, .cy = cUpSurf.height / 2,
-        });
-    }
-    if (cDownSprite && cDownSurf.width > 0 && cDownSurf.height > 0) {
-        rdpq_sprite_blit(cDownSprite, downX, downY, &(rdpq_blitparms_t){
-            .scale_x = cScale, .scale_y = cScale,
-            .cx = cDownSurf.width / 2, .cy = cDownSurf.height / 2,
-        });
-    }
-    if (cRightSprite && cRightSurf.width > 0 && cRightSurf.height > 0) {
-        rdpq_sprite_blit(cRightSprite, rightX, rightY, &(rdpq_blitparms_t){
-            .scale_x = cScale, .scale_y = cScale,
-            .cx = cRightSurf.width / 2, .cy = cRightSurf.height / 2,
-        });
-    }
-    if (cLeftSurf.width > 0 && cLeftSurf.height > 0) {
-        rdpq_sprite_blit(cLeftSprite, leftX, leftY, &(rdpq_blitparms_t){
-            .scale_x = cScale, .scale_y = cScale,
-            .cx = cLeftSurf.width / 2, .cy = cLeftSurf.height / 2,
-        });
-    }
-
-    // Only show the potion bottle + count when the player still has potions.
-    if (character_get_health_potion_count() > 0) {
-        if (healthBottleSprite && healthBottleSurf.width > 0 && healthBottleSurf.height > 0) {
-            float target = (float)((drawW < drawH) ? drawW : drawH) * 0.80f;
-            float denom = (float)((healthBottleSurf.width > healthBottleSurf.height) ? healthBottleSurf.width : healthBottleSurf.height);
-            float s = (denom > 0.0f) ? (target / denom) : 1.0f;
-            if (s < 0.05f) s = 0.05f;
-            if (s > 4.0f)  s = 4.0f;
-
-            // Tint the IA8 bottle sprite dark red so it contrasts against the yellow button.
-            rdpq_sync_pipe();
-            rdpq_set_mode_standard();
-            rdpq_mode_alphacompare(1);
-            rdpq_mode_combiner(RDPQ_COMBINER_TEX_FLAT);
-            rdpq_mode_blender(RDPQ_BLENDER_MULTIPLY);
-            rdpq_mode_filter(FILTER_BILINEAR);
-            rdpq_set_prim_color(RGBA32(180, 30, 30, 255));
-
-            rdpq_sprite_blit(healthBottleSprite, leftX, leftY, &(rdpq_blitparms_t){
-                .scale_x = s, .scale_y = s,
-                .cx = healthBottleSurf.width / 2, .cy = healthBottleSurf.height / 2,
-            });
-        }
-
-        {
-            int count = character_get_health_potion_count();
-            // Place the count immediately to the right of the potion graphic,
-            // vertically aligned to the button centre.
-            const int textX = leftX + (drawW / 2) + 2;
-            const int textY = leftY + 4;
-
-            rdpq_sync_pipe();
-            rdpq_set_mode_standard();
-            rdpq_mode_combiner(RDPQ_COMBINER_FLAT);
-            rdpq_mode_blender(RDPQ_BLENDER_MULTIPLY);
-            rdpq_set_prim_color(RGBA32(0, 0, 0, 255));
-            rdpq_text_printf(NULL, FONT_UNBALANCED, textX, textY, "%d", count);
-        }
-    }
-}
-
 bool scene_is_cutscene_active(void) {
     return cutsceneState != CUTSCENE_NONE;
 }
 
 bool scene_is_boss_active(void) {
-    return bossActivated;
+    return boss_is_active(g_boss);
 }
 
 GameState scene_get_game_state(void) {
@@ -1219,38 +860,9 @@ bool scene_is_menu_active(void) {
     return gameState == GAME_STATE_MENU;
 }
 
-void scene_begin_title_transition(void)
-{
-    if (gameState == GAME_STATE_TITLE_TRANSITION) return;
-    if (gameState != GAME_STATE_TITLE) return;
-
-    // Hide title menu immediately once we commit to transitioning.
-    menu_controller_close();
-
-    gameState = GAME_STATE_TITLE_TRANSITION;
-    skipButtonVisible = false; // Reset skip button state when entering transition
-    lastCutsceneAPressed = false;
-
-    camera_breath_active(false);
-    screenBreath = false;
-    audio_stop_music_fade(6); // duration
-    audio_play_scene_sfx_dist(
-        SCENE1_SFX_TITLE_WALK, // sfx id
-        1.0f,                  // base volume
-        0.0f                   // distance
-    );
-}
-
-// Check if character would collide with room boundaries at the given position
-// Returns true if character would be outside room bounds (collision detected)
-// bool scene_check_room_bounds(float posX, float posY, float posZ)
-// {
-//     return collision_mesh_check_bounds(posX, posY, posZ);
-// }
-
 void scene_restart(void)
 {
-    debugf("RESTART: Starting restart sequence\n");
+    debugf("RESTART: Starting Guardian scene restart sequence\n");
 
     // 1) Stop running systems first (prevents update-on-freed state)
     audio_stop_all_sfx();
@@ -1264,16 +876,22 @@ void scene_restart(void)
     if (g_boss) boss_reset(g_boss);
     character_reset();
 
-    // 4) Reset camera / lock-on and scene runtime flags
+    // 4) Reset camera / lock-on and Guardian runtime flags
     camera_reset();
     camera_mode(CAMERA_CUSTOM);
     scene_reset();
 
-    // 5) Enter title runtime state (NO re-init / NO allocations)
-    scene_title_init();
+    // 5) Re-enter Guardian intro runtime state (NO allocations / NO frees)
+    gameState = GAME_STATE_PLAYING;
+    cutsceneState = CUTSCENE_PHASE1_INTRO;
+    cutsceneTimer = 0.0f;
+    cutsceneCameraTimer = 0.0f;
+    scene_init_cutscene();
+    audio_stop_all_sfx();
+
     scene_sync_input_edge_state();
 
-    debugf("RESTART: Soft reset complete. cameraState=%d speaking=%s\n",
+    debugf("RESTART: Guardian soft reset complete. cameraState=%d speaking=%s\n",
            cameraState, dialog_controller_speaking() ? "true" : "false");
 }
 
@@ -1288,9 +906,11 @@ void scene_init_playing(bool skippedCutscene)
     character.scale[2] = MODEL_SCALE * 0.5f;
 
     // Face towards boss
-    character.rot[1] = TITLE_CHARACTER_YAW + T3D_PI;
+    character.rot[1] = GUARDIAN_CHARACTER_YAW;
 
     character_update_position();
+    character_set_state(CHAR_STATE_NORMAL);
+    character_set_velocity_xz(0.0f, 0.0f);
 
     // Skip dialog and cutscene
     dialog_controller_stop_speaking();
@@ -1302,7 +922,9 @@ void scene_init_playing(bool skippedCutscene)
     skipButtonVisible = false;
     lastCutsceneAPressed = false;
 
-    bossActivated = true;
+    if (g_boss) {
+        boss_activate_combat(g_boss);
+    }
 
     // Starting a new run (boss attempt).
     // Default save slot is 0 ("Save 1") until we have a UI to pick slots.
@@ -1336,8 +958,8 @@ void scene_init_playing(bool skippedCutscene)
     // Reset UI intro animations (they will slide/fade into view)
     bossUiIntro = 0.0f;
     playerUiIntro = 0.0f;
-    display_utility_set_boss_ui_intro(bossUiIntro);
-    display_utility_set_player_ui_intro(playerUiIntro);
+    boss_ui_set_intro(bossUiIntro);
+    character_ui_set_intro(playerUiIntro);
 
 #if DEBUG_BOULDER_ATTACK_FIRST
     // Debug: immediately open phase 1 with the boulder attack so the hazard
@@ -1377,9 +999,7 @@ void scene_dev_warp_to_pre_phase2(void)
     }
 }
 
-// End-of-phase-2-cutscene teardown: drop cutscene-only effects and hand control
-// back to the fight at phase 2. Used both when the cutscene completes naturally
-// and when the player skips it via the A-button overlay.
+// End of phase2 cutscene teardown
 static void scene_finish_phase2_cutscene(void)
 {
     lightning_fx_system_ring_enable(false);
@@ -1389,26 +1009,22 @@ static void scene_finish_phase2_cutscene(void)
     cutsceneDialogActive = false;
 
     if (g_boss) {
+        boss_activate_combat(g_boss);
+
         g_boss->phaseIndex = 2;
         g_boss->handAttackColliderActive = false;
         g_boss->sphereAttackColliderActive = false;
         g_boss->velX = 0.0f;
         g_boss->velZ = 0.0f;
 
-        // Phase 2 opens with the aerial sword barrage. The handler
-        // lifts the boss to hoverCenterPos.y + hoverHeight and brings
-        // him back down at the end (no gravity in this game).
+        // Phase 2 opens with the aerial sword barrage.
         boss_ai_start_aerial_sword_barrage(g_boss);
     }
 
     // Phase 2 cutscene music was started non-looping; arm the boss loop to take over.
     s_pendingBossLoopMusic = true;
 
-    // Long camera blend so the cinematic angle holds while the boss
-    // lifts ~80 units for the aerial sword barrage. With a short
-    // (1s) blend the player-follow camera snaps to the player
-    // while the boss is mid-lift and he ends up off-screen — the
-    // visible result is "swords fall, boss never moved."
+    // Long camera blend so the cinematic angle hold
     camera_mode_smooth(CAMERA_CHARACTER, 5.0f);
     cameraLockOnActive = true;
 
@@ -1417,12 +1033,10 @@ static void scene_finish_phase2_cutscene(void)
     cutsceneState = CUTSCENE_NONE;
     skipButtonVisible = false;
 
-    // HUD was hidden the whole cutscene — snap intro + trail so it
-    // reappears at the current value instead of animating back in.
     bossUiIntro = 1.0f;
-    display_utility_set_boss_ui_intro(1.0f);
+    boss_ui_set_intro(1.0f);
     if (g_boss && g_boss->maxHealth > 0.0f) {
-        display_utility_snap_boss_health_trail(g_boss->health / g_boss->maxHealth);
+        boss_ui_snap_health_trail(g_boss->health / g_boss->maxHealth);
     }
 
     character_reset_button_state();
@@ -1546,12 +1160,10 @@ void scene_cutscene_update(void)
 
     switch (cutsceneState) {
         case CUTSCENE_POST_BOSS_RESTORED: {
-            // Post-boss dialog runs while gameplay continues to animate.
-            // Player input stays disabled by character_update() while a cutscene is active.
-            character_update();
-            character_update_position();
+            // Post-boss dialog runs while gameplay continues to animate without player input.
+            character_update_cinematic();
 
-            if (bossActivated && g_boss) {
+            if (boss_is_active(g_boss)) {
                 boss_update(g_boss);
             }
 
@@ -1608,126 +1220,7 @@ void scene_cutscene_update(void)
     scene_update_post_boss_cutscene_input();
 }
 
-void scene_update_title(void)
-{
-    if(gameState == GAME_STATE_TITLE_TRANSITION)
-    {
-        if(titleStartGameTimer >= titleStartGameTime){
-            titleStartGameTimer = 0.0f;
-            // Enter the intro cutscene intentionally from title.
-            cutsceneState = CUTSCENE_PHASE1_INTRO;
-            cutsceneTimer = 0.0f;
-            cutsceneCameraTimer = 0.0f;
-            scene_init_cutscene();
-            audio_stop_all_sfx(); // TODO: eventually we probably want a stop specific sound effect ID but that would add complexity at this point
-        }
-        else
-        {
-            // Handle skip button - toggle button on first A press, skip on second
-            bool aCurrentlyPressed = btn.a;
-            bool aJustPressed = aCurrentlyPressed && !lastCutsceneAPressed;
-            
-            if (aJustPressed)
-            {
-                if (!skipButtonVisible)
-                {
-                    // First press - show the skip button
-                    skipButtonVisible = true;
-                }
-                else
-                {
-                    // Second press - skip to cutscene
-                    skipButtonVisible = false;
-                    titleStartGameTimer = 0.0f;
-                    cutsceneState = CUTSCENE_PHASE1_INTRO;
-                    cutsceneTimer = 0.0f;
-                    cutsceneCameraTimer = 0.0f;
-                    scene_init_cutscene();
-                    audio_stop_all_sfx();
-                    lastCutsceneAPressed = aCurrentlyPressed;
-                    return;
-                }
-            }
-            
-            // Update last state for next frame
-            lastCutsceneAPressed = aCurrentlyPressed;
-            
-            // Allow start button to skip immediately (original behavior)
-            if(btn.start)
-            {
-                titleStartGameTimer = 0.0f;
-                cutsceneState = CUTSCENE_PHASE1_INTRO;
-                cutsceneTimer = 0.0f;
-                cutsceneCameraTimer = 0.0f;
-                scene_init_cutscene();
-                audio_stop_all_sfx();
-                return;
-            }
-
-            audio_update_fade(deltaTime);
-            titleStartGameTimer += deltaTime;
-
-            float forwardSpeed = 15.0f;
-            float targetDropSpeed = 1.0f;
-
-            // compute forward dir
-            customCamDir.v[0] = customCamTarget.v[0] - customCamPos.v[0];
-            customCamDir.v[1] = customCamTarget.v[1] - customCamPos.v[1];
-            customCamDir.v[2] = customCamTarget.v[2] - customCamPos.v[2];
-            t3d_vec3_norm(&customCamDir);
-
-            // move forward
-            for (int i = 0; i < 3; i++) {
-                customCamPos.v[i]    += customCamDir.v[i] * forwardSpeed * deltaTime;
-                customCamTarget.v[i] += customCamDir.v[i] * forwardSpeed * deltaTime;
-            }
-
-            // gently lower target
-            customCamTarget.v[1] -= targetDropSpeed * deltaTime;
-        }
-        return;
-    }
-
-    // No "press A/Start to begin" here anymore; the title menu handles starting the game.
-    // Keep these updated so other title code relying on them doesn't see stale edges.
-    lastStartPressed = btn.start;
-    lastAPressed = btn.a;
-
-    if (!screenBreath) 
-    { 
-        camera_breath_active(true); 
-        screenBreath = true; 
-    }
-
-    camera_breath_update(deltaTime);
-
-    // Don't advance/play story dialog while browsing title submenus (Audio/Controls/Credits).
-    if (!menu_controller_is_title_submenu_active()) {
-        if(titleTextActivationTimer >= titleTextActivationTime){
-            dialog_controller_update();
-            if(!dialog_controller_speaking())
-            {
-                currentTitleDialog ++;
-                if(currentTitleDialog >= TITLE_DIALOG_COUNT)
-                {
-                    titleTextActivationTimer = 0;
-                    currentTitleDialog = -1;
-                }
-                else
-                {
-                    dialog_controller_speak(titleDialogs[currentTitleDialog], 0, 9.0f, false, true);
-                }
-            }
-        }
-        else
-        {
-            titleTextActivationTimer += deltaTime;
-        }
-    }
-}
-
-void scene_update(void) 
-{
+void scene_update(void) {
     if (gameState == GAME_STATE_VIDEO) {
         return;
     }
@@ -1750,21 +1243,9 @@ void scene_update(void)
     }
 
     scene_update_video_preroll();  // always safe; it early-outs
-    
+
     // Update all scrolling textures
     scroll_update();
-
-    if(gameState == GAME_STATE_TITLE || gameState == GAME_STATE_TITLE_TRANSITION)
-    {
-        scene_update_title();
-        character_update();
-        t3d_anim_update(dynamicBannerAnimations[0], deltaTime);
-        t3d_skeleton_update(dynamicBannerSkeleton);
-        // Keep animation state updated (bars not drawn during title)
-        letterbox_update();
-        return;
-    }
-
     // Check if pause menu was just closed - if so, reset character button state
     // NOTE: during victory, the pause menu overlays without switching GAME_STATE to MENU.
     bool pauseMenuBlocking = scene_is_menu_active() || menu_controller_is_pause_menu_active();
@@ -1774,45 +1255,41 @@ void scene_update(void)
     }
     lastMenuActive = pauseMenuBlocking;
 
-    // If player is dead, disable player control but keep boss/UI moving
-    // NOTE: Victory should NOT early-return here; we still want full gameplay updates
-    // (collision/constraints) so the player's colliders don't "stick" in place.
-    if (gameState == GAME_STATE_DEAD) {
-        // Accumulate lockout timer while dead (we still update animations/UI during the end state)
+    // If player is dead, disable player control but keep boss/UI moving.
+    // Death is owned by the character now; the scene only reads the character state.
+    if (character_get_state() == CHAR_STATE_DEAD) {
         deathRestartLockoutTimer += deltaTime;
 
-        // Still update the character so end-state animations (like Death) can play.
-        character_update();
+        // Still update the character so end-state animations, like Death, can play.
+        character_update_cinematic();
 
-        // Keep boss AI updating so it continues moving during end screen
-        if (bossActivated && g_boss) {
+        // Keep boss AI updating so it continues moving during end screen.
+        if (boss_is_active(g_boss)) {
             boss_update(g_boss);
         }
 
-        // Continue letterbox animation updates
         letterbox_update();
 
-        // Allow restart via A button only on death.
-        // Victory should not force a restart prompt / flow.
-        if (gameState == GAME_STATE_DEAD && deathRestartLockoutTimer >= DEATH_RESTART_LOCKOUT_S && btn.a) {
-            scene_restart();
+        if (deathRestartLockoutTimer >= DEATH_RESTART_LOCKOUT_S && btn.a) {
+            scene_controller_switch_to_title();
         }
         return;
     }
-    
+
     // Don't update game logic when pause menu is active (including victory overlay case)
     if (pauseMenuBlocking) {
         return;
     }
 
     // Debug hotkey: L-trigger skips to boss defeated (dead + fully stopped)
-    // NOTE: This is intentionally not gated by DEV_MODE because DEV_MODE is currently
-    // compiled as false in `globals.h`, which would otherwise compile this out.
-    // bool lHeld = joypad.btn.l;
-    // bool lJustPressed = lHeld && !lastLPressed;
-    // lastLPressed = lHeld;
-    // if (lJustPressed && bossActivated && g_boss) {
-    //     scene_debug_force_boss_defeated();
+    // if (DEV_MODE)
+    // {
+    //     bool lHeld = joypad.btn.l;
+    //     bool lJustPressed = lHeld && !lastLPressed;
+    //     lastLPressed = lHeld;
+    //     if (lJustPressed && boss_is_active(g_boss)) {
+    //         scene_debug_force_boss_defeated();
+    //     }
     // }
 
     if(cutsceneState == CUTSCENE_NONE) // Normal gameplay
@@ -1820,7 +1297,7 @@ void scene_update(void)
         // Post-boss interaction trigger: after defeat, when Z-targeted and close enough,
         // start the dialog/camera only when player presses A (held-edge).
         // IMPORTANT: check this BEFORE character_update so A doesn't also trigger a roll.
-        if (bossActivated && g_boss && g_boss->state == BOSS_STATE_DEAD) {
+        if (boss_is_interactable(g_boss) && g_boss->state == BOSS_STATE_DEAD) {
             bool aHeld = joypad.btn.a;
             bool aJustPressed = aHeld && !lastInteractAHeld;
             lastInteractAHeld = aHeld;
@@ -1844,15 +1321,16 @@ void scene_update(void)
         character_update_position();
 
         boss_ground_crush_update(deltaTime);
-        
-        if (bossActivated && g_boss) {
+
+        if (boss_is_active(g_boss)) {
             boss_update(g_boss);
             // Boss death no longer forces GAME_STATE_VICTORY.
             // The boss will play its collapse and remain still; the player can keep moving.
 
             // Phase 2 transition: trigger cutscene when boss health drops to 40%.
 #if PHASE_2_ENABLED
-            if (!phase2CutsceneTriggered && g_boss->phaseIndex == 1
+            if (boss_is_combat_active(g_boss)
+                && !phase2CutsceneTriggered && g_boss->phaseIndex == 1
                 && g_boss->health <= g_boss->maxHealth * 0.4f
                 && g_boss->health > 0.0f) {
                 phase2CutsceneTriggered = true;
@@ -1882,19 +1360,19 @@ void scene_update(void)
         if (bossTitleFade <= 0.0f && bossUiIntro < 1.0f) {
             bossUiIntro += deltaTime / uiIntroSpeed;
             if (bossUiIntro > 1.0f) bossUiIntro = 1.0f;
-            display_utility_set_boss_ui_intro(bossUiIntro);
+            boss_ui_set_intro(bossUiIntro);
         }
         if (playerUiIntro < 1.0f) {
             playerUiIntro += deltaTime / uiIntroSpeed;
             if (playerUiIntro > 1.0f) playerUiIntro = 1.0f;
-            display_utility_set_player_ui_intro(playerUiIntro);
+            character_ui_set_intro(playerUiIntro);
         }
     }
     else // Cutscene
     {
         scene_cutscene_update();
     }
-    
+
     // Update letterbox animation
     letterbox_update();
 
@@ -1910,7 +1388,7 @@ void scene_update(void)
 
     // Post-boss cleanup: once the boss becomes dead, clear Z-targeting so the player is untargeted
     // after the fight. The player can still re-target by pressing Z as normal.
-    if (bossActivated && g_boss) {
+    if (boss_is_active(g_boss)) {
         bool bossDeadNow = (g_boss->state == BOSS_STATE_DEAD);
         if (bossDeadNow && !bossWasDead) {
             // Record fastest clear time per save slot (once, on death edge).
@@ -1942,7 +1420,7 @@ void scene_update(void)
     // Z-target:
     // - Tap Z toggles lock-on on/off
     // - Hold Z keeps lock-on active and allows cycling targets with C-left/C-right
-    bool lockonAllowed = cutsceneState == CUTSCENE_NONE && scene_is_boss_active() && g_boss;
+    bool lockonAllowed = cutsceneState == CUTSCENE_NONE && boss_is_active(g_boss);
     bool zHeld = joypad.btn.z;
     bool zJustPressed = zHeld && !lastZPressed;
     bool zJustReleased = !zHeld && lastZPressed;
@@ -2015,678 +1493,17 @@ void scene_update(void)
     lastCRightHeld = cRightHeld;
 }
 
-void scene_fixed_update(void) 
+void scene_fixed_update(void)
 {
 }
 
 // Draws a small lock-on marker over the boss when Z-targeting is active.
 static void draw_lockon_indicator(T3DViewport *viewport)
 {
-    // Show during gameplay when Z-targeting is active.
-    // Allow the defeated boss to still be targetable (useful for post-fight dialog).
-    if (!cameraLockOnActive || scene_is_cutscene_active() || !scene_is_boss_active() || !g_boss) {
-        return;
-    }
-
-    // Anchor the marker to the boss' mid-body point so it aligns with lock-on aim.
+    bool visible = cameraLockOnActive && !scene_is_cutscene_active() && boss_is_active(g_boss);
     T3DVec3 worldPos = get_boss_lock_focus_point();
 
-    // Project to screen space
-    T3DVec3 screenPos;
-    t3d_viewport_calc_viewspace_pos(viewport, &screenPos, &worldPos);
-
-    // Skip if behind the camera or outside a small margin
-    if (screenPos.v[2] >= 1.0f) {
-        return;
-    }
-    const int margin = 8;
-    int px = (int)screenPos.v[0];
-    int py = (int)screenPos.v[1];
-    if (px < -margin || px > SCREEN_WIDTH + margin || py < -margin || py > SCREEN_HEIGHT + margin) {
-        return;
-    }
-
-    // Draw lock-on icon sprite (fallback to white dot if missing)
-    rdpq_sync_pipe();
-    rdpq_set_mode_standard();
-
-    if (zTargetIconSprite) {
-        // Avoid alpha-compare clipping; rely on the sprite's alpha (IA8).
-        rdpq_mode_alphacompare(0);
-        rdpq_mode_blender(RDPQ_BLENDER_MULTIPLY);
-
-        // Scale with distance so the marker behaves like a world-space attachment
-        // (close = larger, far = smaller) instead of constant screen-space UI size.
-        //
-        // Tiny3D provides screenPos.v[2] as normalized depth (near=0 .. far=1).
-        float z01 = screenPos.v[2];
-        if (z01 < 0.0f) z01 = 0.0f;
-        if (z01 > 0.9999f) z01 = 0.9999f;
-
-        // Keep these in sync with the camera projection (see camera_controller.c).
-        const float nearClip = 4.0f;
-        const float farClip  = 2000.0f;
-        float z = nearClip + z01 * (farClip - nearClip);
-        if (z < nearClip) z = nearClip;
-
-        // Reference distance where we want the icon to be ~8x8 on-screen.
-        const float zRef = 300.0f;
-        float s = 0.125f * (zRef / z);
-        // Clamp for readability (and to avoid enormous icons up close).
-        if (s < 0.05f) s = 0.05f;
-        if (s > 0.275f) s = 0.275f;
-
-        rdpq_sprite_blit(zTargetIconSprite, px, py, &(rdpq_blitparms_t){
-            .scale_x = s, .scale_y = s,
-            .cx = 32, .cy = 32, // center of the 64x64 sprite
-        });
-    } else {
-        rdpq_mode_combiner(RDPQ_COMBINER_FLAT);
-        rdpq_mode_blender(RDPQ_BLENDER_MULTIPLY);
-        rdpq_set_prim_color(RGBA32(255, 255, 255, 255));
-        const int halfSize = 3;
-        rdpq_fill_rectangle(px - halfSize, py - halfSize, px + halfSize + 1, py + halfSize + 1);
-    }
-}
-
-/* -----------------------------------------------------------------------------
- * Dust particles (simple world->screen puffs)
- * -------------------------------------------------------------------------- */
-
-typedef struct {
-    bool  active;
-    float pos[3];   // world
-    float vel[3];   // world units/sec
-    float age;      // sec
-    float life;     // sec
-    float size_px;  // base pixel size
-} DustParticle;
-
-enum { DUST_MAX = 64 };
-static DustParticle s_dust[DUST_MAX];
-
-static inline float dust_clampf(float x, float lo, float hi) {
-    if (x < lo) return lo;
-    if (x > hi) return hi;
-    return x;
-}
-
-static inline float dust_alpha01(const DustParticle *p) {
-    if (!p || p->life <= 0.0f) return 0.0f;
-    float t = dust_clampf(p->age / p->life, 0.0f, 1.0f);
-    // Nice falloff (not linear).
-    float a = 1.0f - t;
-    return a * a;
-}
-
-static void dust_reset(void) {
-    memset(s_dust, 0, sizeof(s_dust));
-}
-
-static int dust_alloc_slot(void) {
-    for (int i = 0; i < DUST_MAX; i++) {
-        if (!s_dust[i].active) return i;
-    }
-    // No free slot; evict the oldest.
-    int oldest = 0;
-    float bestAge = s_dust[0].age;
-    for (int i = 1; i < DUST_MAX; i++) {
-        if (s_dust[i].age > bestAge) {
-            bestAge = s_dust[i].age;
-            oldest = i;
-        }
-    }
-    return oldest;
-}
-
-void scene_spawn_dust_burst(float x, float y, float z, float strength) {
-    // Safe to call even before init/reset.
-    if (strength < 0.05f) return;
-    if (strength > 3.0f) strength = 3.0f;
-
-    // Prefer readable puffs, but spawn enough to feel like "dust".
-    int count = 6 + (int)(strength * 3.0f);
-    if (count < 6) count = 6;
-    if (count > 18) count = 18;
-
-    // Track spawned positions for this burst so we can avoid stacking.
-    float spawnX[18];
-    float spawnZ[18];
-    int spawned = 0;
-
-    for (int i = 0; i < count; i++) {
-        int idx = dust_alloc_slot();
-        DustParticle *p = &s_dust[idx];
-
-        // Randomized spawn around the impact point.
-        // Use polar sampling so particles don't "stack" near the center.
-        float dirX = 1.0f, dirZ = 0.0f;
-        float radius = 0.0f;
-        float px = x, pz = z;
-
-        // Ensure puffs don't overlap too tightly (helps readability).
-        // Use a small number of retries; if we fail, accept the last sample.
-        //
-        // NOTE: Use evenly spaced angles with jitter so the burst is *visibly* spread
-        // around the boss base (avoids the "only 2 visible" look when several land in
-        // similar screen-space).
-        const float minSep = 18.0f; // world units
-        for (int attempt = 0; attempt < 10; attempt++) {
-            float jitter = (rand_custom_float() - 0.5f) * 0.35f; // +/- ~0.175 of a slot
-            float t = ((float)i + 0.5f + jitter) / (float)count;
-            float ang = t * (2.0f * T3D_PI);
-
-            // Sample radius with sqrt for a more even distribution over area.
-            float r01 = sqrtf(rand_custom_float());
-
-            // Keep puffs near the boss' feet so they stay on-screen and read as "base dust".
-            float rMin = 10.0f;
-            float rMax = 42.0f + (18.0f * strength);
-            radius = rMin + r01 * (rMax - rMin);
-
-            dirX = cosf(ang);
-            dirZ = sinf(ang);
-
-            // Candidate position
-            px = x + dirX * radius;
-            pz = z + dirZ * radius;
-
-            bool ok = true;
-            for (int j = 0; j < spawned; j++) {
-                float dx = px - spawnX[j];
-                float dz = pz - spawnZ[j];
-                if ((dx*dx + dz*dz) < (minSep * minSep)) {
-                    ok = false;
-                    break;
-                }
-            }
-            if (ok) break;
-        }
-
-        p->active = true;
-        p->age = 0.0f;
-        // Last a bit longer so the burst reads.
-        p->life = 0.65f + rand_custom_float() * 0.45f;
-
-        // Large puffs: sizes are in pixels (screen-space) and later scaled from the sprite.
-        // Bias toward bigger particles on the first couple slots, with smaller "filler" puffs after.
-        float bigBias = (i < 2) ? 1.0f : 0.0f;
-        // Tiny bump so they're a touch bigger overall.
-        float base = 16.0f + (bigBias * 11.0f);     // make even the "small" ones readable
-        float var  = 12.0f + (10.0f * strength);
-        p->size_px = base + rand_custom_float() * var;
-
-        p->pos[0] = px;
-        // Use the provided impact Y so this works for any room/floor height.
-        // Slightly above the floor to avoid any numerical weirdness.
-        p->pos[1] = y + 0.5f + rand_custom_float() * 1.0f;
-        p->pos[2] = pz;
-
-        // Radial outward puff + slight upward drift.
-        p->vel[0] = dirX * (35.0f + 35.0f * strength);
-        p->vel[1] = (10.0f + 14.0f * rand_custom_float()) * strength;
-        p->vel[2] = dirZ * (35.0f + 35.0f * strength);
-
-        if (spawned < 18) {
-            spawnX[spawned] = px;
-            spawnZ[spawned] = pz;
-            spawned++;
-        }
-    }
-}
-
-static void dust_update(float dt) {
-    if (dt < 0.0f) dt = 0.0f;
-    if (dt > 0.25f) dt = 0.25f;
-
-    for (int i = 0; i < DUST_MAX; i++) {
-        DustParticle *p = &s_dust[i];
-        if (!p->active) continue;
-
-        p->age += dt;
-        if (p->age >= p->life) {
-            p->active = false;
-            continue;
-        }
-
-        // Simple damped motion: expand quickly then slow, and drift up a bit.
-        float dampXZ = expf(-5.0f * dt);
-        p->vel[0] *= dampXZ;
-        p->vel[2] *= dampXZ;
-        p->vel[1] *= expf(-2.5f * dt);
-
-        p->pos[0] += p->vel[0] * dt;
-        p->pos[1] += p->vel[1] * dt;
-        p->pos[2] += p->vel[2] * dt;
-    }
-}
-
-static void dust_draw(T3DViewport *viewport) {
-    if (!viewport) return;
-
-    const bool useSprite = (dustParticleSprite && dustParticleSurf.width > 0 && dustParticleSurf.height > 0);
-
-    // 2D render state.
-    rdpq_sync_pipe();
-    rdpq_set_mode_standard();
-    // Depth test against the 3D pass so dust doesn't always draw "on top".
-    // We don't write depth (so UI stays unaffected).
-    rdpq_mode_zbuf(true, false);
-    if (useSprite) {
-        // Standard alpha blending so prim alpha can fade particles.
-        rdpq_mode_alphacompare(1);
-        rdpq_mode_combiner(RDPQ_COMBINER_TEX_FLAT);
-        rdpq_mode_blender(RDPQ_BLENDER_MULTIPLY);
-    } else {
-        // Fallback if sprite missing.
-        rdpq_mode_combiner(RDPQ_COMBINER_FLAT);
-        rdpq_mode_blender(RDPQ_BLENDER_MULTIPLY);
-    }
-
-    for (int i = 0; i < DUST_MAX; i++) {
-        const DustParticle *p = &s_dust[i];
-        if (!p->active) continue;
-
-        T3DVec3 worldPos = {{ p->pos[0], p->pos[1], p->pos[2] }};
-        T3DVec3 screenPos;
-        t3d_viewport_calc_viewspace_pos(viewport, &screenPos, &worldPos);
-
-        if (screenPos.v[2] >= 1.0f) continue;
-
-        // Feed a per-primitive Z into RDPQ so depth testing can work for screen-space blits.
-        // Tiny3D provides screenPos.v[2] as a normalized depth (near=0 .. far=1).
-        float z01 = dust_clampf(screenPos.v[2], 0.0f, 0.9999f);
-        rdpq_mode_zoverride(true, z01, 0);
-
-        float a01 = dust_alpha01(p);
-        // Slightly stronger alpha when using the sprite so it reads.
-        uint8_t a = (uint8_t)dust_clampf(a01 * (useSprite ? 180.0f : 170.0f), 0.0f, 255.0f);
-        if (a == 0) continue;
-
-        // Light warm grey "dust".
-        rdpq_set_prim_color(RGBA32(215, 210, 200, a));
-
-        int px = (int)screenPos.v[0];
-        int py = (int)screenPos.v[1];
-
-        // Slight grow then fade.
-        float grow = 1.0f + 0.7f * (p->age / p->life);
-        int half = (int)(p->size_px * grow);
-        if (half < 4) half = 4;
-        if (half > 26) half = 26;
-
-        if (useSprite) {
-            const int src_w = dustParticleSurf.width;
-            const int src_h = dustParticleSurf.height;
-            const int w = half * 2;
-            const int h = half * 2;
-            const float sx = (src_w > 0) ? ((float)w / (float)src_w) : 1.0f;
-            const float sy = (src_h > 0) ? ((float)h / (float)src_h) : 1.0f;
-            rdpq_tex_blit(&dustParticleSurf, px - (w / 2), py - (h / 2), &(rdpq_blitparms_t){
-                .scale_x = sx,
-                .scale_y = sy,
-            });
-        } else {
-            rdpq_fill_rectangle(px - half, py - half, px + half + 1, py + half + 1);
-        }
-    }
-
-    // Restore to non-depth 2D for subsequent overlays.
-    rdpq_mode_zoverride(false, 0.0f, 0);
-    rdpq_mode_zbuf(false, false);
-}
-
-/* -----------------------------------------------------------------------------
- * Blood splatters (sword-on-boss impact)
- * -------------------------------------------------------------------------- */
-
-typedef struct {
-    bool  active;
-    float pos[3];     // world
-    float vel[3];     // world units/sec
-    float age;        // sec
-    float life;       // sec
-    float size_px;    // base pixel size (height of sprite drawn)
-    uint8_t spriteIdx;
-    uint8_t r, g, b;  // tint (per-particle variation)
-} BloodParticle;
-
-enum { BLOOD_MAX = 48 };
-static BloodParticle s_blood[BLOOD_MAX];
-
-static inline float blood_clampf(float x, float lo, float hi) {
-    if (x < lo) return lo;
-    if (x > hi) return hi;
-    return x;
-}
-
-static inline float blood_alpha01(const BloodParticle *p) {
-    if (!p || p->life <= 0.0f) return 0.0f;
-    float t = blood_clampf(p->age / p->life, 0.0f, 1.0f);
-    // Mostly opaque for the first half, then fade out (quadratic).
-    if (t < 0.55f) return 1.0f;
-    float u = (t - 0.55f) / 0.45f;
-    return (1.0f - u) * (1.0f - u);
-}
-
-static void blood_reset(void) {
-    memset(s_blood, 0, sizeof(s_blood));
-}
-
-static int blood_alloc_slot(void) {
-    for (int i = 0; i < BLOOD_MAX; i++) {
-        if (!s_blood[i].active) return i;
-    }
-    int oldest = 0;
-    float bestAge = s_blood[0].age;
-    for (int i = 1; i < BLOOD_MAX; i++) {
-        if (s_blood[i].age > bestAge) {
-            bestAge = s_blood[i].age;
-            oldest = i;
-        }
-    }
-    return oldest;
-}
-
-void scene_spawn_blood_burst(float x, float y, float z, float strength) {
-    if (strength < 0.05f) return;
-    if (strength > 3.0f) strength = 3.0f;
-
-    // One "large" anchor splatter, several mediums, several tinies.
-    int largeCount  = 1;
-    int mediumCount = 3 + (int)(strength * 1.5f);
-    int tinyCount   = 6 + (int)(strength * 3.0f);
-    if (mediumCount > 6) mediumCount = 6;
-    if (tinyCount   > 12) tinyCount  = 12;
-
-    int total = largeCount + mediumCount + tinyCount;
-
-    for (int i = 0; i < total; i++) {
-        int idx = blood_alloc_slot();
-        BloodParticle *p = &s_blood[idx];
-
-        // Pick which sprite tier this particle belongs to and randomize within tier.
-        uint8_t spriteIdx;
-        float baseSize;
-        if (i < largeCount) {
-            spriteIdx = BLOOD_SPRITE_LARGE;
-            baseSize  = 22.0f + 4.0f * strength;
-        } else if (i < largeCount + mediumCount) {
-            int variant = (int)(rand_custom_float() * 3.0f);
-            if (variant > 2) variant = 2;
-            spriteIdx = (uint8_t)(BLOOD_SPRITE_MEDIUM_A + variant);
-            baseSize  = 14.0f + 4.0f * strength;
-        } else {
-            int variant = (int)(rand_custom_float() * 3.0f);
-            if (variant > 2) variant = 2;
-            spriteIdx = (uint8_t)(BLOOD_SPRITE_TINY_A + variant);
-            baseSize  = 7.0f + 3.0f * strength;
-        }
-
-        p->active = true;
-        p->age    = 0.0f;
-        // Mediums/tinies fly farther; the large anchor lingers a hair longer to read.
-        p->life   = (i < largeCount) ? 0.55f : (0.35f + rand_custom_float() * 0.30f);
-        p->size_px  = baseSize + rand_custom_float() * 3.0f;
-        p->spriteIdx = spriteIdx;
-
-        // Random red tint (darker arterial through brighter splatter).
-        int rJitter = (int)((rand_custom_float() - 0.5f) * 30.0f);
-        int gJitter = (int)(rand_custom_float() * 14.0f);
-        int rr = 165 + rJitter;
-        int gg = 12  + gJitter;
-        int bb = 18;
-        if (rr < 110) rr = 110;
-        if (rr > 210) rr = 210;
-        if (gg <   0) gg = 0;
-        if (gg >  40) gg = 40;
-        p->r = (uint8_t)rr;
-        p->g = (uint8_t)gg;
-        p->b = (uint8_t)bb;
-
-        // Spawn directly at the contact point with a small jitter so all the sprites
-        // don't overlap into one blob on screen.
-        float jitterR = (rand_custom_float() * 4.0f) - 2.0f;
-        float jitterU = (rand_custom_float() * 4.0f) - 2.0f;
-        p->pos[0] = x + jitterR;
-        p->pos[1] = y + jitterU;
-        p->pos[2] = z + jitterR * 0.5f;
-
-        // Pick an outward direction in a full 3D cone biased upward + outward.
-        // Yaw is uniformly distributed; pitch leans up (toward the player's swing).
-        float yaw   = rand_custom_float() * (2.0f * T3D_PI);
-        float pitch = (T3D_PI * 0.20f) + rand_custom_float() * (T3D_PI * 0.30f); // 36° to 90°
-        float c = cosf(pitch);
-        float dirX = c * cosf(yaw);
-        float dirY = sinf(pitch);
-        float dirZ = c * sinf(yaw);
-
-        // Speeds: big anchor moves slow (looks like a heavy gout), mediums fast, tinies fastest spray.
-        float baseSpeed;
-        if (i < largeCount)                      baseSpeed = 30.0f + 20.0f * strength;
-        else if (i < largeCount + mediumCount)   baseSpeed = 110.0f + 60.0f * strength;
-        else                                     baseSpeed = 170.0f + 90.0f * strength;
-        float speed = baseSpeed * (0.75f + rand_custom_float() * 0.5f);
-
-        p->vel[0] = dirX * speed;
-        p->vel[1] = dirY * speed;
-        p->vel[2] = dirZ * speed;
-    }
-}
-
-static void blood_update(float dt) {
-    if (dt < 0.0f) dt = 0.0f;
-    if (dt > 0.25f) dt = 0.25f;
-
-    // Gravity in world units / s^2. Tuned to feel snappy at the small scale of a burst
-    // (particles only live ~0.4-0.6s, so heavy gravity makes them clearly arc).
-    const float GRAVITY = 900.0f;
-
-    for (int i = 0; i < BLOOD_MAX; i++) {
-        BloodParticle *p = &s_blood[i];
-        if (!p->active) continue;
-
-        p->age += dt;
-        if (p->age >= p->life) {
-            p->active = false;
-            continue;
-        }
-
-        // Light air drag on the lateral axes only - keeps the arc readable.
-        float dampXZ = expf(-1.5f * dt);
-        p->vel[0] *= dampXZ;
-        p->vel[2] *= dampXZ;
-
-        // Gravity.
-        p->vel[1] -= GRAVITY * dt;
-
-        p->pos[0] += p->vel[0] * dt;
-        p->pos[1] += p->vel[1] * dt;
-        p->pos[2] += p->vel[2] * dt;
-    }
-}
-
-static void blood_draw(T3DViewport *viewport) {
-    if (!viewport) return;
-
-    rdpq_sync_pipe();
-    rdpq_set_mode_standard();
-    rdpq_mode_zbuf(true, false);
-    rdpq_mode_alphacompare(1);
-    rdpq_mode_combiner(RDPQ_COMBINER_TEX_FLAT);
-    rdpq_mode_blender(RDPQ_BLENDER_MULTIPLY);
-
-    for (int i = 0; i < BLOOD_MAX; i++) {
-        const BloodParticle *p = &s_blood[i];
-        if (!p->active) continue;
-
-        sprite_t *sp = bloodSprites[p->spriteIdx];
-        surface_t *sf = &bloodSurfs[p->spriteIdx];
-        if (!sp || sf->width <= 0 || sf->height <= 0) continue;
-
-        T3DVec3 worldPos = {{ p->pos[0], p->pos[1], p->pos[2] }};
-        T3DVec3 screenPos;
-        t3d_viewport_calc_viewspace_pos(viewport, &screenPos, &worldPos);
-        if (screenPos.v[2] >= 1.0f) continue;
-
-        float z01 = blood_clampf(screenPos.v[2], 0.0f, 0.9999f);
-        rdpq_mode_zoverride(true, z01, 0);
-
-        float a01 = blood_alpha01(p);
-        uint8_t a = (uint8_t)blood_clampf(a01 * 230.0f, 0.0f, 255.0f);
-        if (a == 0) continue;
-
-        rdpq_set_prim_color(RGBA32(p->r, p->g, p->b, a));
-
-        // Slight shrink as the particle ages (droplets thin out).
-        float shrink = 1.0f - 0.25f * (p->age / p->life);
-        if (shrink < 0.5f) shrink = 0.5f;
-
-        int h = (int)(p->size_px * shrink);
-        if (h < 3) h = 3;
-        if (h > 40) h = 40;
-
-        // Preserve sprite aspect ratio.
-        float aspect = (sf->height > 0) ? ((float)sf->width / (float)sf->height) : 1.0f;
-        int w = (int)(h * aspect);
-        if (w < 3) w = 3;
-
-        int px = (int)screenPos.v[0];
-        int py = (int)screenPos.v[1];
-
-        float sx = (sf->width  > 0) ? ((float)w / (float)sf->width)  : 1.0f;
-        float sy = (sf->height > 0) ? ((float)h / (float)sf->height) : 1.0f;
-        rdpq_tex_blit(sf, px - (w / 2), py - (h / 2), &(rdpq_blitparms_t){
-            .scale_x = sx,
-            .scale_y = sy,
-        });
-    }
-
-    rdpq_mode_zoverride(false, 0.0f, 0);
-    rdpq_mode_zbuf(false, false);
-}
-
-void scene_draw_title(T3DViewport *viewport)
-{
-    // ===== DRAW 3D =====
-    rdpq_sync_pipe();
-    rdpq_mode_zbuf(false, false);
-
-    // Draw no depth environment first
-    t3d_matrix_push_pos(1);
-        t3d_matrix_set(mapMatrix, true);
-        rspq_block_run(mapDpl);
-
-        t3d_matrix_set(dynamicBannerMatrix, true);
-        rspq_block_run(dynamicBannerDpl);
-    t3d_matrix_pop(1);
-
-        // Draw depth environment
-    rdpq_sync_pipe();
-    rdpq_mode_zbuf(true, true);
-
-    t3d_matrix_push_pos(1);
-        character_draw();
-
-        t3d_matrix_set(fogDoorMatrix, true);
-        // Create a struct to pass the scrolling parameters to the tile callback
-        t3d_model_draw_custom(fogDoorModel, (T3DModelDrawConf){
-            .userData = &fogScrollParams,
-            .tileCb = tile_scroll,
-        });
-    t3d_matrix_pop(1);
-
-    // ======== Draw 2D ======== //
-    rdpq_sync_pipe();
-    //Title text
-    if(gameState != GAME_STATE_TITLE_TRANSITION)
-    {
-        rdpq_set_mode_standard();
-        rdpq_mode_blender(RDPQ_BLENDER_MULTIPLY);
-
-        // Run counters:
-        // - "Runs" is persisted via EEPROM (per save slot).
-        {
-            const bool savesOn = save_controller_is_enabled();
-            const uint32_t savedRuns = save_controller_get_run_count();
-            const uint32_t bestMs = save_controller_get_best_boss_time_ms();
-
-            // Hide counters when entering title submenus (Settings/Controls/Credits).
-            // Draw the panel if:
-            // - saves are disabled (so it's obvious why "Runs" won't persist), or
-            // - we have any counter value to show.
-            if (!menu_controller_is_title_submenu_active() &&
-                (!savesOn || savedRuns > 0 || bestMs > 0)) {
-                // Keep inside user-adjusted UI safe area for CRT overscan.
-                const int margin = ui_safe_margin_x();
-                const int panelW = 120;
-                const bool showBest = (savesOn && bestMs > 0);
-                const int lineCount = 1 + (showBest ? 1 : 0);
-                const int panelH = 6 + (lineCount * 13); // 13px per line + small padding
-                const int panelX0 = margin;
-                const int panelY0 = SCREEN_HEIGHT - ui_safe_margin_y() - panelH;
-
-                rdpq_set_prim_color(RGBA32(0, 0, 0, 120));
-                rdpq_mode_combiner(RDPQ_COMBINER_FLAT);
-                rdpq_fill_rectangle(panelX0, panelY0, panelX0 + panelW, panelY0 + panelH);
-
-                rdpq_set_prim_color(RGBA32(255, 255, 255, 255));
-                int lineY = panelY0 + 13;
-
-                // Line 1: Runs (persisted)
-                if (savesOn) {
-                    rdpq_text_printf(NULL, FONT_UNBALANCED, panelX0 + 6, lineY,
-                                     "Runs: %lu", (unsigned long)savedRuns);
-                } else {
-                    rdpq_text_printf(NULL, FONT_UNBALANCED, panelX0 + 6, lineY,
-                                     "Runs: --");
-                }
-                lineY += 13;
-
-                // Line 2 (optional): Best time
-                if (showBest) {
-                    const uint32_t minutes = bestMs / 60000u;
-                    const uint32_t seconds = (bestMs / 1000u) % 60u;
-                    const uint32_t millis  = bestMs % 1000u;
-                    rdpq_text_printf(NULL, FONT_UNBALANCED, panelX0 + 6, lineY,
-                                     "Best: %lu:%02lu.%03lu",
-                                     (unsigned long)minutes,
-                                     (unsigned long)seconds,
-                                     (unsigned long)millis);
-                    lineY += 13;
-                }
-            }
-        }
-
-        if(titleTextActivationTimer >= titleTextActivationTime && !menu_controller_is_title_submenu_active())
-        {
-            // Keep the title dialog inside the user-adjusted UI safe area (CRT overscan).
-            const int dlgW = 120;
-            const int dlgH = 180;
-            const int dlgX = SCREEN_WIDTH - ui_safe_margin_x() - dlgW;
-            const int dlgY = ui_safe_margin_y();
-            dialog_controller_draw(true, dlgX, dlgY, dlgW, dlgH);
-        }
-
-        display_utility_solid_black_transition(true, 200.0f);
-
-    }
-    else
-    {
-        if (titleStartGameTimer >= titleFadeTime && !screenTransition)
-        {
-            startScreenFade = true; // this is set in the display utility. Must not update this value.
-            screenTransition = true; // this is to toggle off setting the display utility.
-        }
-
-        if(screenTransition)
-        {
-            display_utility_solid_black_transition(false, 200.0f);
-        }
-
-        // Draw skip button on top during title transition (fog door)
-        cutscene_manager_draw_skip_overlay(skipButtonVisible);
-    }
+    boss_ui_draw_lockon_marker(viewport, &worldPos, visible);
 }
 
 void scene_draw_cutscene(T3DViewport *viewport)
@@ -2799,6 +1616,13 @@ void scene_draw_cutscene(T3DViewport *viewport)
     }
 }
 
+static void scene_draw_video_preroll_fade(void)
+{
+    if (videoPreroll != VIDEO_PREROLL_NONE) {
+        display_utility_solid_black_transition(false, VIDEO_FADE_SPEED);
+    }
+}
+
 static void scene_draw_video_trigger(T3DViewport *vp)
 {
     if (!debugDraw || !vp) return;
@@ -2813,7 +1637,7 @@ static void scene_draw_video_trigger(T3DViewport *vp)
     debug_draw_aabb(vp, &mn, &mx, color);
 }
 
-void scene_draw(T3DViewport *viewport) 
+void scene_draw(T3DViewport *viewport)
 {
 
     if(gameState == GAME_STATE_VIDEO)
@@ -2830,7 +1654,7 @@ void scene_draw(T3DViewport *viewport)
 
     // Fog
     color_t fogColor = (color_t){0, 0, 0, 0xFF};
-    //rdpq_set_prim_color((color_t){0xFF, 0xFF, 0xFF, 0xFF});
+
     rdpq_mode_fog(RDPQ_FOG_STANDARD);
     rdpq_set_fog_color(fogColor);
 
@@ -2846,15 +1670,6 @@ void scene_draw(T3DViewport *viewport)
 
     // Lighting
     t3d_light_set_ambient(colorAmbient);
-    // T3DVec3 negCamDir = {{-camDir.x, -camDir.y, -camDir.z}};
-    // t3d_light_set_directional(0, (uint8_t[4]){0x00, 0x00, 0x00, 0xFF}, &negCamDir);
-    // t3d_light_set_count(1);
-
-    if(gameState == GAME_STATE_TITLE || gameState == GAME_STATE_TITLE_TRANSITION)
-    {
-        scene_draw_title(viewport);
-        return;
-    }
 
     if(cutsceneState != CUTSCENE_NONE)
     {
@@ -2879,30 +1694,17 @@ void scene_draw(T3DViewport *viewport)
         t3d_matrix_set(mapMatrix, true);
         rspq_block_run(mapDpl);
     t3d_matrix_pop(1);
-    
 
-    // if(g_boss->isAttacking || g_boss->health <= 0 || g_boss->state == BOSS_STATE_COMBO_ATTACK || g_boss->state == BOSS_STATE_STOMP) // TODO: Hacky fix but something weird is going on with comnbo1 and we dont have time
-    // {
-        //Draw depth environment
-        rdpq_sync_pipe();
-        rdpq_mode_zbuf(true, true);
 
-        t3d_matrix_push_pos(1);   
-            t3d_matrix_set(roomFloorMatrix, true);
-            rspq_block_run(roomFloorDpl);
-        t3d_matrix_pop(1); 
-    // }
-    // else
-    // {
-    //     //Draw depth environment
-    //     rdpq_sync_pipe();
-    //     rdpq_mode_zbuf(false, false);
+    //Draw depth environment
+    rdpq_sync_pipe();
+    rdpq_mode_zbuf(true, true);
 
-    //     t3d_matrix_push_pos(1);   
-    //         t3d_matrix_set(roomFloorMatrix, true);
-    //         rspq_block_run(roomFloorDpl);
-    //     t3d_matrix_pop(1); 
-    // }
+    t3d_matrix_push_pos(1);
+        t3d_matrix_set(roomFloorMatrix, true);
+        rspq_block_run(roomFloorDpl);
+    t3d_matrix_pop(1);
+
 
     rdpq_sync_pipe();
     rdpq_mode_zbuf(false, false);
@@ -2916,12 +1718,12 @@ void scene_draw(T3DViewport *viewport)
             boss_draw_shadow(g_boss);
         }
 
-    t3d_matrix_pop(1); 
+    t3d_matrix_pop(1);
 
     rdpq_sync_pipe();
     rdpq_mode_zbuf(true, true);
 
-    t3d_matrix_push_pos(1);   
+    t3d_matrix_push_pos(1);
         t3d_matrix_set(roomLedgeMatrix, true);
         rspq_block_run(roomLedgeDpl);
 
@@ -2931,12 +1733,12 @@ void scene_draw(T3DViewport *viewport)
         t3d_matrix_set(pillarsFrontMatrix, true);
         rspq_block_run(pillarsFrontDpl);
 
-    t3d_matrix_pop(1); 
+    t3d_matrix_pop(1);
 
     rdpq_sync_pipe();
     rdpq_mode_zbuf(false, false);
 
-    t3d_matrix_push_pos(1);   
+    t3d_matrix_push_pos(1);
     // floor glow
     if(g_boss->health <= 0)
     {
@@ -2947,7 +1749,7 @@ void scene_draw(T3DViewport *viewport)
             .tileCb = tile_scroll,
         });
     }
-    t3d_matrix_pop(1); 
+    t3d_matrix_pop(1);
 
     rdpq_sync_pipe();
     rdpq_mode_zbuf(true, true);
@@ -2955,31 +1757,17 @@ void scene_draw(T3DViewport *viewport)
     // Draw characters
 
     t3d_matrix_push_pos(1);
-    // if(cutsceneState == CUTSCENE_PHASE1_SWORDS_CLOSEUP)
-    // {
-    //     t3d_matrix_set(cinematicChainsMatrix, true);
-    //     rspq_block_run(cinematicChainsDpl);
-    // }
 
-        character_draw();
-        if (g_boss) {
-            boss_draw(g_boss);
-        }
-        
+    character_draw();
+    if (g_boss) {
+        boss_draw(g_boss);
+    }
+
 
     t3d_matrix_pop(1);
 
     msa_draw_visuals(viewport); // multi sword attack
     //boulder_hazard_draw(viewport); // close-range ground boulders
-
-    //Draw transparencies last
-    // t3d_matrix_push_pos(1);    
-    //     t3d_matrix_set(sunshaftsMatrix, true);
-    //     rspq_block_run(sunshaftsDpl);
-    // t3d_matrix_pop(1);
-
-    // rdpq_sync_pipe();
-    // rdpq_mode_zbuf(false, false);
 
     // Fog door (transparent): depth test ON, depth write OFF so it can be drawn late.
     rdpq_sync_pipe();
@@ -2999,33 +1787,45 @@ void scene_draw(T3DViewport *viewport)
     t3d_matrix_push_pos(1);
         t3d_matrix_set(chainsMatrix, true);
         rspq_block_run(chainsDpl);
-    t3d_matrix_pop(1); 
+    t3d_matrix_pop(1);
     // ===== DRAW 2D =====
 
     // Screen-space ribbon trails, drawn right after 3D so they feel "in world"
     sword_trail_draw_all(viewport);
 
     // Dust puffs (boss landings/impacts)
-    dust_update(deltaTime);
-    dust_draw(viewport);
+    dust_particles_fx_update(deltaTime);
+    dust_particles_fx_draw(viewport);
 
     // Blood splatters from boss hits (drawn after dust so red reads on top of puffs)
-    blood_update(deltaTime);
-    blood_draw(viewport);
+    blood_particles_fx_update(deltaTime);
+    blood_particles_fx_draw(viewport);
 
     // Post-boss interaction prompt ("A") above the defeated boss when close enough to interact
-    draw_post_boss_a_prompt(viewport);
+    {
+        T3DVec3 postBossPromptPos;
+        bool postBossPromptVisible =
+            !scene_is_cutscene_active()
+            && boss_is_interactable(g_boss)
+            && g_boss
+            && g_boss->state == BOSS_STATE_DEAD
+            && scene_post_boss_in_range(g_boss);
 
-    // Overlay lock-on marker above the boss
-    if(DEV_MODE)
-        draw_lockon_indicator(viewport);
+        if (!boss_get_head_world_pos(g_boss, &postBossPromptPos)) {
+            postBossPromptPos = get_boss_lock_focus_point();
+        }
+
+        boss_ui_draw_post_boss_a_prompt(viewport, &postBossPromptPos, postBossPromptVisible);
+    }
+
+    // Overlay lock-on marker above the boss.
+    draw_lockon_indicator(viewport);
 
     scene_draw_video_trigger(viewport);
-    
+
     bool cutsceneActive = scene_is_cutscene_active();
-    GameState state = scene_get_game_state();
-    bool isDead = state == GAME_STATE_DEAD;
-    bool isVictory = state == GAME_STATE_VICTORY;
+    bool isDead = character_get_state() == CHAR_STATE_DEAD;
+    bool isVictory = gameState == GAME_STATE_VICTORY;
     bool isEndScreen = isDead || isVictory;
 
     // Draw letterbox bars (they handle their own visibility and animation)
@@ -3034,12 +1834,13 @@ void scene_draw(T3DViewport *viewport)
     // Draw UI elements after 3D rendering is complete.
     // Keep player UI visible during victory; hide it during death and cutscenes.
     if (!cutsceneActive && !isDead) {
-        // Boss UI appears only during normal gameplay, not on victory screens.
-        if (!isVictory && scene_is_boss_active() && g_boss && bossTitleFade <= 0.0f) {
+        // Boss UI/debug is owned by boss_render/boss_ui now.
+        // Keep scene responsible only for draw order and visibility gating.
+        if (!isVictory && boss_is_active(g_boss) && bossTitleFade <= 0.0f && g_boss->maxHealth > 0.0f) {
             boss_draw_ui(g_boss, viewport);
         }
-        character_draw_ui();
-        draw_cbutton_hud();
+
+        character_ui_draw();
     }
 
     // Slide-up overlay for boss title after fight starts (no fading)
@@ -3072,7 +1873,7 @@ void scene_draw(T3DViewport *viewport)
             .width = SCREEN_WIDTH,
         }, FONT_UNBALANCED, 0, currentTextY, "%s", g_boss->name);
     }
-    
+
     if (isEndScreen) {
         rdpq_sync_pipe();
         rdpq_set_mode_standard();
@@ -3116,6 +1917,8 @@ void scene_draw(T3DViewport *viewport)
                     .width = SCREEN_WIDTH - textX,
                 }, FONT_UNBALANCED, textX, y, "%s", label);
             }
+
+            scene_draw_video_preroll_fade();
             return;
         }
 
@@ -3184,9 +1987,11 @@ void scene_draw(T3DViewport *viewport)
                 }
             }
         }
+
+        scene_draw_video_preroll_fade();
         return;
     }
-    
+
     // Draw dialog on top of everything
     int height = 70;
     int width = 220;
@@ -3194,7 +1999,7 @@ void scene_draw(T3DViewport *viewport)
     // bottom positioning
     if(cutsceneDialogActive)
     {
-        int y = 240 - height - 10; 
+        int y = 240 - height - 10;
         dialog_controller_draw(false, x, y, width, height);
     }
 
@@ -3209,11 +2014,8 @@ void scene_draw(T3DViewport *viewport)
         }
     }
 
-    // video draw game over fade to black over everything (yes i know it's hacky, time crunch and sludge file)
-
-    if (videoPreroll != VIDEO_PREROLL_NONE) {
-        display_utility_solid_black_transition(false, VIDEO_FADE_SPEED);
-    }
+    // Video preroll fade-to-black must draw over every non-video path.
+    scene_draw_video_preroll_fade();
 
 
     //msa_draw_debug(viewport);
@@ -3256,35 +2058,28 @@ void scene_delete_environment(void)
     if (roomFloorMatrix) { free_uncached(roomFloorMatrix); roomFloorMatrix = NULL; }
 }
 
-void scene_cleanup(void) // Realistically we never want to call this for the jam.
+void scene_cleanup(void)
 {
     //collision_mesh_cleanup();
     scene_delete_environment();
     boss_ground_crush_cleanup();
     camera_reset();
-    
-    character_delete();
+
+    /*
+     * Character lifetime is owned by main.c for this transitional pass.
+     * Do not delete/free it during scene transitions.
+     */
     if (g_boss) {
         boss_free(g_boss);
-        free(g_boss);
         g_boss = NULL;
     }
 
+    blood_particles_fx_cleanup();
+    dust_particles_fx_cleanup();
+    particle_system_cleanup();
+
     dialog_controller_free();
     audio_scene_unload_sfx();
-
-    // --- Title/Cutscene assets not covered by scene_delete_environment() ---
-    if (dynamicBannerDpl) { rspq_block_free(dynamicBannerDpl); dynamicBannerDpl = NULL; }
-    if (dynamicBannerModel) { t3d_model_free(dynamicBannerModel); dynamicBannerModel = NULL; }
-    if (dynamicBannerMatrix) { free_uncached(dynamicBannerMatrix); dynamicBannerMatrix = NULL; }
-    if (dynamicBannerSkeleton) { t3d_skeleton_destroy(dynamicBannerSkeleton); free_uncached(dynamicBannerSkeleton); dynamicBannerSkeleton = NULL; }
-    if (dynamicBannerAnimations) {
-        // only 1 anim currently
-        if (dynamicBannerAnimations[0]) { t3d_anim_destroy(dynamicBannerAnimations[0]); free_uncached(dynamicBannerAnimations[0]); }
-        free_uncached(dynamicBannerAnimations);
-        dynamicBannerAnimations = NULL;
-    }
-
     cutscene_manager_cleanup();
     button_prompt_cleanup();
 
@@ -3294,34 +2089,6 @@ void scene_cleanup(void) // Realistically we never want to call this for the jam
         surface_free(&victoryTitleBgSurf);
     }
 
-    if (dustParticleSprite) {
-        sprite_free(dustParticleSprite);
-        dustParticleSprite = NULL;
-        surface_free(&dustParticleSurf);
-    }
-
-    for (int i = 0; i < BLOOD_SPRITE_COUNT; i++) {
-        if (bloodSprites[i]) {
-            sprite_free(bloodSprites[i]);
-            bloodSprites[i] = NULL;
-            surface_free(&bloodSurfs[i]);
-        }
-    }
-
-    if (zTargetIconSprite) {
-        sprite_free(zTargetIconSprite);
-        zTargetIconSprite = NULL;
-        surface_free(&zTargetIconSurf);
-    }
-
-    if (cUpSprite)    { sprite_free(cUpSprite);    cUpSprite = NULL;    surface_free(&cUpSurf); }
-    if (cDownSprite)  { sprite_free(cDownSprite);  cDownSprite = NULL;  surface_free(&cDownSurf); }
-    if (cLeftSprite)  { sprite_free(cLeftSprite);  cLeftSprite = NULL;  surface_free(&cLeftSurf); }
-    if (cRightSprite) { sprite_free(cRightSprite); cRightSprite = NULL; surface_free(&cRightSurf); }
-
-    if (healthBottleSprite) {
-        sprite_free(healthBottleSprite);
-        healthBottleSprite = NULL;
-        surface_free(&healthBottleSurf);
-    }
+    character_ui_cleanup();
+    boss_ui_cleanup();
 }
