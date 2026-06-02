@@ -1,7 +1,7 @@
 # Pandemonium
 
 ## Story
-A century long darkness is cast on the land by the Demon King. The king is guarded by knights, tormented and broken. You are one of them, cast into setvitude, forced to bend to the kings will. Pandemonium is an original dark-fantasy souls game inspired by Elden Ring.
+A century long darkness has been cast on the land by the Demon King. The king is guarded by knights, tormented and broken. You are one of them, cast into setvitude, forced to bend to the kings will. Pandemonium is an original dark-fantasy souls game inspired by Elden Ring.
 
 ## Controls
 Stick: Move
