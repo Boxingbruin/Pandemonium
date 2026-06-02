@@ -1285,12 +1285,12 @@ void scene_update(void)
     // Debug hotkey: L-trigger skips to boss defeated (dead + fully stopped)
     // NOTE: This is intentionally not gated by DEV_MODE because DEV_MODE is currently
     // compiled as false in `globals.h`, which would otherwise compile this out.
-    // bool lHeld = joypad.btn.l;
-    // bool lJustPressed = lHeld && !lastLPressed;
-    // lastLPressed = lHeld;
-    // if (lJustPressed && boss_is_active(g_boss)) {
-    //     scene_debug_force_boss_defeated();
-    // }
+    bool lHeld = joypad.btn.l;
+    bool lJustPressed = lHeld && !lastLPressed;
+    lastLPressed = lHeld;
+    if (lJustPressed && boss_is_active(g_boss)) {
+        scene_debug_force_boss_defeated();
+    }
 
     if(cutsceneState == CUTSCENE_NONE) // Normal gameplay
     {
