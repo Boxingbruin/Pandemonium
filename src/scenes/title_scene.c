@@ -13,6 +13,7 @@
 #include "../controllers/camera_controller.h"
 #include "../objects/character.h"
 #include "../controllers/dialog_controller.h"
+#include "../utilities/button_prompt_utility.h"
 #include "../utilities/display_utility.h"
 #include "../utilities/game_lighting.h"
 #include "../utilities/general_utility.h"
@@ -46,7 +47,7 @@ static const char *TITLE_SFX_PATHS[TITLE_SFX_COUNT] = {
 
 static const float TITLE_ROOM_Y = -1.0f;
 static const float TITLE_CHARACTER_YAW = T3D_PI * 0.5f;
-static const float TITLE_CHARACTER_WALK_SPEED = 15.0f;
+static const float TITLE_CAMERA_FORWARD_SPEED = 15.0f;
 
 static const float TITLE_TEXT_ACTIVATION_TIME = 50.0f;
 static const float TITLE_START_GAME_TIME = 10.0f;
@@ -252,6 +253,7 @@ static void title_scene_setup_camera_and_character(void)
 
     character_update_position();
     character_set_state(CHAR_STATE_TITLE_IDLE);
+    character_set_velocity_xz(0.0f, 0.0f);
 }
 
 static void title_scene_start_dialog(void)
@@ -275,6 +277,7 @@ void title_scene_enter(void)
     colorAmbient[3] = 0xFF;
 
     dialog_controller_init();
+    button_prompt_init();
     letterbox_init();
     letterbox_show(false);
 
@@ -343,7 +346,6 @@ void title_scene_begin_transition(void)
     s_state = TITLE_STATE_TRANSITION_TO_GUARDIAN;
 
     character_set_state(CHAR_STATE_FOG_WALK);
-    character_set_velocity_xz(TITLE_CHARACTER_WALK_SPEED, 0.0f);
 
     s_skip_button_visible = false;
     s_last_cutscene_a_pressed = btn.a;
@@ -403,9 +405,10 @@ static void title_scene_update_transition(void)
 
     audio_update_fade(deltaTime);
 
+    character_set_state(CHAR_STATE_FOG_WALK);
+
     s_title_start_game_timer += deltaTime;
 
-    const float forwardSpeed = 15.0f;
     const float targetDropSpeed = 1.0f;
 
     customCamDir.v[0] = customCamTarget.v[0] - customCamPos.v[0];
@@ -414,8 +417,8 @@ static void title_scene_update_transition(void)
     t3d_vec3_norm(&customCamDir);
 
     for (int i = 0; i < 3; i++) {
-        customCamPos.v[i]    += customCamDir.v[i] * forwardSpeed * deltaTime;
-        customCamTarget.v[i] += customCamDir.v[i] * forwardSpeed * deltaTime;
+        customCamPos.v[i]    += customCamDir.v[i] * TITLE_CAMERA_FORWARD_SPEED * deltaTime;
+        customCamTarget.v[i] += customCamDir.v[i] * TITLE_CAMERA_FORWARD_SPEED * deltaTime;
     }
 
     customCamTarget.v[1] -= targetDropSpeed * deltaTime;

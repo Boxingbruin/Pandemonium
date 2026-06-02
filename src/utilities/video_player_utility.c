@@ -330,10 +330,9 @@ static void video_player_init_once(void)
     //video_register_codec(&mpeg1_codec);
 }
 
-// If you want different behavior after the video ends, change this:
 static void on_video_finished(void)
 {
-    scene_controller_restart();
+    scene_controller_switch_to_title();
 }
 
 // ----------------------------

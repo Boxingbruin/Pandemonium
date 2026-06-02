@@ -1220,8 +1220,7 @@ void scene_cutscene_update(void)
     scene_update_post_boss_cutscene_input();
 }
 
-void scene_update(void)
-{
+void scene_update(void) {
     if (gameState == GAME_STATE_VIDEO) {
         return;
     }
@@ -1283,13 +1282,14 @@ void scene_update(void)
     }
 
     // Debug hotkey: L-trigger skips to boss defeated (dead + fully stopped)
-    // NOTE: This is intentionally not gated by DEV_MODE because DEV_MODE is currently
-    // compiled as false in `globals.h`, which would otherwise compile this out.
-    bool lHeld = joypad.btn.l;
-    bool lJustPressed = lHeld && !lastLPressed;
-    lastLPressed = lHeld;
-    if (lJustPressed && boss_is_active(g_boss)) {
-        scene_debug_force_boss_defeated();
+    if (DEV_MODE)
+    {
+        bool lHeld = joypad.btn.l;
+        bool lJustPressed = lHeld && !lastLPressed;
+        lastLPressed = lHeld;
+        if (lJustPressed && boss_is_active(g_boss)) {
+            scene_debug_force_boss_defeated();
+        }
     }
 
     if(cutsceneState == CUTSCENE_NONE) // Normal gameplay
@@ -1616,6 +1616,13 @@ void scene_draw_cutscene(T3DViewport *viewport)
     }
 }
 
+static void scene_draw_video_preroll_fade(void)
+{
+    if (videoPreroll != VIDEO_PREROLL_NONE) {
+        display_utility_solid_black_transition(false, VIDEO_FADE_SPEED);
+    }
+}
+
 static void scene_draw_video_trigger(T3DViewport *vp)
 {
     if (!debugDraw || !vp) return;
@@ -1910,6 +1917,8 @@ void scene_draw(T3DViewport *viewport)
                     .width = SCREEN_WIDTH - textX,
                 }, FONT_UNBALANCED, textX, y, "%s", label);
             }
+
+            scene_draw_video_preroll_fade();
             return;
         }
 
@@ -1978,6 +1987,8 @@ void scene_draw(T3DViewport *viewport)
                 }
             }
         }
+
+        scene_draw_video_preroll_fade();
         return;
     }
 
@@ -2003,11 +2014,8 @@ void scene_draw(T3DViewport *viewport)
         }
     }
 
-    // video draw game over fade to black over everything (yes i know it's hacky, time crunch and sludge file)
-
-    if (videoPreroll != VIDEO_PREROLL_NONE) {
-        display_utility_solid_black_transition(false, VIDEO_FADE_SPEED);
-    }
+    // Video preroll fade-to-black must draw over every non-video path.
+    scene_draw_video_preroll_fade();
 
 
     //msa_draw_debug(viewport);
