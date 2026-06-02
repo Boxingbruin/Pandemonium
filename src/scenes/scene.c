@@ -1033,8 +1033,6 @@ static void scene_finish_phase2_cutscene(void)
     cutsceneState = CUTSCENE_NONE;
     skipButtonVisible = false;
 
-    // HUD was hidden the whole cutscene — snap intro + trail so it
-    // reappears at the current value instead of animating back in.
     bossUiIntro = 1.0f;
     boss_ui_set_intro(1.0f);
     if (g_boss && g_boss->maxHealth > 0.0f) {
