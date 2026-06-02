@@ -159,11 +159,6 @@ static const float VIDEO_BLACK_HOLD_S = 0.5f;
 static const float VIDEO_FADE_SPEED   = 200.0f; // same scale you already use
 static bool bossDeathMusicFadeStarted = false;
 
-
-// (phase1Dialogs / phase2Dialogs and cutsceneDialogActive, phase2CutsceneTriggered,
-// bossPostDefeatDialogStep all live in cutscene_manager.c — accessed via the
-// internal header above.)
-
 // Post-boss interaction ("restored") state
 static bool bossPostDefeatTalkDone = false;
 static bool bossWasDead = false; // Tracks death transition for one-time post-death cleanup
@@ -176,7 +171,7 @@ static double s_bossRunStartS = 0.0;
 static const float POST_BOSS_PROMPT_DIST  = 140.0f;   // show A prompt and allow talk when inside this range
 
 // ------------------------------------------------------------
-// Cutscene music -> looping boss music handoff
+// Cutscene music
 // ------------------------------------------------------------
 static bool s_pendingBossLoopMusic = false;
 static const char *s_bossLoopMusicPath = "rom:/audio/music/boss_phase1-looping-22k.wav64";
@@ -534,7 +529,7 @@ void scene_load_environment(void)
 
     // Global/system-level effect. Keep loaded if it is used outside one cutscene,
     // or move it later if it is phase-2-only.
-    //lightning_fx_system_init("rom:/boss/boss_back_sword_lightning2.t3dm");
+    // lightning_fx_system_init("rom:/boss/boss_back_sword_lightning2.t3dm");
 }
 
 void scene_init(void)
@@ -600,13 +595,6 @@ void scene_init(void)
 
     character_ui_init();
     boss_ui_init();
-
-    // Start boss music
-    // TODO: Its turned off for now as it gets annoying to listen to and it crackles
-    // audio_play_music("rom:/audio/music/boss_final_phase.wav64", true);
-
-    // Start boss intro cutscene after character and boss are loaded and positioned
-    //dialog_controller_speak("^A powerful enemy approaches...~\n<Prepare for battle!", 0, 3.0f, false, true);
 
     // Initialize and show letterbox bars for intro
     letterbox_init();
@@ -872,13 +860,6 @@ bool scene_is_menu_active(void) {
     return gameState == GAME_STATE_MENU;
 }
 
-// Check if character would collide with room boundaries at the given position
-// Returns true if character would be outside room bounds (collision detected)
-// bool scene_check_room_bounds(float posX, float posY, float posZ)
-// {
-//     return collision_mesh_check_bounds(posX, posY, posZ);
-// }
-
 void scene_restart(void)
 {
     debugf("RESTART: Starting Guardian scene restart sequence\n");
@@ -1018,9 +999,7 @@ void scene_dev_warp_to_pre_phase2(void)
     }
 }
 
-// End-of-phase-2-cutscene teardown: drop cutscene-only effects and hand control
-// back to the fight at phase 2. Used both when the cutscene completes naturally
-// and when the player skips it via the A-button overlay.
+// End of phase2 cutscene teardown
 static void scene_finish_phase2_cutscene(void)
 {
     lightning_fx_system_ring_enable(false);
@@ -1038,20 +1017,14 @@ static void scene_finish_phase2_cutscene(void)
         g_boss->velX = 0.0f;
         g_boss->velZ = 0.0f;
 
-        // Phase 2 opens with the aerial sword barrage. The handler
-        // lifts the boss to hoverCenterPos.y + hoverHeight and brings
-        // him back down at the end (no gravity in this game).
+        // Phase 2 opens with the aerial sword barrage.
         boss_ai_start_aerial_sword_barrage(g_boss);
     }
 
     // Phase 2 cutscene music was started non-looping; arm the boss loop to take over.
     s_pendingBossLoopMusic = true;
 
-    // Long camera blend so the cinematic angle holds while the boss
-    // lifts ~80 units for the aerial sword barrage. With a short
-    // (1s) blend the player-follow camera snaps to the player
-    // while the boss is mid-lift and he ends up off-screen — the
-    // visible result is "swords fall, boss never moved."
+    // Long camera blend so the cinematic angle hold
     camera_mode_smooth(CAMERA_CHARACTER, 5.0f);
     cameraLockOnActive = true;
 
@@ -1779,31 +1752,17 @@ void scene_draw(T3DViewport *viewport)
     // Draw characters
 
     t3d_matrix_push_pos(1);
-    // if(cutsceneState == CUTSCENE_PHASE1_SWORDS_CLOSEUP)
-    // {
-    //     t3d_matrix_set(cinematicChainsMatrix, true);
-    //     rspq_block_run(cinematicChainsDpl);
-    // }
 
-        character_draw();
-        if (g_boss) {
-            boss_draw(g_boss);
-        }
+    character_draw();
+    if (g_boss) {
+        boss_draw(g_boss);
+    }
 
 
     t3d_matrix_pop(1);
 
     msa_draw_visuals(viewport); // multi sword attack
     //boulder_hazard_draw(viewport); // close-range ground boulders
-
-    //Draw transparencies last
-    // t3d_matrix_push_pos(1);
-    //     t3d_matrix_set(sunshaftsMatrix, true);
-    //     rspq_block_run(sunshaftsDpl);
-    // t3d_matrix_pop(1);
-
-    // rdpq_sync_pipe();
-    // rdpq_mode_zbuf(false, false);
 
     // Fog door (transparent): depth test ON, depth write OFF so it can be drawn late.
     rdpq_sync_pipe();
