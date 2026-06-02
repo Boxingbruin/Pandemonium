@@ -1,7 +1,7 @@
 # Pandemonium
 
 ## Story
-A century of darkness smothers the land beneath the Demon King’s throne of gold, guarded by knights reduced to hollow armor. You are one of them, cursed into this form and forced to bend to the kings will. Pandemonium is a dark-fantasy action-adventure platformer.
+A century long darkness is cast on the land by the Demon King. The king is guarded by knights, tormented and broken. You are one of them, cast into setvitude, forced to bend to the kings will. Pandemonium is an original dark-fantasy souls game inspired by Elden Ring.
 
 ## Controls
 Stick: Move
@@ -21,7 +21,7 @@ Hold Z trigger + left/right on Cpad: Change z target
 ## 2025 N64brew Game Jam - Pandemonium
 - December 1st - Feburary 1st
 - Theme Annonced on December 8th
-- Theme: Repair
+- Theme: Repair (or synonym)
 - We are going for a fully fleshed out boss battle. Aesthetic and mechanics of Elden Ring. Weaving in the theme of repair into the boss. 
 
 ## Features:
