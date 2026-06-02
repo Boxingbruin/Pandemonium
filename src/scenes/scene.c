@@ -1282,15 +1282,15 @@ void scene_update(void) {
     }
 
     // Debug hotkey: L-trigger skips to boss defeated (dead + fully stopped)
-    if (DEV_MODE)
-    {
-        bool lHeld = joypad.btn.l;
-        bool lJustPressed = lHeld && !lastLPressed;
-        lastLPressed = lHeld;
-        if (lJustPressed && boss_is_active(g_boss)) {
-            scene_debug_force_boss_defeated();
-        }
-    }
+    // if (DEV_MODE)
+    // {
+    //     bool lHeld = joypad.btn.l;
+    //     bool lJustPressed = lHeld && !lastLPressed;
+    //     lastLPressed = lHeld;
+    //     if (lJustPressed && boss_is_active(g_boss)) {
+    //         scene_debug_force_boss_defeated();
+    //     }
+    // }
 
     if(cutsceneState == CUTSCENE_NONE) // Normal gameplay
     {
