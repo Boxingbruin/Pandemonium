@@ -14,8 +14,8 @@
 #define DEBUG_DRAW false
 #define DEBUG_DRAW_ENVIRONMENTAL_HAZARDS false
 
-#define DEV_MODE false
-#define SHOW_FPS false
+#define DEV_MODE true
+#define SHOW_FPS true
 #define HARDWARE_MODE false
 #define PAL_MODE false
 #define DRAW_CRT_SAFE_AREA false
