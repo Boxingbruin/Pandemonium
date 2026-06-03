@@ -398,6 +398,8 @@ void cutscene_guardian_phase2_unload(void)
 {
     if (!s_loaded) return;
 
+    rspq_wait();
+
     cutscene_guardian_phase2_free_dpl(&s_bnwBossDpl);
     cutscene_guardian_phase2_free_dpl(&s_bnwChainsDpl);
     cutscene_guardian_phase2_free_dpl(&s_floorGlowBnwDpl);

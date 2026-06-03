@@ -606,7 +606,7 @@ void scene_init(void)
     dust_particles_fx_reset();
     blood_particles_fx_reset();
 
-    msa_init();
+    //msa_init();
 
     // Guardian scene normal startup: entering the scene starts the phase-1 intro.
     gameState = GAME_STATE_PLAYING;
@@ -735,7 +735,7 @@ void scene_reset(void)
     // mid-phase-2 death leaks state into the new run: leftover MSA swords keep
     // falling during phase 1, the BNW lightning ring stays armed, and the
     // shackled-sun screen shake never clears.
-    msa_init();
+    //msa_init();
     lightning_fx_system_ring_enable(false);
     animation_utility_set_screen_shake_mag(0.0f);
 
@@ -1221,6 +1221,7 @@ void scene_cutscene_update(void)
 }
 
 void scene_update(void) {
+
     if (gameState == GAME_STATE_VIDEO) {
         return;
     }
@@ -1483,9 +1484,9 @@ void scene_update(void) {
         }
     }
 
-    if (cutsceneState == CUTSCENE_NONE) {
-        msa_update(deltaTime); // multi sword attack
-    }
+    // if (cutsceneState == CUTSCENE_NONE) {
+    //    msa_update(deltaTime); // multi sword attack
+    // }
     //boulder_hazard_update(deltaTime); // close-range ground boulders
 
     lastZPressed = zHeld;
@@ -1658,7 +1659,7 @@ void scene_draw(T3DViewport *viewport)
     rdpq_mode_fog(RDPQ_FOG_STANDARD);
     rdpq_set_fog_color(fogColor);
 
-    t3d_screen_clear_color(RGBA32(0, 0, 0, 0xFF));
+    //t3d_screen_clear_color(RGBA32(0, 0, 0, 0xFF));
     t3d_screen_clear_depth();
 
     if(cutsceneState != CUTSCENE_NONE){
@@ -1682,63 +1683,47 @@ void scene_draw(T3DViewport *viewport)
     }
     // ===== DRAW 3D =====
 
-    rdpq_sync_pipe();
     rdpq_mode_zbuf(false, false);
 
     // Draw no depth environment first
     t3d_matrix_push_pos(1);
 
-        t3d_matrix_set(windowsMatrix, true);
-        rspq_block_run(windowsDpl);
+    t3d_matrix_set(windowsMatrix, true);
+    rspq_block_run(windowsDpl);
 
-        t3d_matrix_set(mapMatrix, true);
-        rspq_block_run(mapDpl);
-    t3d_matrix_pop(1);
-
+    t3d_matrix_set(mapMatrix, true);
+    rspq_block_run(mapDpl);
 
     //Draw depth environment
-    rdpq_sync_pipe();
     rdpq_mode_zbuf(true, true);
 
-    t3d_matrix_push_pos(1);
-        t3d_matrix_set(roomFloorMatrix, true);
-        rspq_block_run(roomFloorDpl);
-    t3d_matrix_pop(1);
+    t3d_matrix_set(roomFloorMatrix, true);
+    rspq_block_run(roomFloorDpl);
 
-
-    rdpq_sync_pipe();
     rdpq_mode_zbuf(false, false);
 
-    t3d_matrix_push_pos(1);
-        // projection effects
-        boss_ground_crush_draw();
-        // blob shadows
-        character_draw_shadow();
-        if (g_boss) {
-            boss_draw_shadow(g_boss);
-        }
+    // projection effects
+    boss_ground_crush_draw();
+    // blob shadows
+    character_draw_shadow();
+    if (g_boss) {
+        boss_draw_shadow(g_boss);
+    }
 
-    t3d_matrix_pop(1);
-
-    rdpq_sync_pipe();
     rdpq_mode_zbuf(true, true);
 
-    t3d_matrix_push_pos(1);
-        t3d_matrix_set(roomLedgeMatrix, true);
-        rspq_block_run(roomLedgeDpl);
 
-        t3d_matrix_set(pillarsMatrix, true);
-        rspq_block_run(pillarsDpl);
+    t3d_matrix_set(roomLedgeMatrix, true);
+    rspq_block_run(roomLedgeDpl);
 
-        t3d_matrix_set(pillarsFrontMatrix, true);
-        rspq_block_run(pillarsFrontDpl);
+    t3d_matrix_set(pillarsMatrix, true);
+    rspq_block_run(pillarsDpl);
 
-    t3d_matrix_pop(1);
+    t3d_matrix_set(pillarsFrontMatrix, true);
+    rspq_block_run(pillarsFrontDpl);
 
-    rdpq_sync_pipe();
     rdpq_mode_zbuf(false, false);
 
-    t3d_matrix_push_pos(1);
     // floor glow
     if(g_boss->health <= 0)
     {
@@ -1749,46 +1734,36 @@ void scene_draw(T3DViewport *viewport)
             .tileCb = tile_scroll,
         });
     }
-    t3d_matrix_pop(1);
 
-    rdpq_sync_pipe();
+
     rdpq_mode_zbuf(true, true);
 
     // Draw characters
-
-    t3d_matrix_push_pos(1);
-
     character_draw();
     if (g_boss) {
         boss_draw(g_boss);
     }
 
-
-    t3d_matrix_pop(1);
-
-    msa_draw_visuals(viewport); // multi sword attack
+    //msa_draw_visuals(viewport); // multi sword attack
     //boulder_hazard_draw(viewport); // close-range ground boulders
 
     // Fog door (transparent): depth test ON, depth write OFF so it can be drawn late.
-    rdpq_sync_pipe();
     rdpq_mode_zbuf(true, false);
-    t3d_matrix_push_pos(1);
-        if (fogDoorMatrix && fogDoorModel) {
-            t3d_matrix_set(fogDoorMatrix, true);
-            t3d_model_draw_custom(fogDoorModel, (T3DModelDrawConf){
-                .userData = &fogScrollParams,
-                .tileCb = tile_scroll,
-            });
-        }
-    t3d_matrix_pop(1);
-    rdpq_sync_pipe();
+
+    if (fogDoorMatrix && fogDoorModel) {
+        t3d_matrix_set(fogDoorMatrix, true);
+        t3d_model_draw_custom(fogDoorModel, (T3DModelDrawConf){
+            .userData = &fogScrollParams,
+            .tileCb = tile_scroll,
+        });
+    }
+
     rdpq_mode_zbuf(true, true);
 
-    t3d_matrix_push_pos(1);
-        t3d_matrix_set(chainsMatrix, true);
-        rspq_block_run(chainsDpl);
+    t3d_matrix_set(chainsMatrix, true);
+    rspq_block_run(chainsDpl);
+
     t3d_matrix_pop(1);
-    // ===== DRAW 2D =====
 
     // Screen-space ribbon trails, drawn right after 3D so they feel "in world"
     sword_trail_draw_all(viewport);
@@ -1801,6 +1776,7 @@ void scene_draw(T3DViewport *viewport)
     blood_particles_fx_update(deltaTime);
     blood_particles_fx_draw(viewport);
 
+    // ===== DRAW 2D =====
     // Post-boss interaction prompt ("A") above the defeated boss when close enough to interact
     {
         T3DVec3 postBossPromptPos;
@@ -2060,6 +2036,7 @@ void scene_delete_environment(void)
 
 void scene_cleanup(void)
 {
+    rspq_wait();
     //collision_mesh_cleanup();
     scene_delete_environment();
     boss_ground_crush_cleanup();
