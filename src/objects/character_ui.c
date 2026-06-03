@@ -201,7 +201,6 @@ void character_ui_draw_health_bar(const char *name, float ratio, float flash)
     ratio = character_ui_clampf(ratio, 0.0f, 1.0f);
     flash = character_ui_clampf(flash, 0.0f, 1.0f);
 
-    rdpq_sync_pipe();
     rdpq_set_mode_standard();
 
 #ifdef RDPQ_FOG_DISABLED
@@ -276,7 +275,6 @@ void character_ui_draw_stamina_bar(float ratio)
 {
     ratio = character_ui_clampf(ratio, 0.0f, 1.0f);
 
-    rdpq_sync_pipe();
     rdpq_set_mode_standard();
 
 #ifdef RDPQ_FOG_DISABLED
@@ -398,7 +396,6 @@ void character_ui_draw_c_buttons(void)
     int downX  = centerX;
     int downY  = centerY + spacingY;
 
-    rdpq_sync_pipe();
     rdpq_set_mode_standard();
     rdpq_mode_alphacompare(0);
     rdpq_mode_blender(RDPQ_BLENDER_MULTIPLY);
@@ -464,7 +461,6 @@ void character_ui_draw_c_buttons(void)
 
         // Tint the IA8 bottle sprite dark red so it contrasts against the
         // yellow button.
-        rdpq_sync_pipe();
         rdpq_set_mode_standard();
         rdpq_mode_alphacompare(1);
         rdpq_mode_combiner(RDPQ_COMBINER_TEX_FLAT);
@@ -485,7 +481,6 @@ void character_ui_draw_c_buttons(void)
         const int textX = leftX + (drawW / 2) + 2;
         const int textY = leftY + 4;
 
-        rdpq_sync_pipe();
         rdpq_set_mode_standard();
         rdpq_mode_combiner(RDPQ_COMBINER_FLAT);
         rdpq_mode_blender(RDPQ_BLENDER_MULTIPLY);

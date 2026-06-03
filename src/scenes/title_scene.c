@@ -309,6 +309,8 @@ void title_scene_exit(void)
 
     camera_breath_active(false);
 
+    rspq_wait();
+
     title_scene_free_dynamic_banner_assets();
 
     title_scene_free_model_asset(
@@ -496,35 +498,33 @@ void title_scene_update(void)
 
 static void title_scene_draw_3d(void)
 {
-    rdpq_sync_pipe();
     rdpq_mode_zbuf(false, false);
 
     t3d_matrix_push_pos(1);
-        if (s_room_matrix && s_room_dpl) {
-            t3d_matrix_set(s_room_matrix, true);
-            rspq_block_run(s_room_dpl);
-        }
 
-        if (s_dynamic_banner_matrix && s_dynamic_banner_dpl) {
-            t3d_matrix_set(s_dynamic_banner_matrix, true);
-            rspq_block_run(s_dynamic_banner_dpl);
-        }
-    t3d_matrix_pop(1);
+    if (s_room_matrix && s_room_dpl) {
+        t3d_matrix_set(s_room_matrix, true);
+        rspq_block_run(s_room_dpl);
+    }
 
-    rdpq_sync_pipe();
+    if (s_dynamic_banner_matrix && s_dynamic_banner_dpl) {
+        t3d_matrix_set(s_dynamic_banner_matrix, true);
+        rspq_block_run(s_dynamic_banner_dpl);
+    }
+
     rdpq_mode_zbuf(true, true);
 
-    t3d_matrix_push_pos(1);
-        character_draw();
+    character_draw();
 
-        if (s_fog_door_matrix && s_fog_door_model) {
-            t3d_matrix_set(s_fog_door_matrix, true);
+    if (s_fog_door_matrix && s_fog_door_model) {
+        t3d_matrix_set(s_fog_door_matrix, true);
 
-            t3d_model_draw_custom(s_fog_door_model, (T3DModelDrawConf){
-                .userData = &s_fog_scroll_params,
-                .tileCb = tile_scroll,
-            });
-        }
+        t3d_model_draw_custom(s_fog_door_model, (T3DModelDrawConf){
+            .userData = &s_fog_scroll_params,
+            .tileCb = tile_scroll,
+        });
+    }
+
     t3d_matrix_pop(1);
 }
 
@@ -660,8 +660,6 @@ void title_scene_draw(T3DViewport *viewport)
     t3d_light_set_ambient(colorAmbient);
 
     title_scene_draw_3d();
-
-    rdpq_sync_pipe();
 
     if (s_state == TITLE_STATE_TRANSITION_TO_GUARDIAN || s_state == TITLE_STATE_DONE) {
         title_scene_draw_transition_2d();

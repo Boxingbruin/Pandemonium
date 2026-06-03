@@ -1659,7 +1659,7 @@ void scene_draw(T3DViewport *viewport)
     rdpq_mode_fog(RDPQ_FOG_STANDARD);
     rdpq_set_fog_color(fogColor);
 
-    t3d_screen_clear_color(RGBA32(0, 0, 0, 0xFF));
+    //t3d_screen_clear_color(RGBA32(0, 0, 0, 0xFF));
     t3d_screen_clear_depth();
 
     if(cutsceneState != CUTSCENE_NONE){
@@ -2036,6 +2036,7 @@ void scene_delete_environment(void)
 
 void scene_cleanup(void)
 {
+    rspq_wait();
     //collision_mesh_cleanup();
     scene_delete_environment();
     boss_ground_crush_cleanup();

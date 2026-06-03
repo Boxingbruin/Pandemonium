@@ -177,9 +177,6 @@ static void cutscene_guardian_phase1_next_state(SceneContext *ctx, CutsceneState
     cutscene_guardian_phase1_enter(ctx, nextState);
 }
 
-
-
-
 static void cutscene_guardian_phase1_draw_boss_title(SceneContext *ctx)
 {
     if (!ctx || !ctx->boss) return;
@@ -290,6 +287,8 @@ void cutscene_guardian_phase1_load(void)
 void cutscene_guardian_phase1_unload(void)
 {
     if (!s_loaded) return;
+
+    rspq_wait();
 
     cutscene_guardian_phase1_free_dpl(&s_cinematicChainsDpl);
     cutscene_guardian_phase1_free_dpl(&s_chainBreakDpl);

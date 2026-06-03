@@ -288,7 +288,6 @@ static BossUiHealthLayout boss_ui_make_health_layout(void)
 
 static void boss_ui_prepare_flat_ui_pipe(void)
 {
-    rdpq_sync_pipe();
     rdpq_set_mode_standard();
 
 #ifdef RDPQ_FOG_DISABLED
@@ -303,7 +302,6 @@ static void boss_ui_prepare_flat_ui_pipe(void)
 
 static void boss_ui_prepare_sprite_ui_pipe(bool alphaCompare)
 {
-    rdpq_sync_pipe();
     rdpq_set_mode_standard();
 
 #ifdef RDPQ_FOG_DISABLED
@@ -576,7 +574,6 @@ void boss_ui_draw_lockon_marker(
     int px = (int)screenPos.v[0];
     int py = (int)screenPos.v[1];
 
-    rdpq_sync_pipe();
     rdpq_set_mode_standard();
 
     if (s_zTargetIconSprite && s_zTargetIconSurf.width > 0 && s_zTargetIconSurf.height > 0) {
