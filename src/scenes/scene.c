@@ -1674,6 +1674,7 @@ void scene_draw(T3DViewport *viewport)
 
     if(cutsceneState != CUTSCENE_NONE)
     {
+        t3d_screen_clear_color(RGBA32(0, 0, 0, 0xFF));
         scene_draw_cutscene(viewport);
         // Draw letterbox bars during cutscenes
         letterbox_draw();
