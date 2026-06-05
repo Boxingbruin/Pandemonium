@@ -18,6 +18,7 @@ void dev_frames_end_update(void);
 
 // Memory debug mode
 void dev_draw_memory_debug(void);
+void dev_log_memory_checkpoint(const char *tag);
 
 // Check if dev menu is currently open
 bool dev_menu_is_open(void);

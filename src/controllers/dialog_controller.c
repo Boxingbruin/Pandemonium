@@ -1,5 +1,7 @@
 #include <libdragon.h>
-#include <ctype.h>
+#include <stdbool.h>
+#include <string.h>
+
 #include "dialog_controller.h"
 #include "../utilities/game_time.h"
 #include "../utilities/globals.h"
@@ -17,22 +19,26 @@ static float currentSpeed = 0.08f;
 
 static int checkedCharacters = 0;
 static int visibleCharacters = 0;
-static char visibleText[MAX_TEXT_LENGTH]; // Buffer to hold the visible text
+static char visibleText[MAX_TEXT_LENGTH];
 
 static float dialogTimer = 0.0f;
 static float dialogActiveTimer = 0.0f;
 static float dialogActiveTime = 5.0f;
 
-static sprite_t *dialogBox;
-static surface_t dialogBoxSurf;
+static sprite_t *dialogBox = NULL;
+static surface_t dialogBoxSurf = {0};
 
-static sprite_t *dialogVerticalBox;
-static surface_t dialogVerticalBoxSurf;
+static sprite_t *dialogVerticalBox = NULL;
+static surface_t dialogVerticalBoxSurf = {0};
 
 static const char *dialogText = "meep.";
 
 static bool showDialog = false;
 static bool endDialog = true;
+
+// TODO: TEMP
+sprite_t *dialog4Text = NULL;
+surface_t dialog4TextSurf = {0};
 
 void dialog_controller_reset(void)
 {
@@ -47,265 +53,256 @@ void dialog_controller_reset(void)
     dialogText = "meep.";
     showDialog = false;
     endDialog = true;
-    
-    // Clear the visible text buffer
+
     visibleText[0] = '\0';
 }
 
-// TODO: TEMP
-sprite_t *dialog4Text;
-surface_t dialog4TextSurf;
-
-static int count_printable_glyphs(const char* str) {
+static int count_printable_glyphs(const char* str)
+{
     int src_index = 0;
     int count = 0;
+
     while (str[src_index] != '\0') {
         char c = str[src_index];
-        if (c == '<' || c == '^' || c == '>' || c == '~' || c == '@' || c == ' ' || c == '\n') {
+
+        if (
+            c == '<' ||
+            c == '^' ||
+            c == '>' ||
+            c == '~' ||
+            c == '@' ||
+            c == ' ' ||
+            c == '\n'
+        ) {
             src_index++;
             continue;
         }
-        // Simple single-byte character counting for now
+
         src_index += 1;
         count++;
     }
+
     return count;
 }
 
-// Fills visibleDialog with the first N visible glyphs (not counting control codes)
-static void build_clean_dialog(char* out, const char* src) {
-    int src_index = 0, dst_index = 0;
-    while (src[src_index]) {
-        char c = src[src_index];
-        if (c == '<' || c == '^' || c == '>' || c == '~' || c == '@') {
-            src_index++;
-            continue;
-        }
-        // Simple single-byte character copying for now
-        out[dst_index++] = src[src_index++];
-    }
-    out[dst_index] = '\0';
-}
-
-void dialog_controller_speak(const char* text, int style, float activeTime, bool interactable, bool end) 
+void dialog_controller_speak(
+    const char* text,
+    int style,
+    float activeTime,
+    bool interactable,
+    bool end
+)
 {
+    (void)style;
+    (void)interactable;
+
     dialogActiveTime = activeTime;
-    dialogText = text;
+    dialogText = text ? text : "";
     maxCharacters = count_printable_glyphs(dialogText);
     currentSpeed = FAST_SPEED;
     visibleCharacters = 0;
     checkedCharacters = 0;
     dialogTimer = 0.0f;
-    dialogActiveTimer = 0.0f; // important: reset per-line lifetime so new speaks don't instantly auto-end
+    dialogActiveTimer = 0.0f;
     showDialog = true;
     endDialog = end;
     visibleText[0] = '\0';
 }
 
-bool dialog_controller_speaking(void) 
+bool dialog_controller_speaking(void)
 {
     return showDialog;
 }
 
-void dialog_controller_stop_speaking(void) 
+void dialog_controller_stop_speaking(void)
 {
     showDialog = false;
-    dialogActiveTimer = 0.0f; // Reset the timer
+    dialogActiveTimer = 0.0f;
 }
 
 void dialog_controller_skip(void)
 {
-    // End immediately; sequencing logic lives in the caller (eg `scene.c`).
     dialog_controller_stop_speaking();
 }
 
-// Never call this again.
-void dialog_controller_init(void) 
+void dialog_controller_init(void)
 {
-    dialogBox = sprite_load("rom:/dialog.ia8.sprite");
-    dialogBoxSurf = sprite_get_pixels(dialogBox);
+    if (!dialogBox) {
+        dialogBox = sprite_load("rom:/dialog.ia8.sprite");
 
-    dialogVerticalBox = sprite_load("rom:/dialog_vertical.ia8.sprite");
-    dialogVerticalBoxSurf = sprite_get_pixels(dialogVerticalBox);
-    // Font is already registered in main.c, so we don't need to load it again
+        if (dialogBox) {
+            dialogBoxSurf = sprite_get_pixels(dialogBox);
+        } else {
+            dialogBoxSurf = (surface_t){0};
+            debugf("[DIALOG] failed to load rom:/dialog.ia8.sprite\n");
+        }
+    }
 
-    // TODO: TEMP
-    // dialog4Text = sprite_load("rom:/temp_king_line.sprite");
-    // dialog4TextSurf = sprite_get_pixels(dialog4Text);
+    if (!dialogVerticalBox) {
+        dialogVerticalBox = sprite_load("rom:/dialog_vertical.ia8.sprite");
+
+        if (dialogVerticalBox) {
+            dialogVerticalBoxSurf = sprite_get_pixels(dialogVerticalBox);
+        } else {
+            dialogVerticalBoxSurf = (surface_t){0};
+            debugf("[DIALOG] failed to load rom:/dialog_vertical.ia8.sprite\n");
+        }
+    }
+
+    // Font is already registered in main.c, so we don't load it here.
+    dialog_controller_reset();
 }
 
-void dialog_controller_draw_dialog(bool isVertical, int x, int y, int width, int height) 
+void dialog_controller_draw_dialog(bool isVertical, int x, int y, int width, int height)
 {
     int paddingX = 20;
     int paddingY = 10;
 
-    if(isVertical){
+    surface_t *boxSurf = &dialogBoxSurf;
+
+    if (isVertical) {
         paddingY = 20;
+        boxSurf = &dialogVerticalBoxSurf;
     }
+
+    if (!boxSurf->buffer || boxSurf->width <= 0 || boxSurf->height <= 0) {
+        return;
+    }
+
+    int src_w = boxSurf->width;
+    int src_h = boxSurf->height;
+
+    const float sx = (src_w > 0) ? ((float)width  / (float)src_w) : 1.0f;
+    const float sy = (src_h > 0) ? ((float)height / (float)src_h) : 1.0f;
 
     rdpq_sync_pipe();
     rdpq_set_mode_standard();
     rdpq_mode_alphacompare(1);
     rdpq_mode_blender(RDPQ_BLENDER_MULTIPLY);
 
-    // source (texture) dimensions
-    int src_w = dialogBoxSurf.width;
-    int src_h = dialogBoxSurf.height;
-
-    if(isVertical){
-        src_w = dialogVerticalBoxSurf.width;
-        src_h = dialogVerticalBoxSurf.height;
-    }
-
-    // destination (requested) dimensions -> scale factors
-    const float sx = (src_w > 0) ? ((float)width  / (float)src_w) : 1.0f;
-    const float sy = (src_h > 0) ? ((float)height / (float)src_h) : 1.0f;
-
-
-    rdpq_sync_pipe(); // possibly needed for hardware
-    rdpq_set_mode_standard();
-    // rdpq_set_mode_copy(true);
-    //rdpq_mode_filter(FILTER_BILINEAR);
-    rdpq_mode_alphacompare(1);
-    //rdpq_mode_dithering(DITHER_SQUARE_SQUARE);
-
-    // Blender mode for proper alpha blending
-    rdpq_mode_blender(RDPQ_BLENDER_MULTIPLY);
-    //rdpq_mode_combiner(RDPQ_COMBINER1((0,0,0,0),(0,0,0, TEX0)));
-
-    if(isVertical){
-        // Blit the sprite with scale applied
-        rdpq_tex_blit(&dialogVerticalBoxSurf, x, y, &(rdpq_blitparms_t){
-            .scale_x = sx,
-            .scale_y = sy,
-        });
-    }
-    else
-    {
-        // Blit the sprite with scale applied
-        rdpq_tex_blit(&dialogBoxSurf, x, y, &(rdpq_blitparms_t){
-            .scale_x = sx,
-            .scale_y = sy,
-        });
-    }
+    rdpq_tex_blit(boxSurf, x, y, &(rdpq_blitparms_t){
+        .scale_x = sx,
+        .scale_y = sy,
+    });
 
     int src_index = 0;
     int dst_index = 0;
     int chars_copied = 0;
-    
-    while (chars_copied < visibleCharacters && dialogText[src_index] != '\0') 
-    {
-        // Get the current character
+
+    while (
+        chars_copied < visibleCharacters &&
+        dialogText[src_index] != '\0' &&
+        dst_index < MAX_TEXT_LENGTH - 1
+    ) {
         char c = dialogText[src_index];
-    
-        // Check for special speed control characters and update the speed
+
         if (c == '<') {
-            currentSpeed = SLOW_SPEED;  // Set slow speed
-            src_index++;  // Skip the < character
-            continue;  // Skip this iteration and check the next character
-        }
-        else if (c == '^') {
-            currentSpeed = NORMAL_SPEED;  // Set normal speed
-            src_index++;  // Skip the ^ character
-            continue;  // Skip this iteration and check the next character
-        }
-        else if (c == '>') {
-            currentSpeed = FAST_SPEED;  // Set fast speed
-            src_index++;  // Skip the > character
-            continue;  // Skip this iteration and check the next character
-        }
-        
-        // Skip the '~' character (which indicates a pause or special effect)
-        if (c == '~') {
-            currentSpeed = BREATH_SPEED; 
-            src_index += 1; // Skip the ~ (1 byte)
+            currentSpeed = SLOW_SPEED;
+            src_index++;
+            continue;
+        } else if (c == '^') {
+            currentSpeed = NORMAL_SPEED;
+            src_index++;
+            continue;
+        } else if (c == '>') {
+            currentSpeed = FAST_SPEED;
+            src_index++;
+            continue;
+        } else if (c == '~') {
+            currentSpeed = BREATH_SPEED;
+            src_index++;
+            continue;
+        } else if (c == '@') {
+            src_index++;
             continue;
         }
 
-        int char_len = 1; // Simple single-byte character length for now
-    
-        // Copy the full UTF-8 character (could be multiple bytes)
-        for (int i = 0; i < char_len; i++) {
+        int char_len = 1;
+
+        for (int i = 0; i < char_len && dst_index < MAX_TEXT_LENGTH - 1; i++) {
             visibleText[dst_index++] = dialogText[src_index++];
         }
-        
+
         chars_copied++;
     }
-    
+
     visibleText[dst_index] = '\0';
 
     rdpq_text_printf(&(rdpq_textparms_t){
-        .align = ALIGN_LEFT, 
-        .width = width - (paddingX * 2), 
+        .align = ALIGN_LEFT,
+        .width = width - (paddingX * 2),
         .height = height,
         .wrap = WRAP_WORD,
-      }, FONT_UNBALANCED, x + paddingX, y + paddingY, visibleText);
+    }, FONT_UNBALANCED, x + paddingX, y + paddingY, visibleText);
 }
 
-void dialog_controller_update(void) 
+void dialog_controller_update(void)
 {
-    if(!showDialog) return;
+    if (!showDialog) {
+        return;
+    }
 
-    if(dialogActiveTimer >= dialogActiveTime && endDialog) 
-    {
-        // Check if the dialog is finished
-        if (visibleCharacters >= maxCharacters) 
-        {
+    if (dialogActiveTimer >= dialogActiveTime && endDialog) {
+        if (visibleCharacters >= maxCharacters) {
             showDialog = false;
-            dialogActiveTimer = 0.0f; // Reset the timer
+            dialogActiveTimer = 0.0f;
             return;
         }
     }
-    
-    if(dialogActiveTime != 0.0f || endDialog == true) 
-    {
+
+    if (dialogActiveTime != 0.0f || endDialog == true) {
         dialogActiveTimer += deltaTime;
     }
 
     maxCharacters = strlen(dialogText);
 
-    if (visibleCharacters < maxCharacters) 
-    {
+    if (visibleCharacters < maxCharacters) {
         dialogTimer += deltaTime;
+
         char c = dialogText[visibleCharacters];
 
-        if (c == ' ' || c == '\n') 
-        {
+        if (c == ' ' || c == '\n') {
             currentWordIndex++;
             visibleCharacters++;
             dialogTimer = 0.0f;
             return;
         }
 
-        if (dialogTimer >= currentSpeed) 
-        {
-            dialogTimer = 0.0f; // Reset the timer
+        if (dialogTimer >= currentSpeed) {
+            dialogTimer = 0.0f;
             visibleCharacters++;
         }
     }
 }
 
-void dialog_controller_draw(bool isVertical, int x, int y, int width, int height) 
+void dialog_controller_draw(bool isVertical, int x, int y, int width, int height)
 {
-    if(showDialog)
-    {
+    if (showDialog) {
         dialog_controller_draw_dialog(isVertical, x, y, width, height);
     }
 }
 
-// No need to call this function, it's here for completeness
-void dialog_controller_free(void) 
+void dialog_controller_free(void)
 {
-    rspq_wait(); // Ensure all rendering is done before freeing resources
+    rspq_wait();
+
     if (dialogBox) {
         sprite_free(dialogBox);
         dialogBox = NULL;
-        surface_free(&dialogBoxSurf);
+        dialogBoxSurf = (surface_t){0};
     }
+
+    if (dialogVerticalBox) {
+        sprite_free(dialogVerticalBox);
+        dialogVerticalBox = NULL;
+        dialogVerticalBoxSurf = (surface_t){0};
+    }
+
     if (dialog4Text) {
         sprite_free(dialog4Text);
         dialog4Text = NULL;
-        surface_free(&dialog4TextSurf);
+        dialog4TextSurf = (surface_t){0};
     }
-    // Font is managed by main.c, so we don't free it here
+
+    dialog_controller_reset();
 }
