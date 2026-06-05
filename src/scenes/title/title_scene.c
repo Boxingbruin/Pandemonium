@@ -9,25 +9,25 @@
 
 #include <stdbool.h>
 
-#include "../controllers/audio_controller.h"
-#include "../controllers/camera_controller.h"
-#include "../objects/character.h"
-#include "../controllers/dialog_controller.h"
-#include "../utilities/button_prompt_utility.h"
-#include "../utilities/display_utility.h"
-#include "../utilities/game_lighting.h"
-#include "../utilities/general_utility.h"
-#include "../utilities/game_time.h"
-#include "../utilities/globals.h"
-#include "../utilities/joypad_utility.h"
-#include "../utilities/letterbox_utility.h"
-#include "../utilities/menu_controller.h"
-#include "../utilities/save_controller.h"
-#include "../utilities/video_layout.h"
+#include "../../controllers/audio_controller.h"
+#include "../../controllers/camera_controller.h"
+#include "../../character/character.h"
+#include "../../controllers/dialog_controller.h"
+#include "../../utilities/button_prompt_utility.h"
+#include "../../utilities/display_utility.h"
+#include "../../utilities/game_lighting.h"
+#include "../../utilities/general_utility.h"
+#include "../../utilities/game_time.h"
+#include "../../utilities/globals.h"
+#include "../../utilities/joypad_utility.h"
+#include "../../utilities/letterbox_utility.h"
+#include "../../controllers/menu_controller.h"
+#include "../../utilities/save_controller.h"
+#include "../../utilities/video_layout.h"
 
-#include "../dev/dev.h"
+#include "../../dev/dev.h"
 
-#include "../managers/cutscene_manager.h"
+#include "../../managers/cutscene_manager.h"
 
 typedef enum {
     TITLE_STATE_INACTIVE = 0,

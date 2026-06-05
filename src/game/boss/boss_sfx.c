@@ -2,7 +2,7 @@
 #include "boss_sfx.h"
 
 #include "character.h"
-#include "scene_sfx.h"
+#include "../../scenes/guardian/guardian_scene_sfx.h"
 
 #include "game_time.h"
 

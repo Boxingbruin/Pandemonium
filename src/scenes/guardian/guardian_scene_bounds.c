@@ -1,4 +1,4 @@
-#include "scene_bounds.h"
+#include "guardian_scene_bounds.h"
 
 #include <math.h>
 #include <stdbool.h>
@@ -6,8 +6,8 @@
 #include <libdragon.h>
 #include <t3d/t3d.h>
 
-#include "../dev/debug_draw.h"
-#include "../utilities/simple_collision_utility.h"
+#include "../../dev/debug_draw.h"
+#include "../../utilities/simple_collision_utility.h"
 
 // ------------------------------------------------------------
 // Static scene bounds / room OBBs

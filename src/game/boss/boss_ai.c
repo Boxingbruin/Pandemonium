@@ -17,7 +17,7 @@
 
 #include "game_time.h"
 #include "character.h"
-#include "scene.h"
+#include "../../scenes/guardian/guardian_scene.h"
 #include "simple_collision_utility.h"
 #include "environmental_mechanics/multi_sword_attacks.h"
 

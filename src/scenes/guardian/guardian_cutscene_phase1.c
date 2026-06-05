@@ -1,4 +1,4 @@
-#include "cutscene_guardian_phase1.h"
+#include "guardian_cutscene_phase1.h"
 
 #include <stdbool.h>
 #include <math.h>
@@ -14,18 +14,17 @@
 #include <t3d/t3danim.h>
 #include <t3d/t3dmodel.h>
 
-#include "scene_context.h"
-#include "../controllers/audio_controller.h"
-#include "../controllers/camera_controller.h"
-#include "../objects/character.h"
-#include "../managers/cutscene_manager.h"
-#include "../managers/cutscene_manager_internal.h"
-#include "../game/bosses/boss_anim.h"
-#include "../game/bosses/boss_render.h"
-#include "../utilities/display_utility.h"
-#include "../utilities/globals.h"
-#include "../utilities/joypad_utility.h"
-#include "../utilities/letterbox_utility.h"
+#include "guardian_scene_context.h"
+#include "../../controllers/audio_controller.h"
+#include "../../controllers/camera_controller.h"
+#include "../../character/character.h"
+#include "../../managers/cutscene_manager.h"
+#include "../../managers/cutscene_manager_internal.h"
+#include "../../game/boss/boss_render.h"
+#include "../../utilities/display_utility.h"
+#include "../../utilities/globals.h"
+#include "../../utilities/joypad_utility.h"
+#include "../../utilities/letterbox_utility.h"
 
 #define CINEMATIC_CHAINS_ANIM_COUNT 2
 #define CHAIN_BREAK_ANIM_COUNT 1

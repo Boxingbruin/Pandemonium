@@ -8,7 +8,6 @@
 
 #include <math.h>
 #include <stdbool.h>
-#include <stdint.h>
 #include <string.h>
 
 #include "../utilities/general_utility.h"

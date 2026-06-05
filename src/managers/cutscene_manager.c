@@ -12,18 +12,18 @@
 #include "../controllers/camera_controller.h"
 #include "../controllers/dialog_controller.h"
 
-#include "cutscene_guardian_phase1.h"
-#include "cutscene_guardian_phase2.h"
+#include "../scenes/guardian/guardian_cutscene_phase1.h"
+#include "guardian_cutscene_phase2.h"
 
-#include "scene_context.h"
+#include "../scenes/guardian/guardian_scene_context.h"
 
 #include "../utilities/button_prompt_utility.h"
 
-#include "../game/bosses/boss.h"
+#include "../game/boss/boss.h"
 
 // TODO: These should be removed once cutscene animations are handled directly
 // by the boss scripts.
-#include "../game/bosses/boss_anim.h"
+#include "../game/boss/boss_anim.h"
 
 // ----------------------------------------------------------------------------
 // Constants

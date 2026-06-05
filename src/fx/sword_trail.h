@@ -2,7 +2,6 @@
 #define SWORD_TRAIL_H
 
 #include <stdint.h>
-#include <stdbool.h>
 
 #define TRAIL_MAX_SAMPLES 64
 

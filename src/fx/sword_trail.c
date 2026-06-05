@@ -4,14 +4,11 @@
 #include <t3d/t3d.h>
 #include <libdragon.h>
 #include <rdpq.h>
-#include <rspq.h>
-#include <stdint.h>
 #include <math.h>
 #include <string.h>
-#include <stdlib.h>
 #include <assert.h>
 
-#include "game_math.h" // clampf
+#include "../utilities/game_math.h"
 
 // ============================================================
 // Defaults (copied into per-instance fields at init)

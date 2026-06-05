@@ -13,13 +13,13 @@
 #include "game_math.h"
 #include "globals.h"
 
-#include "game/bosses/boss.h"
+#include "game/boss/boss.h"
 #include "collision_system.h"
 #include "controllers/audio_controller.h"
-#include "scenes/scene_sfx.h"
+#include "../scenes/guardian/guardian_scene_sfx.h"
 #include "utilities/general_utility.h"
-#include "utilities/sword_trail.h"
-#include "animation_utility.h"
+#include "../fx/sword_trail.h"
+#include "../fx/screen_shake.h"
 #include "fx/blood_particles_fx.h"
 
 /*
@@ -3028,7 +3028,7 @@ void character_apply_damage(float amount)
     } else {
         // Non-knockdown hits should not leave knockback running
         audio_play_scene_sfx_dist(SCENE1_SFX_CHAR_UMPH, 1.0f, 0.0f);
-        animation_utility_set_screen_shake_mag(10.0f);
+        screen_shake_set_shake_mag(10.0f);
         strongKnockbackActive = false;
     }
 

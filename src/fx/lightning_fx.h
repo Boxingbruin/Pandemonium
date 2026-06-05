@@ -1,8 +1,6 @@
 #ifndef LIGHTNING_FX
 #define LIGHTNING_FX
 
-#include <stdbool.h>
-
 void lightning_fx_system_init(const char* rom_model_path);
 void lightning_fx_system_shutdown(void);
 

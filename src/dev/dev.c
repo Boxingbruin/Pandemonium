@@ -9,18 +9,16 @@
 #include "dev.h"
 #include "debug_overlay.h"
 #include "debug_draw.h"
-#include "collision_mesh.h"
 
 #include "camera_controller.h"
-#include "character.h"
-#include "game/bosses/boss.h"
+#include "character/character.h"
+#include "game/boss/boss.h"
 
 #include "game_lighting.h"
-#include "game_time.h"
 #include "joypad_utility.h"
 
 #include "globals.h"
-#include "scene.h"
+#include "../scenes/guardian/guardian_scene.h"
 
 bool debugDraw = true;
 

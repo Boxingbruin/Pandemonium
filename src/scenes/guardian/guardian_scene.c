@@ -6,8 +6,8 @@
 #include <string.h>
 #include <stdio.h>
 
-#include "scene.h"
-#include "scene_sfx.h"
+#include "guardian_scene.h"
+#include "guardian_scene_sfx.h"
 #include "scene_controller.h"
 
 #include "audio_controller.h"
@@ -20,34 +20,34 @@
 #include "game_time.h"
 
 #include "globals.h"
-#include "../utilities/button_prompt_utility.h"
+#include "../../utilities/button_prompt_utility.h"
 
-#include "../managers/cutscene_manager.h"
-#include "../managers/cutscene_manager_internal.h"
-#include "scene_context.h"
+#include "../../managers/cutscene_manager.h"
+#include "../../managers/cutscene_manager_internal.h"
+#include "guardian_scene_context.h"
 
 #include "character.h"
 #include "character_ui.h"
-#include "../game/bosses/boss.h"
-#include "../game/bosses/boss_ai.h"
-#include "../game/bosses/boss_render.h"
-#include "../game/bosses/boss_ui.h"
-#include "../game/bosses/environmental_effects/boss_ground_crush.h"
-#include "../controllers/dialog_controller.h"
+#include "../../game/boss/boss.h"
+#include "../../game/boss/boss_ai.h"
+#include "../../game/boss/boss_render.h"
+#include "../../game/boss/boss_ui.h"
+#include "../../game/boss/environmental_mechanics/boss_ground_crush.h"
+#include "../../controllers/dialog_controller.h"
 #include "display_utility.h"
-#include "menu_controller.h"
+#include "../../controllers/menu_controller.h"
 #include "save_controller.h"
 #include "collision_system.h"
 #include "letterbox_utility.h"
-#include "utilities/sword_trail.h"
-#include "utilities/animation_utility.h"
+#include "../../fx/sword_trail.h"
+#include "../../fx/screen_shake.h"
 
 // TODO: This should not be declared in the header file, as it is only used externally (temp)
 #include "dev.h"
 #include "debug_draw.h"
 #include "utilities/simple_collision_utility.h"
 
-#include "video_player_utility.h"
+#include "../../controllers/fmv_controller.h"
 
 #include "multi_sword_attacks.h" // TODO: call only from boss
 #include "fx/lightning_fx.h"
@@ -737,7 +737,7 @@ void scene_reset(void)
     // shackled-sun screen shake never clears.
     //msa_init();
     lightning_fx_system_ring_enable(false);
-    animation_utility_set_screen_shake_mag(0.0f);
+    screen_shake_set_shake_mag(0.0f);
 
     // Reset letterbox to show state for intro
     letterbox_show(false);
@@ -1003,7 +1003,7 @@ void scene_dev_warp_to_pre_phase2(void)
 static void scene_finish_phase2_cutscene(void)
 {
     lightning_fx_system_ring_enable(false);
-    animation_utility_set_screen_shake_mag(0.0f);
+    screen_shake_set_shake_mag(0.0f);
     joypad_rumble_stop();
     dialog_controller_stop_speaking();
     cutsceneDialogActive = false;
@@ -1659,7 +1659,7 @@ void scene_draw(T3DViewport *viewport)
     rdpq_mode_fog(RDPQ_FOG_STANDARD);
     rdpq_set_fog_color(fogColor);
 
-    //t3d_screen_clear_color(RGBA32(0, 0, 0, 0xFF));
+    t3d_screen_clear_color(RGBA32(0, 0, 0, 0xFF));
     t3d_screen_clear_depth();
 
     if(cutsceneState != CUTSCENE_NONE){
@@ -1674,7 +1674,6 @@ void scene_draw(T3DViewport *viewport)
 
     if(cutsceneState != CUTSCENE_NONE)
     {
-        t3d_screen_clear_color(RGBA32(0, 0, 0, 0xFF));
         scene_draw_cutscene(viewport);
         // Draw letterbox bars during cutscenes
         letterbox_draw();

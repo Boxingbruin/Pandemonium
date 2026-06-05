@@ -1,12 +1,11 @@
 #ifndef SCENE_BOUNDS_H
 #define SCENE_BOUNDS_H
 
-#include <stdbool.h>
 #include <stdint.h>
 
 #include <t3d/t3d.h>
 
-#include "../utilities/simple_collision_utility.h"
+#include "../../utilities/simple_collision_utility.h"
 
 const SCU_OBB *scene_bounds_get_room_obbs(void);
 int scene_bounds_get_room_obb_count(void);

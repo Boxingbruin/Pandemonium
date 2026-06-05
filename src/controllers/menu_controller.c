@@ -3,13 +3,13 @@
 #include <string.h>
 
 #include "menu_controller.h"
-#include "joypad_utility.h"
+#include "../utilities/joypad_utility.h"
 #include "audio_controller.h"
-#include "scene.h"
-#include "save_controller.h"
+#include "../scenes/guardian/guardian_scene.h"
+#include "../utilities/save_controller.h"
 
-#include "globals.h"
-#include "video_layout.h"
+#include "../utilities/globals.h"
+#include "../utilities/video_layout.h"
 
 // Menu state
 static MenuState currentMenu = MENU_MAIN;

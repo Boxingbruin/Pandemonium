@@ -2,7 +2,7 @@
 #define CUTSCENE_GUARDIAN_PHASE1_H
 
 #include <t3d/t3d.h>
-#include "../managers/cutscene_manager.h"
+#include "../../managers/cutscene_manager.h"
 
 bool cutscene_guardian_phase1_handles(CutsceneState state);
 

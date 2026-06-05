@@ -1,7 +1,6 @@
 #ifndef VIDEO_PLAYER_UTILITY_H
 #define VIDEO_PLAYER_UTILITY_H
 
-#include <stdbool.h>
 #include <t3d/t3d.h>
 
 // Call from anywhere (eg scene.c) to request a video.

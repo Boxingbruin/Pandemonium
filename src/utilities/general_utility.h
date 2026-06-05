@@ -35,6 +35,9 @@ typedef struct {
     ScrollParams* active;
 } ScrollCtx;
 
+float ease_in_out_expo(float t);
+void rotate_around_point_xz(float result[3], const float center[3], float radius, float angleRadians);
+
 surface_t sprite_to_surface(sprite_t* spr);
 
 void scroll_dyn_cb(void* userData, const T3DMaterial* material, rdpq_texparms_t* tp, rdpq_tile_t tile);
