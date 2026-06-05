@@ -11,12 +11,13 @@
 #define ANIM_SPEED 1.0f
 #define FRAME_BUFFER_COUNT 3
 
-#define DEBUG_DRAW false
-#define DEBUG_DRAW_ENVIRONMENTAL_HAZARDS false
-
 #define DEV_MODE false
 #define SHOW_FPS false
-#define HARDWARE_MODE false
+#define DEBUG_DRAW false // requires dev_mode
+#define DEBUG_DRAW_ENVIRONMENTAL_HAZARDS false
+#define DEBUG_MEMORY false // requires dev_mode
+
+#define SKIP_OPENING_CREDITS false
 #define PAL_MODE false
 #define DRAW_CRT_SAFE_AREA false
 
