@@ -24,8 +24,6 @@ SOFTWARE.
 */
 
 #include <libdragon.h>
-#include <t3d/t3d.h>
-#include <t3d/t3dmodel.h>
 #include <math.h>
 
 void logo_libdragon() {

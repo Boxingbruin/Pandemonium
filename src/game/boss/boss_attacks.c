@@ -17,11 +17,11 @@
 #include "systems/collision_system.h"
 
 #include "character.h"
-#include "scene_sfx.h" // TODO: make sfx entity specific
-#include "environmental_effects/boss_ground_crush.h"
+#include "../../scenes/guardian/guardian_scene_sfx.h"
+#include "environmental_mechanics/boss_ground_crush.h"
 #include "fx/dust_particles_fx.h"
 
-#include "utilities/animation_utility.h"
+#include "../../fx/screen_shake.h"
 
 #include "environmental_mechanics/multi_sword_attacks.h"
 
@@ -81,7 +81,7 @@ static inline void boss_attacks_on_player_hit(float damage)
     if (damage <= 25.0f) return;
 
     // Fixed, noticeable impulse (units are world-space and applied in camera right/up).
-    animation_utility_set_screen_shake_mag(20.0f);
+    screen_shake_set_shake_mag(20.0f);
 }
 
 // Forward declarations

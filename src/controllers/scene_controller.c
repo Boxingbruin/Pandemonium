@@ -1,7 +1,7 @@
 #include "scene_controller.h"
 
-#include "../scenes/title_scene.h"
-#include "../scenes/scene.h"
+#include "../scenes/title/title_scene.h"
+#include "../scenes/guardian/guardian_scene.h"
 
 static SceneControllerSceneId s_active_scene = SCENE_CONTROLLER_SCENE_TITLE;
 

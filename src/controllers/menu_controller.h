@@ -1,8 +1,6 @@
 #ifndef MENU_CONTROLLER_H
 #define MENU_CONTROLLER_H
 
-#include <stdbool.h>
-
 typedef enum {
     // Pause menu root (in-game)
     MENU_MAIN,

@@ -7,15 +7,12 @@
 #ifndef SCENE_CONTEXT_H
 #define SCENE_CONTEXT_H
 
-#include <stdbool.h>
-
 #include <libdragon.h>
-#include <t3d/t3d.h>
 #include <t3d/t3dmodel.h>
 
-#include "scene.h"
-#include "../game/bosses/boss.h"
-#include "../utilities/general_utility.h"
+#include "guardian_scene.h"
+#include "../../game/boss/boss.h"
+#include "../../utilities/general_utility.h"
 
 typedef struct SceneContext {
     Boss *boss;

@@ -1,7 +1,6 @@
 #ifndef SCENE_H
 #define SCENE_H
 
-#include <stdbool.h>
 #include <t3d/t3d.h>
 
 typedef enum {

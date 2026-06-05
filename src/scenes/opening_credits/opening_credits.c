@@ -2,8 +2,8 @@
 
 #include <libdragon.h>
 
-#include "globals.h"
-#include "../scenes/logo.h"
+#include "../../utilities/globals.h"
+#include "logo.h"
 
 static void opening_credits_reinit_display_rdpq(void)
 {

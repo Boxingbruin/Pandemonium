@@ -7,7 +7,7 @@
 #include "joypad_utility.h"
 #include "character.h"
 #include "game_math.h"
-#include "utilities/animation_utility.h"
+#include "../fx/screen_shake.h"
 
 #include "globals.h"
 #include "video_controller.h"
@@ -99,8 +99,8 @@ static inline void vec3_cross_local(T3DVec3 *out, const T3DVec3 *a, const T3DVec
 
 static inline void camera_apply_screen_shake(T3DVec3 *pos, T3DVec3 *target, const T3DVec3 *upVec)
 {
-	const float sx = animation_utility_get_shake_offset_x();
-	const float sy = animation_utility_get_shake_offset_y();
+	const float sx = screen_shake_get_shake_offset_x();
+	const float sy = screen_shake_get_shake_offset_y();
 	if (sx == 0.0f && sy == 0.0f) return;
 
 	// Build camera-space right/up from forward + provided up vector.
@@ -261,7 +261,7 @@ void camera_set_projection(T3DViewport *viewport)
 
 void camera_update(T3DViewport *viewport)
 {
-	animation_utility_screen_shake_update();
+	screen_shake_update();
 
 	if (cameraTransitionActive)
 	{

@@ -3,13 +3,13 @@
 #include <math.h>
 
 #include "character.h"
-#include "game/bosses/boss.h"
+#include "game/boss/boss.h"
 
 #include "simple_collision_utility.h"
 #include "debug_draw.h"
 #include "dev.h"
 
-#include "scene_bounds.h"
+#include "../scenes/guardian/guardian_scene_bounds.h"
 
 #include "globals.h"
 

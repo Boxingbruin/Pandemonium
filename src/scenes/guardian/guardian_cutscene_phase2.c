@@ -1,4 +1,4 @@
-#include "cutscene_guardian_phase2.h"
+#include "guardian_cutscene_phase2.h"
 
 #include <stdbool.h>
 #include <math.h>
@@ -13,19 +13,18 @@
 #include <t3d/t3danim.h>
 #include <t3d/t3dmodel.h>
 
-#include "scene_context.h"
-#include "../controllers/audio_controller.h"
-#include "../controllers/camera_controller.h"
-#include "../managers/cutscene_manager.h"
-#include "../managers/cutscene_manager_internal.h"
-#include "../utilities/display_utility.h"
-#include "../game/bosses/boss_anim.h"
-#include "../game/bosses/boss_render.h"
-#include "../utilities/general_utility.h"
-#include "../utilities/globals.h"
-#include "../utilities/joypad_utility.h"
-#include "../utilities/animation_utility.h"
-#include "../fx/lightning_fx.h"
+#include "guardian_scene_context.h"
+#include "../../controllers/audio_controller.h"
+#include "../../controllers/camera_controller.h"
+#include "../../managers/cutscene_manager.h"
+#include "../../managers/cutscene_manager_internal.h"
+#include "../../utilities/display_utility.h"
+#include "../../game/boss/boss_render.h"
+#include "../../utilities/general_utility.h"
+#include "../../fx/screen_shake.h"
+#include "../../utilities/globals.h"
+#include "../../utilities/joypad_utility.h"
+#include "../../fx/lightning_fx.h"
 
 #define BNW_CHAINS_ANIM_COUNT 1
 
@@ -701,7 +700,7 @@ void cutscene_guardian_phase2_update(SceneContext *ctx, float dt)
             cutscene_manager_update_camera(8.0f);
 
             cutscene_manager_update_dialog();
-            animation_utility_set_screen_shake_mag(0.1f);
+            screen_shake_set_shake_mag(0.1f);
 
             if (cutsceneTimer >= 10.0f) {
                 cutscene_guardian_phase2_next_state(ctx, CUTSCENE_PHASE2_BURN);
@@ -748,7 +747,7 @@ void cutscene_guardian_phase2_update(SceneContext *ctx, float dt)
             }
 
             lightning_fx_system_update(dt);
-            animation_utility_set_screen_shake_mag(0.2f);
+            screen_shake_set_shake_mag(0.2f);
             cutscene_manager_update_dialog();
 
             if (cutsceneTimer >= 15.0f) {

@@ -17,7 +17,7 @@
 #include "game_math.h"
 #include "character.h"
 #include "globals.h"
-#include "utilities/sword_trail.h"
+#include "../../fx/sword_trail.h"
 
 // Forward declarations for internal functions
 static void boss_apply_intent(Boss* boss, const BossIntent* intent);
