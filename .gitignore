@@ -41,6 +41,12 @@ assets/**/*.txt
 assets/**/*.log
 assets/**/*.zip
 
+# Krita source/autosave files
+assets/**/*.kra
+assets/**/*.krz
+assets/**/*-autosave.kra
+assets/**/*.kra~
+assets/**/*.png~
 # Backup files
 *.bak
 *.orig

@@ -1,0 +1,41 @@
+floor base: 855430
+floor mid-range: 654025
+floor mid-range darker: 55361F
+floor dark: 402817
+floor darkest: 2D1D14
+
+baseboard dark: 443022
+baseboard darkest: 2D1D14
+
+wall brightest: 8D603A
+wall mid-range: 654025
+wall mid-range darker: 55361F
+wall darkst: 2D2013
+untra-dark wall inset: 19100B
+
+window yellow: FFDF94
+window border bright: FFAF5E
+
+pillar brightest: CE905A
+pillar bright: 916640
+pillar darker: 543B25
+pillar darkest: 332416
+
+niche lightest: 553A27
+niche dark: 3A281B
+niche darkest: 271B12
+statue light: 6B4930
+
+carpet lightest: 85251B
+carpet mid: 6A1D15
+carpet mid darker: 541711
+carpet darkest: 41120D
+
+slab light: FFAD5F
+slab dark: 9B5C22
+
+dirt: FFAD5F
+
+0.5
+225
+230
