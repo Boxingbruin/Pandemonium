@@ -47,11 +47,26 @@ int main(void)
         if (ARES_AA_ENABLED) {
             display_init(RESOLUTION_320x240, DEPTH_32_BPP, FRAME_BUFFER_COUNT, GAMMA_NONE, FILTERS_RESAMPLE_ANTIALIAS);
         } else {
-            display_init(RESOLUTION_320x240, DEPTH_32_BPP, FRAME_BUFFER_COUNT, GAMMA_NONE, FILTERS_RESAMPLE);
+            display_init(
+                RESOLUTION_320x240,
+                DEPTH_32_BPP,
+                FRAME_BUFFER_COUNT,
+                GAMMA_CORRECT,
+                FILTERS_RESAMPLE
+            );
         }
     }
 
     rdpq_init();
+
+    // /*
+    //  * Opt-in: frozen blocks skip the RSP-side resolver on block replay as long
+    //  * as the recorded RDP state baseline still matches the live state. Only
+    //  * meaningful between rspq_block_begin_frozen/rspq_block_end_frozen pairs;
+    //  * normal (non-frozen) blocks are unaffected by this flag.
+    //  */
+    // rdpq_config_enable(RDPQ_CFG_FROZEN_BLOCKS);
+
 
     audio_initialize();
 
@@ -109,7 +124,11 @@ int main(void)
     scene_controller_init();
 
     if (DEV_MODE && debugDraw) {
-        offscreenBuffer = surface_alloc(FMT_RGBA16, SCREEN_WIDTH, SCREEN_HEIGHT);
+        /*
+         * Keep this RGBA32 if cheap bloom can run while debugDraw is active.
+         * The cheap bloom path assumes the scene framebuffer is 32-bit.
+         */
+        offscreenBuffer = surface_alloc(FMT_RGBA32, SCREEN_WIDTH, SCREEN_HEIGHT);
 
         if (!offscreenBuffer.buffer) {
             debugf("[FATAL] failed to allocate offscreenBuffer\n");
@@ -140,11 +159,15 @@ int main(void)
         bool isTitle = activeScene == SCENE_CONTROLLER_SCENE_TITLE;
         bool isGuardian = activeScene == SCENE_CONTROLLER_SCENE_GUARDIAN;
 
+        surface_t *framebuffer = NULL;
+
         // Attach render target for the frame.
         if (DEV_MODE && debugDraw) {
-            rdpq_attach(&offscreenBuffer, display_get_zbuf());
+            framebuffer = &offscreenBuffer;
+            rdpq_attach(framebuffer, display_get_zbuf());
         } else {
-            rdpq_attach(display_get(), display_get_zbuf());
+            framebuffer = display_get();
+            rdpq_attach(framebuffer, display_get_zbuf());
         }
 
         // ===== UPDATE LOOP =====
@@ -211,12 +234,27 @@ int main(void)
         }
 
         /*
-         * Title and Guardian use Tiny3D. Opening Credits are plain RDPQ sprites,
+         * Title, Guardian, and Testing use Tiny3D. Opening Credits are plain RDPQ sprites,
          * so avoid forcing Tiny3D sync for that scene.
          */
         if (!isOpeningCredits) {
             t3d_tri_sync();
         }
+
+        rdpq_sync_pipe();
+
+        /*
+         * Framebuffer postprocess.
+         *
+         * Keep this after scene drawing and Tiny3D sync, but before menu/dev/FPS overlays,
+         * so bloom affects the 3D scene but not the UI.
+         *
+         * display_utility_apply_postprocess() internally checks:
+         *   - CHEAP_BLOOM_ENABLED
+         *   - displayBloomEnabled
+         *   - framebuffer != NULL
+         */
+        display_utility_apply_postprocess(framebuffer);
 
         rdpq_sync_pipe();
 

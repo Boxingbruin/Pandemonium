@@ -50,6 +50,19 @@ ASSETSCONV = $(patsubst $(ASSDIR)/%.png,$(FILESYSTEMDIR)/%.sprite,$(assets_png))
 	$(patsubst $(ASSDIR)/%.h264,$(FILESYSTEMDIR)/%.h264,$(assets_h264)) \
 	$(patsubst $(ASSDIR)/%.mp4,$(FILESYSTEMDIR)/%.h264,$(assets_mp4))
 
+# Selective mipmaps
+# Only these PNGs will be converted with mksprite --mipmap BOX.
+#
+MIPMAP_PNGS := \
+	$(ASSDIR)/boss_room/floor4.i8.png \
+	#$(ASSDIR)/boss_room/floor_ornate10.i4.png \
+	$(ASSDIR)/boss_room/carpet_border7.ci8.png \
+	$(ASSDIR)/boss_room/floor_debris_pile4.i4.png
+
+MIPMAP_SPRITES := $(patsubst $(ASSDIR)/%.png,$(FILESYSTEMDIR)/%.sprite,$(MIPMAP_PNGS))
+
+$(MIPMAP_SPRITES): MKSPRITE_FLAGS += --mipmap BOX
+
 # TODO:
 CODEFILES   =  $(shell find $(SRCDIR) -name "*.c" ! -path "$(SRCDIR)/objects/boss.c")
 CODEOBJECTS = $(patsubst $(SRCDIR)/%.c,$(OBJDIR)/%.o,$(CODEFILES))
@@ -86,7 +99,7 @@ $(OBJDIR)/%.o: $(SRCDIR)/%.c
 # Asset conversion rules, preserving subdirectory structure
 $(FILESYSTEMDIR)/%.sprite: $(ASSDIR)/%.png
 	@mkdir -p $(dir $@)
-	@echo "    [SPRITE] $@"
+	@echo "    [SPRITE] $@ $(MKSPRITE_FLAGS)"
 	$(N64_MKSPRITE) $(MKSPRITE_FLAGS) -o $(dir $@) "$<"
 
 $(FILESYSTEMDIR)/%.font64: $(ASSDIR)/%.ttf

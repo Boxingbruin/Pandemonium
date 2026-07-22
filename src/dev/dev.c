@@ -434,9 +434,9 @@ void dev_update()
     {
         rdpq_set_mode_standard();
         rdpq_mode_blender(RDPQ_BLENDER_MULTIPLY);
-        rdpq_set_prim_color(RGBA32(0,0,0,120));
+        //rdpq_set_prim_color(RGBA32(0,0,0,120));
         rdpq_mode_combiner(RDPQ_COMBINER_FLAT);
-        rdpq_fill_rectangle(0, 0, display_get_width(), display_get_height());
+        //rdpq_fill_rectangle(0, 0, display_get_width(), display_get_height());
         t3d_debug_print_start();
 
         // Sidebar menu labels
@@ -458,9 +458,9 @@ void dev_update()
         int sidebarH = 10;
 
         // Draw sidebar background
-        rdpq_set_prim_color(RGBA32(0, 0, 0, 180));
-        rdpq_fill_rectangle(0, 0, sidebarW, display_get_height());
-        t3d_debug_print_start();
+        // rdpq_set_prim_color(RGBA32(0, 0, 0, 180));
+        // rdpq_fill_rectangle(0, 0, sidebarW, display_get_height());
+        // t3d_debug_print_start();
 
         // Draw sidebar items
         for(int i = 0; i < sidebarCount; i++)
@@ -470,7 +470,7 @@ void dev_update()
                 // Highlight selected
                 rdpq_set_prim_color(RGBA32(80, 80, 200, 220));
                 rdpq_fill_rectangle(sidebarX - 4, sidebarY - 2 + i * sidebarH, sidebarW - 10, sidebarY - 2 + i * sidebarH + sidebarH);
-                t3d_debug_print_start();
+                //t3d_debug_print_start();
                 rdpq_set_prim_color(RGBA32(255, 255, 255, 255)); // White text for selected
             }
             else
@@ -523,7 +523,7 @@ void dev_update()
                 case DEV_COLLISION:
                     rdpq_set_prim_color(RGBA32(0, 0, 0, 200));
                     rdpq_fill_rectangle(paneX-8, 30 + (selected * 12) - 6, display_get_width(), 30 + (selected * 12) + 6);
-                    t3d_debug_print_start();
+                    //t3d_debug_print_start();
 
                     if(toggleColliders)
                         t3d_debug_printf(paneX, 24, "Toggle Colliders On");
@@ -542,7 +542,7 @@ void dev_update()
                     break;
 
                 case DEV_MEMORY_DEBUG:
-                    t3d_debug_print_start();
+                    //t3d_debug_print_start();
                     t3d_debug_printf(paneX, 28, "Live RDRAM overlay");
                     t3d_debug_printf(paneX, 44, "DEV_MODE:     %s", DEV_MODE ? "ON" : "OFF");
                     t3d_debug_printf(paneX, 56, "DEBUG_MEMORY: %s", DEBUG_MEMORY ? "ON" : "OFF");

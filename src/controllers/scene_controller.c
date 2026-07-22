@@ -3,6 +3,7 @@
 #include "../scenes/opening_credits/opening_credits_scene.h"
 #include "../scenes/title/title_scene.h"
 #include "../scenes/guardian/guardian_scene.h"
+#include "../scenes/testing/testing_scene.h"
 
 #include "../utilities/globals.h"
 
@@ -50,7 +51,11 @@ void scene_controller_init(void)
     if (SKIP_OPENING_CREDITS) {
         s_active_scene = SCENE_CONTROLLER_SCENE_TITLE;
         title_scene_enter();
-    } else {
+    }else if (TESTING_SCENE){
+        s_active_scene = SCENE_CONTROLLER_SCENE_TESTING;
+        testing_scene_init();
+    }
+    else {
         s_active_scene = SCENE_CONTROLLER_SCENE_OPENING_CREDITS;
         opening_credits_scene_enter();
     }
@@ -79,6 +84,10 @@ void scene_controller_update(void)
             scene_update();
             break;
 
+        case SCENE_CONTROLLER_SCENE_TESTING:
+            testing_scene_update();
+            break;
+
         default:
             break;
     }
@@ -97,6 +106,10 @@ void scene_controller_draw(T3DViewport *viewport)
 
         case SCENE_CONTROLLER_SCENE_GUARDIAN:
             scene_draw(viewport);
+            break;
+
+        case SCENE_CONTROLLER_SCENE_TESTING:
+            testing_scene_draw(viewport);
             break;
 
         default:
@@ -119,6 +132,9 @@ void scene_controller_restart(void)
             scene_restart();
             break;
 
+        case SCENE_CONTROLLER_SCENE_TESTING:
+            testing_scene_restart();
+            break;
         default:
             break;
     }

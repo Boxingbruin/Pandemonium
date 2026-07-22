@@ -5,11 +5,9 @@
 #include "camera_controller.h"
 #include "game_time.h"
 #include "joypad_utility.h"
-#include "character.h"
 #include "game_math.h"
 #include "../fx/screen_shake.h"
 
-#include "globals.h"
 #include "video_controller.h"
 
 CameraState cameraState = CAMERA_NONE;
@@ -25,7 +23,7 @@ float cameraLockBlend = 0.0f; // 0: follow character, 1: lock onto target
 
 // Third-person camera variables
 float cameraDistance = 1200.0f;      // Distance behind character (zoomed back)
-float cameraHeight = 1200.0f;        // Height offset above character  
+float cameraHeight = 1200.0f;        // Height offset above character
 float cameraAngleX = 0.0f;           // Horizontal rotation around character
 float cameraAngleY = -0.5f;          // Vertical rotation (pitch) - slightly downward
 float cameraMinY = -1.4f;            // Minimum pitch angle (about -80 degrees)
@@ -80,75 +78,93 @@ static float breathBaseTarget[3];
 
 static void vec3_lerp_local(T3DVec3 *out, const T3DVec3 *a, const T3DVec3 *b, float t)
 {
-	out->v[0] = a->v[0] + (b->v[0] - a->v[0]) * t;
-	out->v[1] = a->v[1] + (b->v[1] - a->v[1]) * t;
-	out->v[2] = a->v[2] + (b->v[2] - a->v[2]) * t;
+    out->v[0] = a->v[0] + (b->v[0] - a->v[0]) * t;
+    out->v[1] = a->v[1] + (b->v[1] - a->v[1]) * t;
+    out->v[2] = a->v[2] + (b->v[2] - a->v[2]) * t;
 }
 
-static inline float tri_wave(float x) {
+static inline float tri_wave(float x)
+{
     // triangle in [-1,1], period 2π, based on sine -> asin
     return (2.0f / 3.14159265f) * asinf(sinf(x));
 }
 
+static inline float camera_wrap_angle_positive(float angle)
+{
+    const float TAU = 6.2831853f;
+
+    while(angle < 0.0f)
+    {
+        angle += TAU;
+    }
+
+    while(angle >= TAU)
+    {
+        angle -= TAU;
+    }
+
+    return angle;
+}
+
 static inline void vec3_cross_local(T3DVec3 *out, const T3DVec3 *a, const T3DVec3 *b)
 {
-	out->v[0] = a->v[1] * b->v[2] - a->v[2] * b->v[1];
-	out->v[1] = a->v[2] * b->v[0] - a->v[0] * b->v[2];
-	out->v[2] = a->v[0] * b->v[1] - a->v[1] * b->v[0];
+    out->v[0] = a->v[1] * b->v[2] - a->v[2] * b->v[1];
+    out->v[1] = a->v[2] * b->v[0] - a->v[0] * b->v[2];
+    out->v[2] = a->v[0] * b->v[1] - a->v[1] * b->v[0];
 }
 
 static inline void camera_apply_screen_shake(T3DVec3 *pos, T3DVec3 *target, const T3DVec3 *upVec)
 {
-	const float sx = screen_shake_get_shake_offset_x();
-	const float sy = screen_shake_get_shake_offset_y();
-	if (sx == 0.0f && sy == 0.0f) return;
+    const float sx = screen_shake_get_shake_offset_x();
+    const float sy = screen_shake_get_shake_offset_y();
+    if (sx == 0.0f && sy == 0.0f) return;
 
-	// Build camera-space right/up from forward + provided up vector.
-	T3DVec3 forward = {{
-		target->v[0] - pos->v[0],
-		target->v[1] - pos->v[1],
-		target->v[2] - pos->v[2],
-	}};
-	t3d_vec3_norm(&forward);
+    // Build camera-space right/up from forward + provided up vector.
+    T3DVec3 forward = {{
+        target->v[0] - pos->v[0],
+        target->v[1] - pos->v[1],
+        target->v[2] - pos->v[2],
+    }};
+    t3d_vec3_norm(&forward);
 
-	T3DVec3 right;
-	vec3_cross_local(&right, &forward, upVec);
-	t3d_vec3_norm(&right);
+    T3DVec3 right;
+    vec3_cross_local(&right, &forward, upVec);
+    t3d_vec3_norm(&right);
 
-	T3DVec3 up2;
-	vec3_cross_local(&up2, &right, &forward);
-	t3d_vec3_norm(&up2);
+    T3DVec3 up2;
+    vec3_cross_local(&up2, &right, &forward);
+    t3d_vec3_norm(&up2);
 
-	const float ox = right.v[0] * sx + up2.v[0] * sy;
-	const float oy = right.v[1] * sx + up2.v[1] * sy;
-	const float oz = right.v[2] * sx + up2.v[2] * sy;
+    const float ox = right.v[0] * sx + up2.v[0] * sy;
+    const float oy = right.v[1] * sx + up2.v[1] * sy;
+    const float oz = right.v[2] * sx + up2.v[2] * sy;
 
-	pos->v[0] += ox; pos->v[1] += oy; pos->v[2] += oz;
-	target->v[0] += ox; target->v[1] += oy; target->v[2] += oz;
+    pos->v[0] += ox; pos->v[1] += oy; pos->v[2] += oz;
+    target->v[0] += ox; target->v[1] += oy; target->v[2] += oz;
 }
 
 static void camera_get_view_for_state(CameraState state, T3DVec3 *outPos, T3DVec3 *outTarget)
 {
-	switch (state)
-	{
-		case CAMERA_CHARACTER:
-			*outPos = characterCamPos;
-			*outTarget = characterCamTarget;
-			break;
-		case CAMERA_CUSTOM:
-			*outPos = customCamPos;
-			*outTarget = customCamTarget;
-			break;
-		case CAMERA_FREECAM:
-		case CAMERA_FIXED:
-		default:
-			*outPos = camPos;
-			*outTarget = camTarget;
-			break;
-	}
+    switch (state)
+    {
+        case CAMERA_CHARACTER:
+            *outPos = characterCamPos;
+            *outTarget = characterCamTarget;
+            break;
+        case CAMERA_CUSTOM:
+            *outPos = customCamPos;
+            *outTarget = customCamTarget;
+            break;
+        case CAMERA_FREECAM:
+        case CAMERA_FIXED:
+        default:
+            *outPos = camPos;
+            *outTarget = camTarget;
+            break;
+    }
 }
 
-void camera_initialize(T3DVec3 *pos, T3DVec3 *dir, float rotX, float rotY) 
+void camera_initialize(T3DVec3 *pos, T3DVec3 *dir, float rotX, float rotY)
 {
     // Camera
     camPos = *pos;
@@ -162,7 +178,7 @@ void camera_initialize(T3DVec3 *pos, T3DVec3 *dir, float rotX, float rotY)
 
     camTarget = targetPos;
 
-    camRotX = rotX;
+    camRotX = camera_wrap_angle_positive(rotX);
     camRotY = rotY;
 
     up = (T3DVec3){{0.0f, 1.0f, 0.0f}};
@@ -261,48 +277,48 @@ void camera_set_projection(T3DViewport *viewport)
 
 void camera_update(T3DViewport *viewport)
 {
-	screen_shake_update();
+    screen_shake_update();
 
-	if (cameraTransitionActive)
-	{
-		cameraTransitionTime += deltaTime;
-		float t = (cameraTransitionDuration > 0.0f) ? (cameraTransitionTime / cameraTransitionDuration) : 1.0f;
-		if (t > 1.0f) t = 1.0f;
+    if (cameraTransitionActive)
+    {
+        cameraTransitionTime += deltaTime;
+        float t = (cameraTransitionDuration > 0.0f) ? (cameraTransitionTime / cameraTransitionDuration) : 1.0f;
+        if (t > 1.0f) t = 1.0f;
 
-		T3DVec3 endPos;
-		T3DVec3 endTarget;
-		camera_get_view_for_state(cameraTransitionTarget, &endPos, &endTarget);
+        T3DVec3 endPos;
+        T3DVec3 endTarget;
+        camera_get_view_for_state(cameraTransitionTarget, &endPos, &endTarget);
 
-		// Smoothstep easing for a softer blend
-		float s = t * t * (3.0f - 2.0f * t);
-		vec3_lerp_local(&camPos, &cameraTransitionStartPos, &endPos, s);
-		vec3_lerp_local(&camTarget, &cameraTransitionStartTarget, &endTarget, s);
+        // Smoothstep easing for a softer blend
+        float s = t * t * (3.0f - 2.0f * t);
+        vec3_lerp_local(&camPos, &cameraTransitionStartPos, &endPos, s);
+        vec3_lerp_local(&camTarget, &cameraTransitionStartTarget, &endTarget, s);
 
-		camDir.v[0] = camTarget.v[0] - camPos.v[0];
-		camDir.v[1] = camTarget.v[1] - camPos.v[1];
-		camDir.v[2] = camTarget.v[2] - camPos.v[2];
-		t3d_vec3_norm(&camDir);
+        camDir.v[0] = camTarget.v[0] - camPos.v[0];
+        camDir.v[1] = camTarget.v[1] - camPos.v[1];
+        camDir.v[2] = camTarget.v[2] - camPos.v[2];
+        t3d_vec3_norm(&camDir);
 
         camera_set_projection(viewport);
 
-		camera_apply_screen_shake(&camPos, &camTarget, &up);
-		t3d_viewport_look_at(viewport, &camPos, &camTarget, &up);
+        camera_apply_screen_shake(&camPos, &camTarget, &up);
+        t3d_viewport_look_at(viewport, &camPos, &camTarget, &up);
 
-		if (t >= 1.0f)
-		{
-			cameraTransitionActive = false;
-			lastCameraState = cameraState;
-			cameraState = cameraTransitionTarget;
-		}
-		return;
-	}
+        if (t >= 1.0f)
+        {
+            cameraTransitionActive = false;
+            lastCameraState = cameraState;
+            cameraState = cameraTransitionTarget;
+        }
+        return;
+    }
 
     if(cameraState == CAMERA_CHARACTER)
     {
         // Handle camera rotation input with C-buttons
         float rotateX = 0.0f;
         float rotateY = 0.0f;
-        
+
         // When Z is held (lock-on / lock target cycling), don't rotate the free camera orbit with C-left/C-right.
         if(joypad.btn.c_left && !joypad.btn.z)
         {
@@ -312,7 +328,7 @@ void camera_update(T3DViewport *viewport)
         {
             rotateX = -1.0f;
         }
-        
+
         if(joypad.btn.c_down)
         {
             rotateY = 1.0f;
@@ -321,21 +337,21 @@ void camera_update(T3DViewport *viewport)
         {
             rotateY = -1.0f;
         }
-        
+
         // Apply rotation with sensitivity and delta time
         cameraAngleX += rotateX * cameraSensitivity * deltaTime;
         cameraAngleY += rotateY * cameraSensitivity * deltaTime;
-        
+
         // Clamp vertical rotation
         if(cameraAngleY < cameraMinY) cameraAngleY = cameraMinY;
         if(cameraAngleY > cameraMaxY) cameraAngleY = cameraMaxY;
-        
+
         // Camera reset with L button
         if(joypad.btn.l)
         {
             camera_reset_third_person();
         }
-        
+
         // Set up camera viewport
         camPos = characterCamPos;
         camTarget = characterCamTarget;
@@ -352,37 +368,54 @@ void camera_update(T3DViewport *viewport)
     }
     else if(cameraState == CAMERA_FREECAM)
     {
-        float camSpeed = deltaTime;
-        float camRotSpeed = deltaTime;
+        const float camSpeed = deltaTime;
+        const float camRotSpeed = deltaTime;
 
-        float moveHorrDir = 0;
-        float moveVirtDir = 0;
+        float moveHorrDir = 0.0f;
+        float moveVirtDir = 0.0f;
 
-        camDir.v[0] = fm_cosf(camRotX) * fm_cosf(camRotY);
-        camDir.v[1] = fm_sinf(camRotY);
-        camDir.v[2] = fm_sinf(camRotX) * fm_cosf(camRotY);
-        t3d_vec3_norm(&camDir);
-
-        if((float)joypad.btn.c_left)
+        if(joypad.btn.c_left)
         {
-            moveHorrDir = -1;
+            moveHorrDir = -1.0f;
         }
-        else if((float)joypad.btn.c_right)
+        else if(joypad.btn.c_right)
         {
-            moveHorrDir = 1;
+            moveHorrDir = 1.0f;
         }
 
-        if((float)joypad.btn.c_down)
+        // C-up should look up. C-down should look down.
+        if(joypad.btn.c_up)
         {
-            moveVirtDir = 1;
+            moveVirtDir = 1.0f;
         }
-        else if((float)joypad.btn.c_up)
+        else if(joypad.btn.c_down)
         {
-            moveVirtDir = -1;
+            moveVirtDir = -1.0f;
         }
 
+        // Apply rotation before building camDir.
         camRotX += moveHorrDir * camRotSpeed;
         camRotY += moveVirtDir * camRotSpeed;
+
+        // Keep yaw positive because the fast trig helpers appear to behave poorly with negative input.
+        camRotX = camera_wrap_angle_positive(camRotX);
+
+        // Prevent look_at/up-vector degeneracy near straight up/down.
+        const float freeCamMinPitch = -1.45f;
+        const float freeCamMaxPitch =  1.45f;
+
+        if(camRotY < freeCamMinPitch) camRotY = freeCamMinPitch;
+        if(camRotY > freeCamMaxPitch) camRotY = freeCamMaxPitch;
+
+        // Feed positive wrapped angles into fast trig.
+        // Pitch stays logically signed for clamping, but gets wrapped only for trig input.
+        const float trigRotX = camera_wrap_angle_positive(camRotX);
+        const float trigRotY = camera_wrap_angle_positive(camRotY);
+
+        camDir.v[0] = fm_cosf(trigRotX) * fm_cosf(trigRotY);
+        camDir.v[1] = fm_sinf(trigRotY);
+        camDir.v[2] = fm_sinf(trigRotX) * fm_cosf(trigRotY);
+        t3d_vec3_norm(&camDir);
 
         camPos.v[0] += camDir.v[0] * (float)joypad.stick_y * camSpeed;
         camPos.v[1] += camDir.v[1] * (float)joypad.stick_y * camSpeed;
@@ -391,11 +424,11 @@ void camera_update(T3DViewport *viewport)
         camPos.v[0] += camDir.v[2] * (float)joypad.stick_x * -camSpeed;
         camPos.v[2] -= camDir.v[0] * (float)joypad.stick_x * -camSpeed;
 
-
         if(joypad.btn.b)
         {
             camPos.v[1] += camSpeed * 60.0f;
         }
+
         if(joypad.btn.a)
         {
             camPos.v[1] -= camSpeed * 60.0f;
@@ -409,7 +442,6 @@ void camera_update(T3DViewport *viewport)
 
         camera_apply_screen_shake(&camPos, &camTarget, &up);
         t3d_viewport_look_at(viewport, &camPos, &camTarget, &up);
-
     }
     else if(cameraState == CAMERA_CUSTOM)
     {
@@ -424,23 +456,22 @@ void camera_update(T3DViewport *viewport)
         {
             T3DMat4 rollMat;
             t3d_mat4_rotate(&rollMat, &customCamDir, camRoll);  // Rotate around camDir (camera forward)
-        
+
             // World Up remains a T3DVec3 as expected
             T3DVec3 worldUp = {{0.0f, 1.0f, 0.0f}};  // World Up as a 3D vector
-        
+
             // Perform the multiplication with the 3x3 portion of the matrix
             t3d_mat3_mul_vec3(&rolledUp, &rollMat, &worldUp);  // Now using 3x3 matrix multiplication
-        
         }
         else
         {
             // No roll, use default world-up vector
             rolledUp = (T3DVec3){{0.0f, 1.0f, 0.0f}};  // No rotation, use default world up
         }
-        
+
         // Pass the rolled-up vector to the camera look-at function
         camera_set_projection(viewport);
-        
+
         camera_apply_screen_shake(&customCamPos, &customCamTarget, &rolledUp);
         t3d_viewport_look_at(viewport, &customCamPos, &customCamTarget, &rolledUp);
     }
@@ -457,20 +488,19 @@ void camera_update(T3DViewport *viewport)
         {
             T3DMat4 rollMat;
             t3d_mat4_rotate(&rollMat, &camDir, camRoll);  // Rotate around camDir (camera forward)
-        
+
             // World Up remains a T3DVec3 as expected
             T3DVec3 worldUp = {{0.0f, 1.0f, 0.0f}};  // World Up as a 3D vector
-        
+
             // Perform the multiplication with the 3x3 portion of the matrix
             t3d_mat3_mul_vec3(&rolledUp, &rollMat, &worldUp);  // Now using 3x3 matrix multiplication
-        
         }
         else
         {
             // No roll, use default world-up vector
             rolledUp = (T3DVec3){{0.0f, 1.0f, 0.0f}};  // No rotation, use default world up
         }
-        
+
         // Pass the rolled-up vector to the camera look-at function
         camera_set_projection(viewport);
         camera_apply_screen_shake(&camPos, &camTarget, &rolledUp);
@@ -489,20 +519,19 @@ void camera_update(T3DViewport *viewport)
         {
             T3DMat4 rollMat;
             t3d_mat4_rotate(&rollMat, &customCamDir, camRoll);  // Rotate around camDir (camera forward)
-        
+
             // World Up remains a T3DVec3 as expected
             T3DVec3 worldUp = {{0.0f, 1.0f, 0.0f}};  // World Up as a 3D vector
-        
+
             // Perform the multiplication with the 3x3 portion of the matrix
             t3d_mat3_mul_vec3(&rolledUp, &rollMat, &worldUp);  // Now using 3x3 matrix multiplication
-        
         }
         else
         {
             // No roll, use default world-up vector
             rolledUp = (T3DVec3){{0.0f, 1.0f, 0.0f}};  // No rotation, use default world up
         }
-        
+
         // Pass the rolled-up vector to the camera look-at function
         camera_set_projection(viewport);
         camera_apply_screen_shake(&customCamPos, &customCamTarget, &rolledUp);
@@ -518,18 +547,18 @@ void camera_mode(CameraState state)
 
 void camera_mode_smooth(CameraState state, float duration)
 {
-	if (duration <= 0.0f)
-	{
-		camera_mode(state);
-		return;
-	}
+    if (duration <= 0.0f)
+    {
+        camera_mode(state);
+        return;
+    }
 
-	lastCameraState = cameraState;
-	cameraTransitionTarget = state;
-	cameraTransitionDuration = duration;
-	cameraTransitionTime = 0.0f;
-	camera_get_view_for_state(cameraState, &cameraTransitionStartPos, &cameraTransitionStartTarget);
-	cameraTransitionActive = true;
+    lastCameraState = cameraState;
+    cameraTransitionTarget = state;
+    cameraTransitionDuration = duration;
+    cameraTransitionTime = 0.0f;
+    camera_get_view_for_state(cameraState, &cameraTransitionStartPos, &cameraTransitionStartTarget);
+    cameraTransitionActive = true;
 }
 
 void camera_roll_camera(void)

@@ -7,6 +7,8 @@ typedef enum {
     SCENE_CONTROLLER_SCENE_OPENING_CREDITS = 0,
     SCENE_CONTROLLER_SCENE_TITLE,
     SCENE_CONTROLLER_SCENE_GUARDIAN,
+
+    SCENE_CONTROLLER_SCENE_TESTING,
 } SceneControllerSceneId;
 
 void scene_controller_init(void);

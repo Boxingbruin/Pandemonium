@@ -2,12 +2,18 @@
 
 #include <libdragon.h>
 
+#include "cheap_bloom.h"
 #include "game_time.h"
+#include "globals.h"
 
 surface_t offscreenBuffer;
 bool startScreenFade = false;
+bool displayBloomEnabled = false;
 
 static int s_fadeBlackAlpha = 255;
+
+static uint8_t s_bloomAlpha = 48;
+static bool s_bloomInitialized = false;
 
 static int display_utility_clampi(int x, int lo, int hi)
 {
@@ -16,16 +22,37 @@ static int display_utility_clampi(int x, int lo, int hi)
     return x;
 }
 
+static void display_utility_ensure_bloom_initialized(void)
+{
+    if (s_bloomInitialized) return;
+
+    cheap_bloom_init();
+    cheap_bloom_set_alpha(s_bloomAlpha);
+
+    s_bloomInitialized = true;
+}
+
 void display_utility_init(void)
 {
     s_fadeBlackAlpha = 255;
     startScreenFade = false;
+
+    displayBloomEnabled = false;
+    s_bloomAlpha = 48;
+    s_bloomInitialized = false;
 }
 
 void display_utility_cleanup(void)
 {
     s_fadeBlackAlpha = 255;
     startScreenFade = false;
+
+    displayBloomEnabled = false;
+
+    if (s_bloomInitialized) {
+        cheap_bloom_cleanup();
+        s_bloomInitialized = false;
+    }
 }
 
 void display_manager_draw_rectangle(int x, int y, int width, int height, color_t color)
@@ -37,6 +64,32 @@ void display_manager_draw_rectangle(int x, int y, int width, int height, color_t
     rdpq_set_prim_color(color);
 
     rdpq_fill_rectangle(x, y, width, height);
+}
+
+void display_utility_set_bloom_enabled(bool enabled)
+{
+    displayBloomEnabled = CHEAP_BLOOM_ENABLED && enabled;
+}
+
+void display_utility_set_bloom_alpha(uint8_t alpha)
+{
+    s_bloomAlpha = alpha;
+
+    if (s_bloomInitialized) {
+        cheap_bloom_set_alpha(s_bloomAlpha);
+    }
+}
+
+void display_utility_apply_postprocess(surface_t *framebuffer)
+{
+    if (!CHEAP_BLOOM_ENABLED) return;
+    if (!displayBloomEnabled) return;
+    if (!framebuffer) return;
+
+    display_utility_ensure_bloom_initialized();
+
+    cheap_bloom_set_alpha(s_bloomAlpha);
+    cheap_bloom_apply(framebuffer);
 }
 
 void display_utility_solid_black_transition(bool fadeIn, float speed)

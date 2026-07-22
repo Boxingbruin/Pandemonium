@@ -11,11 +11,12 @@
 #define ANIM_SPEED 1.0f
 #define FRAME_BUFFER_COUNT 3
 
-#define DEV_MODE false
-#define SHOW_FPS false
+#define DEV_MODE true
+#define SHOW_FPS true
 #define DEBUG_DRAW false // requires dev_mode
 #define DEBUG_DRAW_ENVIRONMENTAL_HAZARDS false
 #define DEBUG_MEMORY false // requires dev_mode
+#define TESTING_SCENE true
 
 #define SKIP_OPENING_CREDITS false
 #define PAL_MODE false
@@ -25,6 +26,7 @@
 
 #define DITHER_ENABLED false
 #define ARES_AA_ENABLED false
+#define CHEAP_BLOOM_ENABLED false
 
 enum {
     FONT_UNBALANCED = 2,
