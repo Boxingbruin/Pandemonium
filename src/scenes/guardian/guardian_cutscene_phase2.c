@@ -235,9 +235,6 @@ static void cutscene_guardian_phase2_next_state(SceneContext *ctx, CutsceneState
     cutscene_guardian_phase2_enter(ctx, nextState);
 }
 
-
-
-
 static void cutscene_guardian_phase2_draw_standard_room(
     SceneContext *ctx,
     bool drawTransitionAfterTwoSeconds
@@ -245,54 +242,20 @@ static void cutscene_guardian_phase2_draw_standard_room(
 {
     if (!ctx) return;
 
-    rdpq_sync_pipe();
-    rdpq_mode_zbuf(false, false);
+    scene_draw_environment_walls();
+    scene_draw_environment_floor();
+    scene_draw_environment_niches_windows();
+    scene_draw_environment_decals();
+    scene_draw_environment_pillars_statue();
 
-    t3d_matrix_push_pos(1);
-        if (ctx->mapMatrix && ctx->mapDpl) {
-            t3d_matrix_set(ctx->mapMatrix, true);
-            rspq_block_run(ctx->mapDpl);
-        }
-
-        if (ctx->roomFloorMatrix && ctx->roomFloorDpl) {
-            t3d_matrix_set(ctx->roomFloorMatrix, true);
-            rspq_block_run(ctx->roomFloorDpl);
-        }
-
-        if (ctx->roomLedgeMatrix && ctx->roomLedgeDpl) {
-            t3d_matrix_set(ctx->roomLedgeMatrix, true);
-            rspq_block_run(ctx->roomLedgeDpl);
-        }
-
-        if (ctx->pillarsMatrix && ctx->pillarsDpl) {
-            t3d_matrix_set(ctx->pillarsMatrix, true);
-            rspq_block_run(ctx->pillarsDpl);
-        }
-    t3d_matrix_pop(1);
-
-    rdpq_sync_pipe();
     rdpq_mode_zbuf(true, true);
-
     t3d_matrix_push_pos(1);
         if (ctx->boss) {
             boss_draw(ctx->boss);
         }
     t3d_matrix_pop(1);
 
-    rdpq_sync_pipe();
-    rdpq_mode_zbuf(false, false);
-
-    t3d_matrix_push_pos(1);
-        if (ctx->sunshaftsMatrix && ctx->sunshaftsDpl) {
-            t3d_matrix_set(ctx->sunshaftsMatrix, true);
-            rspq_block_run(ctx->sunshaftsDpl);
-        }
-
-        if (ctx->pillarsFrontMatrix && ctx->pillarsFrontDpl) {
-            t3d_matrix_set(ctx->pillarsFrontMatrix, true);
-            rspq_block_run(ctx->pillarsFrontDpl);
-        }
-    t3d_matrix_pop(1);
+    scene_draw_environment_sunshafts();
 
     if (drawTransitionAfterTwoSeconds && cutsceneTimer >= 2.0f) {
         if (ctx->screenTransition && *ctx->screenTransition) {
@@ -302,6 +265,7 @@ static void cutscene_guardian_phase2_draw_standard_room(
 
     cutscene_manager_draw_dialog();
 }
+
 
 // ------------------------------------------------------------
 // Load / unload
@@ -925,30 +889,14 @@ void cutscene_guardian_phase2_draw(SceneContext *ctx, T3DViewport *viewport)
         } break;
 
         case CUTSCENE_PHASE2_END: {
-            rdpq_sync_pipe();
+            scene_draw_environment_walls();
+            scene_draw_environment_floor();
+            scene_draw_environment_niches_windows();
+            scene_draw_environment_decals();
+            scene_draw_environment_pillars_statue();
+
             rdpq_mode_zbuf(false, false);
-
             t3d_matrix_push_pos(1);
-                if (ctx->mapMatrix && ctx->mapDpl) {
-                    t3d_matrix_set(ctx->mapMatrix, true);
-                    rspq_block_run(ctx->mapDpl);
-                }
-
-                if (ctx->roomFloorMatrix && ctx->roomFloorDpl) {
-                    t3d_matrix_set(ctx->roomFloorMatrix, true);
-                    rspq_block_run(ctx->roomFloorDpl);
-                }
-
-                if (ctx->roomLedgeMatrix && ctx->roomLedgeDpl) {
-                    t3d_matrix_set(ctx->roomLedgeMatrix, true);
-                    rspq_block_run(ctx->roomLedgeDpl);
-                }
-
-                if (ctx->pillarsMatrix && ctx->pillarsDpl) {
-                    t3d_matrix_set(ctx->pillarsMatrix, true);
-                    rspq_block_run(ctx->pillarsDpl);
-                }
-
                 if (ctx->bossChainsGlowMatrix && ctx->bossChainsGlowModel) {
                     t3d_matrix_set(ctx->bossChainsGlowMatrix, true);
                     t3d_model_draw_custom(ctx->bossChainsGlowModel, (T3DModelDrawConf){
@@ -958,28 +906,21 @@ void cutscene_guardian_phase2_draw(SceneContext *ctx, T3DViewport *viewport)
                 }
             t3d_matrix_pop(1);
 
-            rdpq_sync_pipe();
             rdpq_mode_zbuf(true, true);
-
             t3d_matrix_push_pos(1);
                 if (ctx->boss) {
                     boss_draw(ctx->boss);
                 }
             t3d_matrix_pop(1);
 
-            rdpq_sync_pipe();
             rdpq_mode_zbuf(false, false);
-
             t3d_matrix_push_pos(1);
                 if (ctx->boss) {
                     boss_draw_shadow(ctx->boss);
                 }
-
-                if (ctx->sunshaftsMatrix && ctx->sunshaftsDpl) {
-                    t3d_matrix_set(ctx->sunshaftsMatrix, true);
-                    rspq_block_run(ctx->sunshaftsDpl);
-                }
             t3d_matrix_pop(1);
+
+            scene_draw_environment_sunshafts();
 
             if (ctx->screenTransition && *ctx->screenTransition) {
                 display_utility_solid_black_transition(true, 100.0f);

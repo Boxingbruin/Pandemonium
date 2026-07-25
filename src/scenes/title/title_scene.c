@@ -8,6 +8,8 @@
 #include <t3d/t3dskeleton.h>
 
 #include <stdbool.h>
+#include <stdint.h>
+#include <string.h>
 
 #include "../../controllers/audio_controller.h"
 #include "../../controllers/camera_controller.h"
@@ -76,13 +78,175 @@ static int s_current_title_dialog = 0;
 static float s_title_text_activation_timer = 0.0f;
 static float s_title_start_game_timer = 0.0f;
 
-static T3DModel *s_room_model = NULL;
-static rspq_block_t *s_room_dpl = NULL;
-static T3DMat4FP *s_room_matrix = NULL;
+#define TITLE_ENVIRONMENT_PATH_PREFIX "rom:/boss_room/"
 
-static T3DModel *s_fog_door_model = NULL;
-static rspq_block_t *s_fog_door_dpl = NULL;
-static T3DMat4FP *s_fog_door_matrix = NULL;
+#define TITLE_ENVIRONMENT_MAX_MIP_TEXTURE_COUNT 3
+#define TITLE_ENVIRONMENT_FLOOR_MIP_CHAIN_COUNT 4
+#define TITLE_ENVIRONMENT_WALLS_BACK_MIP_CHAIN_COUNT 3
+#define TITLE_ENVIRONMENT_MAX_MIP_CHAIN_COUNT 4
+
+#define TITLE_ENVIRONMENT_MIP1_START_RDP_LEVEL 2
+#define TITLE_ENVIRONMENT_MIP2_START_RDP_LEVEL 4
+#define TITLE_ENVIRONMENT_MIP_RDP_LEVEL_COUNT 8
+
+_Static_assert(
+    TITLE_ENVIRONMENT_FLOOR_MIP_CHAIN_COUNT
+        <= TITLE_ENVIRONMENT_MAX_MIP_CHAIN_COUNT
+        && TITLE_ENVIRONMENT_WALLS_BACK_MIP_CHAIN_COUNT
+            <= TITLE_ENVIRONMENT_MAX_MIP_CHAIN_COUNT,
+    "title environment mip binding storage is too small"
+);
+
+_Static_assert(
+    TITLE_ENVIRONMENT_MIP_RDP_LEVEL_COUNT >= 3
+        && TITLE_ENVIRONMENT_MIP_RDP_LEVEL_COUNT <= 8,
+    "title environment mipmapping requires between 3 and 8 RDP levels"
+);
+
+typedef struct TitleEnvironmentMipChain {
+    const char *chain_name;
+    const char *material_name;
+    uint8_t source_texture_count;
+    const char *texture_paths[TITLE_ENVIRONMENT_MAX_MIP_TEXTURE_COUNT];
+    uint8_t source_start_rdp_levels[TITLE_ENVIRONMENT_MAX_MIP_TEXTURE_COUNT];
+    sprite_t *sprites[TITLE_ENVIRONMENT_MAX_MIP_TEXTURE_COUNT];
+    bool ready;
+} TitleEnvironmentMipChain;
+
+typedef struct TitleEnvironmentObject {
+    const char *path;
+    T3DModel *model;
+    rspq_block_t *dpl;
+    T3DMat4FP *matrix;
+    bool draw_custom;
+    bool frozen;
+    bool optimized_mip_draw;
+    ScrollParams *scroll_params;
+    TitleEnvironmentMipChain *mip_chains;
+    T3DMaterial *bound_mip_materials[TITLE_ENVIRONMENT_MAX_MIP_CHAIN_COUNT];
+    uint8_t mip_chain_count;
+} TitleEnvironmentObject;
+
+static TitleEnvironmentMipChain s_title_floor_mip_chains[
+    TITLE_ENVIRONMENT_FLOOR_MIP_CHAIN_COUNT
+] = {
+    {
+        .chain_name = "floor6",
+        .material_name = "floor",
+        .source_texture_count = 3,
+        .texture_paths = {
+            NULL,
+            TITLE_ENVIRONMENT_PATH_PREFIX "floor6-mip1.i4.sprite",
+            TITLE_ENVIRONMENT_PATH_PREFIX "floor6-mip2.i4.sprite",
+        },
+        .source_start_rdp_levels = {
+            0,
+            TITLE_ENVIRONMENT_MIP1_START_RDP_LEVEL,
+            TITLE_ENVIRONMENT_MIP2_START_RDP_LEVEL,
+        },
+    },
+    {
+        .chain_name = "floor_ornate11",
+        .material_name = "floor_ornate",
+        .source_texture_count = 3,
+        .texture_paths = {
+            NULL,
+            TITLE_ENVIRONMENT_PATH_PREFIX "floor_ornate11-mip1.i4.sprite",
+            TITLE_ENVIRONMENT_PATH_PREFIX "floor_ornate11-mip2.i4.sprite",
+        },
+        .source_start_rdp_levels = {
+            0,
+            TITLE_ENVIRONMENT_MIP1_START_RDP_LEVEL,
+            TITLE_ENVIRONMENT_MIP2_START_RDP_LEVEL,
+        },
+    },
+    {
+        .chain_name = "floor_debris_pile5",
+        .material_name = "floor_debris_pile2",
+        .source_texture_count = 3,
+        .texture_paths = {
+            TITLE_ENVIRONMENT_PATH_PREFIX "floor_debris_pile5.i4.sprite",
+            TITLE_ENVIRONMENT_PATH_PREFIX "floor_debris_pile5-mip1.i4.sprite",
+            TITLE_ENVIRONMENT_PATH_PREFIX "floor_debris_pile5-mip2.i4.sprite",
+        },
+        .source_start_rdp_levels = {
+            0,
+            TITLE_ENVIRONMENT_MIP1_START_RDP_LEVEL,
+            TITLE_ENVIRONMENT_MIP2_START_RDP_LEVEL,
+        },
+    },
+    {
+        .chain_name = "carpet_border8",
+        .material_name = "carpet_border",
+        .source_texture_count = 3,
+        .texture_paths = {
+            TITLE_ENVIRONMENT_PATH_PREFIX "carpet_border8.ci8.sprite",
+            TITLE_ENVIRONMENT_PATH_PREFIX "carpet_border8-mip1.ci8.sprite",
+            TITLE_ENVIRONMENT_PATH_PREFIX "carpet_border8-mip2.ci8.sprite",
+        },
+        .source_start_rdp_levels = {
+            0,
+            TITLE_ENVIRONMENT_MIP1_START_RDP_LEVEL,
+            TITLE_ENVIRONMENT_MIP1_START_RDP_LEVEL + 1,
+        },
+    },
+};
+
+static TitleEnvironmentMipChain s_title_walls_back_mip_chains[
+    TITLE_ENVIRONMENT_WALLS_BACK_MIP_CHAIN_COUNT
+] = {
+    {
+        .chain_name = "baseboard8",
+        .material_name = "baseboard",
+        .source_texture_count = 3,
+        .texture_paths = {
+            TITLE_ENVIRONMENT_PATH_PREFIX "baseboard8.i4.sprite",
+            TITLE_ENVIRONMENT_PATH_PREFIX "baseboard8-mip1.i4.sprite",
+            TITLE_ENVIRONMENT_PATH_PREFIX "baseboard8-mip2.i4.sprite",
+        },
+        .source_start_rdp_levels = {
+            0,
+            TITLE_ENVIRONMENT_MIP1_START_RDP_LEVEL,
+            TITLE_ENVIRONMENT_MIP1_START_RDP_LEVEL + 1,
+        },
+    },
+    {
+        .chain_name = "door_detail_top3",
+        .material_name = "door_detail_top",
+        .source_texture_count = 2,
+        .texture_paths = {
+            TITLE_ENVIRONMENT_PATH_PREFIX "door_detail_top3.ia4.sprite",
+            TITLE_ENVIRONMENT_PATH_PREFIX "door_detail_top3-mip1.ia4.sprite",
+        },
+        .source_start_rdp_levels = {
+            0,
+            2,
+        },
+    },
+    {
+        .chain_name = "door_detail_pillar4",
+        .material_name = "door_pillar",
+        .source_texture_count = 3,
+        .texture_paths = {
+            TITLE_ENVIRONMENT_PATH_PREFIX "door_detail_pillar4.i4.sprite",
+            TITLE_ENVIRONMENT_PATH_PREFIX "door_detail_pillar4-mip1.i4.sprite",
+            TITLE_ENVIRONMENT_PATH_PREFIX "door_detail_pillar4-mip2.i4.sprite",
+        },
+        .source_start_rdp_levels = {
+            0,
+            1,
+            3,
+        },
+    },
+};
+
+static const rdpq_mipmap_t TITLE_ENVIRONMENT_MIP_MODE = MIPMAP_NEAREST;
+
+static TitleEnvironmentObject s_title_floor;
+static TitleEnvironmentObject s_title_walls_back;
+static TitleEnvironmentObject s_title_decals_layer1;
+static TitleEnvironmentObject s_title_decals_layer2;
+static TitleEnvironmentObject s_title_fog_door;
 
 static ScrollParams s_fog_scroll_params = {
     .xSpeed = 0.0f,
@@ -96,25 +260,713 @@ static T3DMat4FP *s_dynamic_banner_matrix = NULL;
 static T3DSkeleton *s_dynamic_banner_skeleton = NULL;
 static T3DAnim *s_dynamic_banner_wind_anim = NULL;
 
-static void title_scene_free_model_asset(
-    T3DModel **model,
-    rspq_block_t **dpl,
-    T3DMat4FP **matrix
+
+static void title_environment_object_clear(TitleEnvironmentObject *object)
+{
+    if (!object) return;
+
+    object->path = NULL;
+    object->model = NULL;
+    object->dpl = NULL;
+    object->matrix = NULL;
+    object->draw_custom = false;
+    object->frozen = false;
+    object->optimized_mip_draw = false;
+    object->scroll_params = NULL;
+    object->mip_chains = NULL;
+    object->mip_chain_count = 0;
+    memset(object->bound_mip_materials, 0, sizeof(object->bound_mip_materials));
+}
+
+static void title_environment_clear_handles(void)
+{
+    title_environment_object_clear(&s_title_floor);
+    title_environment_object_clear(&s_title_walls_back);
+    title_environment_object_clear(&s_title_decals_layer1);
+    title_environment_object_clear(&s_title_decals_layer2);
+    title_environment_object_clear(&s_title_fog_door);
+}
+
+static void title_environment_object_free(TitleEnvironmentObject *object)
+{
+    if (!object) return;
+
+    if (object->dpl) {
+        rspq_block_free(object->dpl);
+        object->dpl = NULL;
+    }
+
+    if (object->model) {
+        t3d_model_free(object->model);
+        object->model = NULL;
+    }
+
+    if (object->matrix) {
+        free_uncached(object->matrix);
+        object->matrix = NULL;
+    }
+
+    title_environment_object_clear(object);
+}
+
+static bool title_environment_object_load_internal(
+    TitleEnvironmentObject *object,
+    const char *path,
+    bool draw_custom,
+    ScrollParams *scroll_params,
+    bool frozen
 ) {
-    if (*dpl) {
-        rspq_block_free(*dpl);
-        *dpl = NULL;
+    if (!object || !path) return false;
+
+    title_environment_object_clear(object);
+
+    object->path = path;
+    object->draw_custom = draw_custom;
+    object->frozen = frozen && !draw_custom;
+    object->scroll_params = scroll_params;
+
+    object->model = t3d_model_load(path);
+    if (!object->model) {
+        debugf("title_scene: failed to load model: %s\n", path);
+        return false;
     }
 
-    if (*model) {
-        t3d_model_free(*model);
-        *model = NULL;
+    if (!draw_custom && !object->frozen) {
+        rspq_block_begin();
+            t3d_model_draw(object->model);
+        object->dpl = rspq_block_end();
     }
 
-    if (*matrix) {
-        free_uncached(*matrix);
-        *matrix = NULL;
+    object->matrix = malloc_uncached(sizeof(T3DMat4FP));
+    if (!object->matrix) {
+        debugf("title_scene: failed to allocate matrix: %s\n", path);
+        title_environment_object_free(object);
+        return false;
     }
+
+    t3d_mat4fp_from_srt_euler(
+        object->matrix,
+        (float[3]){MODEL_SCALE, MODEL_SCALE, MODEL_SCALE},
+        (float[3]){0.0f, 0.0f, 0.0f},
+        (float[3]){0.0f, TITLE_ROOM_Y, 0.0f}
+    );
+
+    return true;
+}
+
+static bool title_environment_object_load(
+    TitleEnvironmentObject *object,
+    const char *path,
+    bool draw_custom,
+    ScrollParams *scroll_params
+) {
+    return title_environment_object_load_internal(
+        object,
+        path,
+        draw_custom,
+        scroll_params,
+        false
+    );
+}
+
+static bool title_environment_object_load_frozen(
+    TitleEnvironmentObject *object,
+    const char *path
+) {
+    return title_environment_object_load_internal(
+        object,
+        path,
+        false,
+        NULL,
+        true
+    );
+}
+
+static void title_environment_free_mip_chain_sprites(
+    TitleEnvironmentMipChain *chain
+)
+{
+    if (!chain) return;
+
+    for (int source_index = 0;
+         source_index < TITLE_ENVIRONMENT_MAX_MIP_TEXTURE_COUNT;
+         ++source_index
+    ) {
+        if (chain->sprites[source_index]) {
+            sprite_free(chain->sprites[source_index]);
+            chain->sprites[source_index] = NULL;
+        }
+    }
+
+    chain->ready = false;
+}
+
+static void title_environment_free_mip_chains(
+    TitleEnvironmentMipChain *chains,
+    int chain_count
+)
+{
+    if (!chains || chain_count <= 0) return;
+
+    for (int chain_index = 0; chain_index < chain_count; ++chain_index) {
+        title_environment_free_mip_chain_sprites(&chains[chain_index]);
+    }
+}
+
+static bool title_environment_mip_chain_uses_palette(
+    const TitleEnvironmentMipChain *chain
+) {
+    if (!chain || !chain->sprites[0]) return false;
+
+    tex_format_t format = sprite_get_format(chain->sprites[0]);
+    return format == FMT_CI4 || format == FMT_CI8;
+}
+
+static bool title_environment_is_power_of_two_u16(uint16_t value)
+{
+    return value != 0 && (value & (value - 1)) == 0;
+}
+
+static rdpq_texparms_t title_environment_get_texture_params(
+    const T3DMaterialTexture *texture
+) {
+    rdpq_texparms_t params = (rdpq_texparms_t){};
+
+    params.s.translate = texture->s.low;
+    params.s.mirror = texture->s.mirror;
+    params.s.repeats = REPEAT_INFINITE;
+    params.s.scale_log = (int)texture->s.shift;
+
+    if (texture->s.clamp) {
+        params.s.repeats = title_environment_is_power_of_two_u16(texture->texWidth)
+            ? (texture->s.height - texture->s.low + 1.0f) / (float)texture->texWidth
+            : 1.0f;
+    }
+
+    params.t.translate = texture->t.low;
+    params.t.mirror = texture->t.mirror;
+    params.t.repeats = REPEAT_INFINITE;
+    params.t.scale_log = (int)texture->t.shift;
+
+    if (texture->t.clamp) {
+        params.t.repeats = title_environment_is_power_of_two_u16(texture->texHeight)
+            ? (texture->t.height - texture->t.low + 1.0f) / (float)texture->texHeight
+            : 1.0f;
+    }
+
+    return params;
+}
+
+static bool title_environment_load_mip_chain(
+    TitleEnvironmentMipChain *chain,
+    const T3DMaterial *material
+) {
+    if (!chain || !material) return false;
+
+    title_environment_free_mip_chain_sprites(chain);
+
+    if (chain->source_texture_count < 2
+        || chain->source_texture_count > TITLE_ENVIRONMENT_MAX_MIP_TEXTURE_COUNT
+    ) {
+        debugf(
+            "title_scene: mip chain '%s' has invalid source count %d\n",
+            chain->chain_name,
+            chain->source_texture_count
+        );
+        return false;
+    }
+
+    if (chain->source_start_rdp_levels[0] != 0) {
+        debugf(
+            "title_scene: mip chain '%s' source 0 must start at level 0\n",
+            chain->chain_name
+        );
+        return false;
+    }
+
+    for (int source_index = 1;
+         source_index < chain->source_texture_count;
+         ++source_index
+    ) {
+        uint8_t previous_start =
+            chain->source_start_rdp_levels[source_index - 1];
+        uint8_t current_start =
+            chain->source_start_rdp_levels[source_index];
+
+        if (current_start <= previous_start
+            || current_start >= TITLE_ENVIRONMENT_MIP_RDP_LEVEL_COUNT
+        ) {
+            debugf(
+                "title_scene: mip chain '%s' has invalid level ordering\n",
+                chain->chain_name
+            );
+            return false;
+        }
+    }
+
+    for (int source_index = 0;
+         source_index < chain->source_texture_count;
+         ++source_index
+    ) {
+        const char *path = chain->texture_paths[source_index]
+            ? chain->texture_paths[source_index]
+            : material->textureA.texPath;
+
+        if (!path) {
+            debugf(
+                "title_scene: mip chain '%s' source %d has no path\n",
+                chain->chain_name,
+                source_index
+            );
+            title_environment_free_mip_chain_sprites(chain);
+            return false;
+        }
+
+        chain->sprites[source_index] = sprite_load(path);
+        if (!chain->sprites[source_index]) {
+            debugf(
+                "title_scene: failed to load mip chain '%s' source %d: %s\n",
+                chain->chain_name,
+                source_index,
+                path
+            );
+            title_environment_free_mip_chain_sprites(chain);
+            return false;
+        }
+    }
+
+    sprite_t *base = chain->sprites[0];
+    tex_format_t base_format = sprite_get_format(base);
+
+    if (base->width != material->textureA.texWidth
+        || base->height != material->textureA.texHeight
+    ) {
+        debugf(
+            "title_scene: mip chain '%s' base is %dx%d; model expects %dx%d\n",
+            chain->chain_name,
+            base->width,
+            base->height,
+            material->textureA.texWidth,
+            material->textureA.texHeight
+        );
+        title_environment_free_mip_chain_sprites(chain);
+        return false;
+    }
+
+    if ((base_format == FMT_CI4 || base_format == FMT_CI8)
+        && !sprite_get_palette(base)
+    ) {
+        debugf(
+            "title_scene: CI mip chain '%s' source 0 has no palette\n",
+            chain->chain_name
+        );
+        title_environment_free_mip_chain_sprites(chain);
+        return false;
+    }
+
+    for (int source_index = 1;
+         source_index < chain->source_texture_count;
+         ++source_index
+    ) {
+        sprite_t *previous = chain->sprites[source_index - 1];
+        sprite_t *current = chain->sprites[source_index];
+        uint16_t expected_width = previous->width > 1 ? previous->width / 2 : 1;
+        uint16_t expected_height = previous->height > 1 ? previous->height / 2 : 1;
+
+        if (current->width != expected_width || current->height != expected_height) {
+            debugf(
+                "title_scene: mip chain '%s' source %d is %dx%d; expected %dx%d\n",
+                chain->chain_name,
+                source_index,
+                current->width,
+                current->height,
+                expected_width,
+                expected_height
+            );
+            title_environment_free_mip_chain_sprites(chain);
+            return false;
+        }
+
+        if (sprite_get_format(current) != base_format) {
+            debugf(
+                "title_scene: mip chain '%s' source %d format differs from source 0\n",
+                chain->chain_name,
+                source_index
+            );
+            title_environment_free_mip_chain_sprites(chain);
+            return false;
+        }
+    }
+
+    chain->ready = true;
+    return true;
+}
+
+static bool title_environment_mip_chain_matches_material(
+    const TitleEnvironmentMipChain *chain,
+    const T3DMaterial *material
+) {
+    if (!chain || !chain->ready || !chain->sprites[0] || !material) {
+        return false;
+    }
+
+    const sprite_t *base = chain->sprites[0];
+
+    return base->width == material->textureA.texWidth
+        && base->height == material->textureA.texHeight;
+}
+
+static void title_environment_upload_mip_chain(
+    const TitleEnvironmentMipChain *chain,
+    const T3DMaterial *material
+) {
+    rdpq_texparms_t source_params =
+        title_environment_get_texture_params(&material->textureA);
+    bool uses_palette = title_environment_mip_chain_uses_palette(chain);
+    int source_index = 0;
+
+    rdpq_tex_multi_begin();
+
+    for (int rdp_level = 0;
+         rdp_level < TITLE_ENVIRONMENT_MIP_RDP_LEVEL_COUNT;
+         ++rdp_level
+    ) {
+        bool starts_next_source =
+            source_index + 1 < chain->source_texture_count
+            && rdp_level == chain->source_start_rdp_levels[source_index + 1];
+
+        if (starts_next_source) {
+            ++source_index;
+            ++source_params.s.scale_log;
+            ++source_params.t.scale_log;
+            source_params.s.translate *= 0.5f;
+            source_params.t.translate *= 0.5f;
+        }
+
+        rdpq_tile_t tile = (rdpq_tile_t)(TILE0 + rdp_level);
+
+        if (rdp_level == 0) {
+            rdpq_sprite_upload(tile, chain->sprites[source_index], &source_params);
+        } else if (starts_next_source) {
+            if (uses_palette) {
+                surface_t mip_pixels =
+                    sprite_get_pixels(chain->sprites[source_index]);
+                rdpq_tex_upload(tile, &mip_pixels, &source_params);
+            } else {
+                rdpq_sprite_upload(
+                    tile,
+                    chain->sprites[source_index],
+                    &source_params
+                );
+            }
+        } else {
+            rdpq_tex_reuse(tile, &source_params);
+        }
+    }
+
+    rdpq_tex_multi_end();
+}
+
+static TitleEnvironmentMipChain *title_environment_find_mip_chain(
+    T3DMaterial *material,
+    TitleEnvironmentMipChain *chains,
+    T3DMaterial *const *bound_materials,
+    int chain_count
+)
+{
+    if (!material || !chains || !bound_materials || chain_count <= 0) {
+        return NULL;
+    }
+
+    for (int chain_index = 0; chain_index < chain_count; ++chain_index) {
+        if (chains[chain_index].ready
+            && bound_materials[chain_index] == material
+        ) {
+            return &chains[chain_index];
+        }
+    }
+
+    return NULL;
+}
+
+static void title_environment_record_model_with_mipmaps(
+    const T3DModel *model,
+    TitleEnvironmentMipChain *chains,
+    T3DMaterial *const *bound_materials,
+    int chain_count
+) {
+    T3DModelState state = t3d_model_state_create();
+    T3DModelIter iterator = t3d_model_iter_create(
+        model,
+        T3D_CHUNK_TYPE_OBJECT
+    );
+    TitleEnvironmentMipChain *active_chain = NULL;
+    T3DMaterial *active_material = NULL;
+
+    while (t3d_model_iter_next(&iterator)) {
+        T3DObject *model_object = iterator.object;
+        T3DMaterial *material = model_object->material;
+
+        if (material) {
+            TitleEnvironmentMipChain *requested_chain =
+                title_environment_find_mip_chain(
+                    material,
+                    chains,
+                    bound_materials,
+                    chain_count
+                );
+
+            if (requested_chain && requested_chain != active_chain) {
+                title_environment_upload_mip_chain(requested_chain, material);
+                rdpq_mode_mipmap(
+                    TITLE_ENVIRONMENT_MIP_MODE,
+                    TITLE_ENVIRONMENT_MIP_RDP_LEVEL_COUNT
+                );
+
+                state.lastTextureHashA = material->textureA.textureHash;
+                state.lastTextureHashB = material->textureB.textureHash;
+                state.lastRenderFlags = ~material->renderFlags;
+
+                active_chain = requested_chain;
+                active_material = material;
+            } else if (!requested_chain && active_chain) {
+                rdpq_mode_mipmap(MIPMAP_NONE, 0);
+
+                if (title_environment_mip_chain_uses_palette(active_chain)) {
+                    rdpq_mode_tlut(TLUT_NONE);
+                }
+
+                state.lastRenderFlags = ~material->renderFlags;
+                active_chain = NULL;
+                active_material = NULL;
+            }
+
+            t3d_model_draw_material(material, &state);
+        }
+
+        t3d_model_draw_object(model_object, NULL);
+    }
+
+    if (active_chain) {
+        rdpq_mode_mipmap(MIPMAP_NONE, 0);
+
+        if (title_environment_mip_chain_uses_palette(active_chain)) {
+            rdpq_mode_tlut(TLUT_NONE);
+        }
+
+        t3d_state_set_drawflags(active_material->renderFlags);
+    }
+
+    if (state.lastVertFXFunc != T3D_VERTEX_FX_NONE) {
+        t3d_state_set_vertex_fx(T3D_VERTEX_FX_NONE, 0, 0);
+    }
+}
+
+static void title_environment_record_object_commands(
+    const TitleEnvironmentObject *object
+) {
+    if (!object || !object->model) return;
+
+    if (object->optimized_mip_draw) {
+        title_environment_record_model_with_mipmaps(
+            object->model,
+            object->mip_chains,
+            object->bound_mip_materials,
+            object->mip_chain_count
+        );
+        return;
+    }
+
+    t3d_model_draw(object->model);
+}
+
+static bool title_environment_record_frozen_block(
+    TitleEnvironmentObject *object
+) {
+    if (!object || !object->model) return false;
+
+    if (object->dpl) {
+        rdpq_call_deferred(
+            (void (*)(void *))rspq_block_free,
+            object->dpl
+        );
+        object->dpl = NULL;
+    }
+
+    rspq_block_begin_frozen(NULL);
+        title_environment_record_object_commands(object);
+    object->dpl = rspq_block_end_frozen();
+
+    return object->dpl != NULL;
+}
+
+static bool title_environment_load_mip_model(
+    TitleEnvironmentObject *object,
+    const char *model_path,
+    const char *model_name,
+    TitleEnvironmentMipChain *chains,
+    int chain_count,
+    bool reset_mip_sprites
+)
+{
+    if (!object || !model_path || !model_name || !chains || chain_count <= 0) {
+        return false;
+    }
+
+    if (reset_mip_sprites) {
+        title_environment_free_mip_chains(chains, chain_count);
+    }
+
+    if (!title_environment_object_load_internal(
+            object,
+            model_path,
+            true,
+            NULL,
+            true
+        )
+    ) {
+        return false;
+    }
+
+    int ready_chain_count = 0;
+    T3DMaterial *bound_materials[TITLE_ENVIRONMENT_MAX_MIP_CHAIN_COUNT] = {NULL};
+
+    for (int chain_index = 0; chain_index < chain_count; ++chain_index) {
+        TitleEnvironmentMipChain *chain = &chains[chain_index];
+        T3DMaterial *material = t3d_model_get_material(
+            object->model,
+            chain->material_name
+        );
+
+        if (!material || !material->textureA.texPath) {
+            continue;
+        }
+
+        if (material->textureB.texPath || material->textureB.texReference) {
+            continue;
+        }
+
+        bool available = chain->ready
+            ? title_environment_mip_chain_matches_material(chain, material)
+            : title_environment_load_mip_chain(chain, material);
+
+        if (!available) {
+            continue;
+        }
+
+        bound_materials[chain_index] = material;
+        ++ready_chain_count;
+    }
+
+    object->draw_custom = false;
+    object->frozen = true;
+    object->optimized_mip_draw = ready_chain_count > 0;
+    object->mip_chains = object->optimized_mip_draw ? chains : NULL;
+    object->mip_chain_count = object->optimized_mip_draw
+        ? (uint8_t)chain_count
+        : 0;
+    memcpy(
+        object->bound_mip_materials,
+        bound_materials,
+        sizeof(object->bound_mip_materials)
+    );
+
+    return true;
+}
+
+static void title_environment_object_draw(TitleEnvironmentObject *object)
+{
+    if (!object || !object->matrix || !object->model) return;
+
+    t3d_matrix_set(object->matrix, true);
+
+    if (object->draw_custom) {
+        t3d_model_draw_custom(object->model, (T3DModelDrawConf){
+            .userData = object->scroll_params,
+            .tileCb = object->scroll_params ? tile_scroll : NULL,
+        });
+        return;
+    }
+
+    if (object->frozen) {
+        if (rspq_block_run_frozen(object->dpl)) {
+            return;
+        }
+
+        if (!title_environment_record_frozen_block(object)) {
+            debugf(
+                "title_scene: failed to record frozen block for %s\n",
+                object->path ? object->path : "<unknown>"
+            );
+            return;
+        }
+
+        if (!rspq_block_run_frozen(object->dpl)) {
+            title_environment_record_object_commands(object);
+        }
+
+        return;
+    }
+
+    if (object->dpl) {
+        rspq_block_run(object->dpl);
+    }
+}
+
+static void title_environment_load(void)
+{
+    title_environment_load_mip_model(
+        &s_title_floor,
+        TITLE_ENVIRONMENT_PATH_PREFIX "test-floor-opt.t3dm",
+        "test-floor-opt",
+        s_title_floor_mip_chains,
+        TITLE_ENVIRONMENT_FLOOR_MIP_CHAIN_COUNT,
+        true
+    );
+
+    title_environment_load_mip_model(
+        &s_title_walls_back,
+        TITLE_ENVIRONMENT_PATH_PREFIX "test-walls_back-opt.t3dm",
+        "test-walls_back-opt",
+        s_title_walls_back_mip_chains,
+        TITLE_ENVIRONMENT_WALLS_BACK_MIP_CHAIN_COUNT,
+        true
+    );
+
+    title_environment_object_load_frozen(
+        &s_title_decals_layer1,
+        TITLE_ENVIRONMENT_PATH_PREFIX "test-decals_layer1-opt.t3dm"
+    );
+    title_environment_object_load_frozen(
+        &s_title_decals_layer2,
+        TITLE_ENVIRONMENT_PATH_PREFIX "test-decals_layer2-opt.t3dm"
+    );
+
+    title_environment_object_load(
+        &s_title_fog_door,
+        TITLE_ENVIRONMENT_PATH_PREFIX "test-fog_door.t3dm",
+        true,
+        &s_fog_scroll_params
+    );
+}
+
+static void title_environment_free(void)
+{
+    title_environment_object_free(&s_title_floor);
+    title_environment_free_mip_chains(
+        s_title_floor_mip_chains,
+        TITLE_ENVIRONMENT_FLOOR_MIP_CHAIN_COUNT
+    );
+
+    title_environment_object_free(&s_title_walls_back);
+    title_environment_free_mip_chains(
+        s_title_walls_back_mip_chains,
+        TITLE_ENVIRONMENT_WALLS_BACK_MIP_CHAIN_COUNT
+    );
+
+    title_environment_object_free(&s_title_decals_layer1);
+    title_environment_object_free(&s_title_decals_layer2);
+    title_environment_object_free(&s_title_fog_door);
 }
 
 static void title_scene_make_matrix(T3DMat4FP **matrix)
@@ -133,26 +985,9 @@ static void title_scene_make_matrix(T3DMat4FP **matrix)
 
 static void title_scene_load_room_assets(void)
 {
-    if (!s_room_model) {
-        s_room_model = t3d_model_load("rom:/boss_room/room.t3dm");
-
-        rspq_block_begin();
-            t3d_model_draw(s_room_model);
-        s_room_dpl = rspq_block_end();
-
-        title_scene_make_matrix(&s_room_matrix);
-    }
-
-    if (!s_fog_door_model) {
-        s_fog_door_model = t3d_model_load("rom:/boss_room/fog.t3dm");
-
-        rspq_block_begin();
-            t3d_model_draw(s_fog_door_model);
-        s_fog_door_dpl = rspq_block_end();
-
-        title_scene_make_matrix(&s_fog_door_matrix);
-    }
+    title_environment_load();
 }
+
 
 static void title_scene_load_dynamic_banner_assets(void)
 {
@@ -281,6 +1116,7 @@ void title_scene_enter(void)
     letterbox_init();
     letterbox_show(false);
 
+    title_environment_clear_handles();
     title_scene_load_room_assets();
     title_scene_load_dynamic_banner_assets();
 
@@ -313,17 +1149,7 @@ void title_scene_exit(void)
 
     title_scene_free_dynamic_banner_assets();
 
-    title_scene_free_model_asset(
-        &s_fog_door_model,
-        &s_fog_door_dpl,
-        &s_fog_door_matrix
-    );
-
-    title_scene_free_model_asset(
-        &s_room_model,
-        &s_room_dpl,
-        &s_room_matrix
-    );
+    title_environment_free();
 
     s_state = TITLE_STATE_INACTIVE;
     s_result = TITLE_SCENE_RESULT_NONE;
@@ -498,35 +1324,34 @@ void title_scene_update(void)
 
 static void title_scene_draw_3d(void)
 {
-    rdpq_mode_zbuf(false, false);
-
     t3d_matrix_push_pos(1);
 
-    if (s_room_matrix && s_room_dpl) {
-        t3d_matrix_set(s_room_matrix, true);
-        rspq_block_run(s_room_dpl);
-    }
+        // The title shot only uses the optimized back-room model.
+        rdpq_mode_zbuf(false, false);
+        title_environment_object_draw(&s_title_walls_back);
+        title_environment_object_draw(&s_title_floor);
 
-    if (s_dynamic_banner_matrix && s_dynamic_banner_dpl) {
-        t3d_matrix_set(s_dynamic_banner_matrix, true);
-        rspq_block_run(s_dynamic_banner_dpl);
-    }
+        // Both decal layers draw in their authored order with depth disabled.
+        rdpq_mode_zbuf(false, false);
+        title_environment_object_draw(&s_title_decals_layer1);
+        title_environment_object_draw(&s_title_decals_layer2);
 
-    rdpq_mode_zbuf(true, true);
+        if (s_dynamic_banner_matrix && s_dynamic_banner_dpl) {
+            t3d_matrix_set(s_dynamic_banner_matrix, true);
+            rspq_block_run(s_dynamic_banner_dpl);
+        }
 
-    character_draw();
+        rdpq_mode_zbuf(true, true);
+        character_draw();
 
-    if (s_fog_door_matrix && s_fog_door_model) {
-        t3d_matrix_set(s_fog_door_matrix, true);
+        rdpq_mode_zbuf(true, false);
+        title_environment_object_draw(&s_title_fog_door);
 
-        t3d_model_draw_custom(s_fog_door_model, (T3DModelDrawConf){
-            .userData = &s_fog_scroll_params,
-            .tileCb = tile_scroll,
-        });
-    }
+        rdpq_mode_zbuf(true, true);
 
     t3d_matrix_pop(1);
 }
+
 
 static void title_scene_draw_run_counter_panel(void)
 {

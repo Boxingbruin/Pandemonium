@@ -10,8 +10,6 @@
 #include "testing_scene.h"
 
 #include "../../controllers/camera_controller.h"
-#include "../../fx/dust_particles_fx.h"
-#include "../../utilities/display_utility.h"
 #include "../../utilities/game_lighting.h"
 #include "../../utilities/game_time.h"
 #include "../../utilities/general_utility.h"
@@ -19,71 +17,42 @@
 #include "../../utilities/joypad_utility.h"
 
 // Declared here in case general_utility.h has not exposed the prototype yet.
-void tile_double_scroll(void* userData, rdpq_texparms_t *tp, rdpq_tile_t tile);
+void tile_double_scroll(void *userData, rdpq_texparms_t *tp, rdpq_tile_t tile);
 
 /*
- * Comparison/testing scene.
+ * Optimized environment testing scene.
  *
- * This scene owns only environment models and a scene-local camera-pan cutscene.
- * It does not spawn the Guardian boss, character, collision, UI, or dialog.
- * That keeps the memory/performance comparison focused on the loaded room set.
+ * This scene loads exactly one environment: the complete frozen optimized room.
+ * It keeps the scene-local looping camera cutscene and scrolling fog door, but
+ * contains no environment enum, cycling, comparison labels, original/test/nomat
+ * object storage, or environment reload controls.
  *
  * Runtime behavior:
- *   - Defaults to the original environment.
- *   - Starts a looping camera-pan cutscene immediately.
- *   - Press A to cycle original -> test -> optimized -> optimized (frozen) ->
- *     optimized (no mipmaps) -> optimized (no mipmaps, frozen) ->
- *     no materials -> decimated frozen -> original, unloading and reloading only the
- *     environment while preserving cutscene position.
- *   - Press B to cycle in the opposite direction.
- *   - While the scene is running in freecam, A/B cycle environments without
- *     moving the camera vertically. The paused dev menu still owns A/B for movement.
- *   - Press Start to restart the camera-pan cutscene from the beginning.
+ *   - Loads the complete optimized environment once on scene initialization.
+ *   - Static optimized models use lazily recorded frozen RSPQ blocks.
+ *   - The scrolling fog door and double-scrolling sunshafts remain dynamic.
+ *   - Press Start to restart the camera-pan cutscene.
  *   - Press Z to pause/resume cutscene time.
- *   - Extra FX remain disabled so they do not affect the environment comparison.
- *   - Only the selected environment is loaded at any time.
- *   - Test, optimized, optimized (no mipmaps), no-material, and decimated frozen have
- *     independent object storage, load/delete functions, and draw functions.
- *     The two frozen optimized modes reuse their corresponding optimized
- *     storage because only one environment is loaded at a time.
- *   - Each comparison state loads only the models in its active draw list.
- *     Models whose draws are disabled are not loaded and contribute no materials.
- *   - The original environment's sunshafts use double texture scrolling.
- *   - Optimized uses
- *     the combined test-floor-opt.t3dm, test-walls-opt.t3dm,
- *     test-walls_back-opt.t3dm, test-ceiling-opt.t3dm,
- *     and test-pillars-opt.t3dm.
- *   - The optimized floor materials named "floor", "floor_ornate",
- *     "floor_debris_pile2", and "carpet_border" each use their own scene-local
- *     three-texture custom mip chain.
- *   - The "baseboard" material in test-walls-opt and test-walls_back-opt uses
- *     the shared baseboard8 three-texture chain. The "walls" material uses
- *     Tiny3D's normal texture-loading path with no custom mipmapping. Each wall
- *     model gets its own recorded draw list; shared wall-model mip sprite data
- *     is loaded only once.
- *   - Both wall models give "door_pillar" a three-texture door_detail_pillar4
- *     chain and "door_detail_top" a two-texture door_detail_top3 chain.
- *     test-walls-opt additionally gives "door" a three-texture door6 chain;
- *     that chain is not bound to test-walls_back-opt.
- *   - Each source texture has an explicit first RDP level. Intermediate RDP
- *     levels reuse the most recently uploaded texture without using more TMEM.
- *   - CI mip chains keep source 0's palette active, so every manually authored
- *     CI source must use the same indexed palette and palette ordering.
- *   - Optimized (no mipmaps) loads the exact same combined -opt meshes as
- *     optimized, but with plain draw lists and no custom mip chains bound, so
- *     each material just uses Tiny3D's normal single-level texture loading.
- *   - Frozen optimized modes use the same meshes and material behavior as
- *     their regular counterparts, but static display lists are recorded as
- *     frozen blocks after the live draw-pass RDP state has been established.
- *   - No-materials uses the same substituted mesh set with the -nomat suffix.
- *   - Decimated frozen uses the same substituted mesh set with the -solid suffix,
- *     but records every static model as a frozen block.
- *   - Bloom and ambient dust particles are disabled for every comparison state.
- *   - Test only additionally loads a ceiling ring, wall niches/windows, and
- *     two decal layers. The ceiling ring draws with the rest of the ceiling
- *     pass. The niches/windows draw last among the depth-tested geometry with
- *     depth test+write enabled, then both decal layers draw on top with depth
- *     test+write disabled (decal layer 1 first, decal layer 2 last).
+ *   - A/B are no longer intercepted by this scene and remain available to
+ *     freecam or other shared controls.
+ *   - Extra FX and the environment label are omitted so they do not affect
+ *     rendering-performance measurements.
+ *
+ * Loaded optimized models:
+ *   - test-floor-opt.t3dm
+ *   - test-walls-opt.t3dm
+ *   - test-walls_back-opt.t3dm
+ *   - test-pillars-opt.t3dm
+ *   - test-broken_statue-opt.t3dm
+ *   - test-niches_windows-opt.t3dm
+ *   - test-decals_layer1-opt.t3dm
+ *   - test-decals_layer2-opt.t3dm
+ *   - test-fog_door.t3dm
+ *   - test-sunshafts.t3dm (generated from test-sunshafts.glb)
+ *
+ * The optimized floor and wall materials retain their scene-local custom mip
+ * chains. Each static model is recorded after its live draw-pass RDP state has
+ * been established.
  */
 
 #define TESTING_SCENE_PATH_PREFIX "rom:/boss_room/"
@@ -247,8 +216,8 @@ static TestingSceneOptimizedMipChain s_optimizedWallsMipChains[
         .materialName = "door_detail_top",
         .sourceTextureCount = 2,
         .texturePaths = {
-            TESTING_SCENE_PATH_PREFIX "door_detail_top3.i4.sprite",
-            TESTING_SCENE_PATH_PREFIX "door_detail_top3-mip1.i4.sprite",
+            TESTING_SCENE_PATH_PREFIX "door_detail_top3.ia4.sprite",
+            TESTING_SCENE_PATH_PREFIX "door_detail_top3-mip1.ia4.sprite",
         },
         /* Switch to the only authored mip at the earliest possible level. */
         .sourceStartRdpLevels = {
@@ -298,36 +267,13 @@ static TestingSceneOptimizedMipChain s_optimizedWallsMipChains[
  */
 static const rdpq_mipmap_t TESTING_SCENE_OPTIMIZED_MIP_MODE = MIPMAP_NEAREST;
 
-typedef enum TestingSceneEnvironment {
-    TESTING_SCENE_ENVIRONMENT_ORIGINAL = 0,
-    TESTING_SCENE_ENVIRONMENT_TEST,
-    TESTING_SCENE_ENVIRONMENT_OPTIMIZED,
-    TESTING_SCENE_ENVIRONMENT_OPTIMIZED_FROZEN,
-    TESTING_SCENE_ENVIRONMENT_OPTIMIZED_NO_MIPS,
-    TESTING_SCENE_ENVIRONMENT_OPTIMIZED_NO_MIPS_FROZEN,
-    TESTING_SCENE_ENVIRONMENT_NO_MATERIALS,
-    TESTING_SCENE_ENVIRONMENT_DECIMATED_FROZEN,
-    TESTING_SCENE_ENVIRONMENT_COUNT,
-} TestingSceneEnvironment;
 
 static const float TESTING_SCENE_ROOM_Y = -1.0f;
-static const uint8_t TESTING_SCENE_BLOOM_ALPHA = 20;
-
-/* Must match freecam's A/B vertical speed in camera_controller.c. */
-static const float TESTING_SCENE_FREECAM_VERTICAL_SPEED = 60.0f;
-
-// Keep the development label inside typical 320x240 CRT overscan.
-static const float TESTING_SCENE_LABEL_X = 24.0f;
-static const float TESTING_SCENE_LABEL_Y = 30.0f;
-
 /*
  * Extra upward camera/target lift applied only during the last half
  * of TESTING_SCENE_CUTSCENE_DOOR_SHOT.
  */
 static const float TESTING_SCENE_DOOR_SHOT_UPWARD_OFFSET = 80.0f;
-
-static TestingSceneEnvironment s_requestedEnvironment = TESTING_SCENE_ENVIRONMENT_ORIGINAL;
-static TestingSceneEnvironment s_loadedEnvironment = TESTING_SCENE_ENVIRONMENT_COUNT;
 
 static ScrollParams s_fogScrollParams = {
     .xSpeed = 0.0f,
@@ -419,12 +365,8 @@ static TestingSceneCutsceneState s_cutsceneState = TESTING_SCENE_CUTSCENE_STATUE
 static float s_cutsceneTimer = 0.0f;
 static float s_cutsceneCameraTimer = 0.0f;
 static bool s_cutscenePaused = false;
-static bool s_lastAHeld = false;
-static bool s_lastBHeld = false;
 static bool s_lastStartHeld = false;
 static bool s_lastZHeld = false;
-static bool s_testingSceneBloomEnabled = true;
-static bool s_freecamViewNeedsRefresh = false;
 
 static TestingSceneVec3 s_cutsceneCamPosStart;
 static TestingSceneVec3 s_cutsceneCamPosEnd;
@@ -432,83 +374,19 @@ static TestingSceneVec3 s_cutsceneCamTargetStart;
 static TestingSceneVec3 s_cutsceneCamTargetEnd;
 
 // ------------------------------------------------------------
-// Test environment objects
-// ------------------------------------------------------------
-
-static TestingSceneObject s_testFloor;
-static TestingSceneObject s_testFloorTiles;
-static TestingSceneObject s_testWalls;
-static TestingSceneObject s_testCeiling;
-static TestingSceneObject s_testCeilingRing;
-static TestingSceneObject s_testWallsBack;
-static TestingSceneObject s_testPillars;
-static TestingSceneObject s_testFogDoor;
-static TestingSceneObject s_testNichesWindows;
-static TestingSceneObject s_testDecalsLayer1;
-static TestingSceneObject s_testDecalsLayer2;
-
-// ------------------------------------------------------------
-// Optimized environment objects
+// Complete frozen optimized environment
 // ------------------------------------------------------------
 
 static TestingSceneObject s_optimizedFloor;
 static TestingSceneObject s_optimizedWalls;
-static TestingSceneObject s_optimizedCeiling;
 static TestingSceneObject s_optimizedWallsBack;
 static TestingSceneObject s_optimizedPillars;
+static TestingSceneObject s_optimizedBrokenStatue;
+static TestingSceneObject s_optimizedNichesWindows;
+static TestingSceneObject s_optimizedDecalsLayer1;
+static TestingSceneObject s_optimizedDecalsLayer2;
 static TestingSceneObject s_optimizedFogDoor;
-
-// ------------------------------------------------------------
-// Optimized (no mipmaps) environment objects
-// ------------------------------------------------------------
-
-static TestingSceneObject s_optimizedNoMipsFloor;
-static TestingSceneObject s_optimizedNoMipsWalls;
-static TestingSceneObject s_optimizedNoMipsCeiling;
-static TestingSceneObject s_optimizedNoMipsWallsBack;
-static TestingSceneObject s_optimizedNoMipsPillars;
-static TestingSceneObject s_optimizedNoMipsFogDoor;
-
-// ------------------------------------------------------------
-// No-material environment objects
-// ------------------------------------------------------------
-
-static TestingSceneObject s_noMaterialsFloor;
-static TestingSceneObject s_noMaterialsFloorTiles;
-static TestingSceneObject s_noMaterialsWalls;
-static TestingSceneObject s_noMaterialsCeiling;
-static TestingSceneObject s_noMaterialsWallsBack;
-static TestingSceneObject s_noMaterialsPillars;
-static TestingSceneObject s_noMaterialsFogDoor;
-
-// ------------------------------------------------------------
-// Decimated frozen environment objects
-// ------------------------------------------------------------
-
-static TestingSceneObject s_decimatedFrozenFloor;
-static TestingSceneObject s_decimatedFrozenFloorTiles;
-static TestingSceneObject s_decimatedFrozenWalls;
-static TestingSceneObject s_decimatedFrozenCeiling;
-static TestingSceneObject s_decimatedFrozenWallsBack;
-static TestingSceneObject s_decimatedFrozenPillars;
-static TestingSceneObject s_decimatedFrozenFogDoor;
-
-// ------------------------------------------------------------
-// Original environment objects
-// ------------------------------------------------------------
-
-static TestingSceneObject s_originalRoom;
-static TestingSceneObject s_originalFloor;
-static TestingSceneObject s_originalRoomLedgeWalls;
-static TestingSceneObject s_originalPillars;
-static TestingSceneObject s_originalPillarsFront;
-static TestingSceneObject s_originalFog;
-static TestingSceneObject s_originalSunshafts;
-static TestingSceneObject s_originalWindows;
-
-static void testing_scene_cycle_requested_environment_forward(void);
-static void testing_scene_cycle_requested_environment_backward(void);
-static void testing_scene_apply_extra_fx_for_loaded_environment(void);
+static TestingSceneObject s_optimizedSunshafts;
 
 // ------------------------------------------------------------
 // Cutscene helpers
@@ -956,7 +834,6 @@ static bool testing_scene_should_draw_sunshafts(void)
             return true;
     }
 }
-
 // ------------------------------------------------------------
 // Environment object helpers
 // ------------------------------------------------------------
@@ -982,59 +859,18 @@ static void testing_scene_object_clear(TestingSceneObject *object)
         sizeof(object->boundMipMaterials)
     );
 }
-
 static void testing_scene_clear_all_object_handles(void)
 {
-    testing_scene_object_clear(&s_testFloor);
-    testing_scene_object_clear(&s_testFloorTiles);
-    testing_scene_object_clear(&s_testWalls);
-    testing_scene_object_clear(&s_testCeiling);
-    testing_scene_object_clear(&s_testCeilingRing);
-    testing_scene_object_clear(&s_testWallsBack);
-    testing_scene_object_clear(&s_testPillars);
-    testing_scene_object_clear(&s_testFogDoor);
-    testing_scene_object_clear(&s_testNichesWindows);
-    testing_scene_object_clear(&s_testDecalsLayer1);
-    testing_scene_object_clear(&s_testDecalsLayer2);
-
     testing_scene_object_clear(&s_optimizedFloor);
     testing_scene_object_clear(&s_optimizedWalls);
-    testing_scene_object_clear(&s_optimizedCeiling);
     testing_scene_object_clear(&s_optimizedWallsBack);
     testing_scene_object_clear(&s_optimizedPillars);
+    testing_scene_object_clear(&s_optimizedBrokenStatue);
+    testing_scene_object_clear(&s_optimizedNichesWindows);
+    testing_scene_object_clear(&s_optimizedDecalsLayer1);
+    testing_scene_object_clear(&s_optimizedDecalsLayer2);
     testing_scene_object_clear(&s_optimizedFogDoor);
-
-    testing_scene_object_clear(&s_optimizedNoMipsFloor);
-    testing_scene_object_clear(&s_optimizedNoMipsWalls);
-    testing_scene_object_clear(&s_optimizedNoMipsCeiling);
-    testing_scene_object_clear(&s_optimizedNoMipsWallsBack);
-    testing_scene_object_clear(&s_optimizedNoMipsPillars);
-    testing_scene_object_clear(&s_optimizedNoMipsFogDoor);
-
-    testing_scene_object_clear(&s_noMaterialsFloor);
-    testing_scene_object_clear(&s_noMaterialsFloorTiles);
-    testing_scene_object_clear(&s_noMaterialsWalls);
-    testing_scene_object_clear(&s_noMaterialsCeiling);
-    testing_scene_object_clear(&s_noMaterialsWallsBack);
-    testing_scene_object_clear(&s_noMaterialsPillars);
-    testing_scene_object_clear(&s_noMaterialsFogDoor);
-
-    testing_scene_object_clear(&s_decimatedFrozenFloor);
-    testing_scene_object_clear(&s_decimatedFrozenFloorTiles);
-    testing_scene_object_clear(&s_decimatedFrozenWalls);
-    testing_scene_object_clear(&s_decimatedFrozenCeiling);
-    testing_scene_object_clear(&s_decimatedFrozenWallsBack);
-    testing_scene_object_clear(&s_decimatedFrozenPillars);
-    testing_scene_object_clear(&s_decimatedFrozenFogDoor);
-
-    testing_scene_object_clear(&s_originalRoom);
-    testing_scene_object_clear(&s_originalFloor);
-    testing_scene_object_clear(&s_originalRoomLedgeWalls);
-    testing_scene_object_clear(&s_originalPillars);
-    testing_scene_object_clear(&s_originalPillarsFront);
-    testing_scene_object_clear(&s_originalFog);
-    testing_scene_object_clear(&s_originalSunshafts);
-    testing_scene_object_clear(&s_originalWindows);
+    testing_scene_object_clear(&s_optimizedSunshafts);
 }
 
 static void testing_scene_object_free(TestingSceneObject *object)
@@ -1171,13 +1007,17 @@ static bool testing_scene_object_load_double_scroll(
     const char *path,
     ScrollParams *scrollParams
 ) {
-    bool loaded = testing_scene_object_load(object, path, true, scrollParams);
+    bool loaded = testing_scene_object_load(
+        object,
+        path,
+        true,
+        scrollParams
+    );
     if (!loaded) return false;
 
     object->doubleScroll = true;
     return true;
 }
-
 static void testing_scene_free_optimized_mip_chain_sprites(
     TestingSceneOptimizedMipChain *chain
 )
@@ -1980,155 +1820,62 @@ static void testing_scene_object_draw(TestingSceneObject *object)
 }
 
 // ------------------------------------------------------------
-// Environment load/delete
+// Optimized environment load/delete
 // ------------------------------------------------------------
 
-static void testing_scene_load_test_environment(void)
+static void testing_scene_load_optimized_environment(void)
 {
-    /* Load only models used by testing_scene_draw_test_environment(). */
-    testing_scene_object_load(&s_testFloor,          TESTING_SCENE_PATH_PREFIX "test-floor.t3dm",           false, NULL);
-    testing_scene_object_load(&s_testFloorTiles,     TESTING_SCENE_PATH_PREFIX "test-floor_tiles.t3dm",     false, NULL);
-    testing_scene_object_load(&s_testWalls,          TESTING_SCENE_PATH_PREFIX "test-walls.t3dm",           false, NULL);
-    testing_scene_object_load(&s_testCeiling,        TESTING_SCENE_PATH_PREFIX "test-ceiling.t3dm",         false, NULL);
-    testing_scene_object_load(&s_testCeilingRing,    TESTING_SCENE_PATH_PREFIX "test-ceiling_ring.t3dm",    false, NULL);
-    testing_scene_object_load(&s_testWallsBack,      TESTING_SCENE_PATH_PREFIX "test-walls_back.t3dm",      false, NULL);
-    testing_scene_object_load(&s_testPillars,        TESTING_SCENE_PATH_PREFIX "test-pillars.t3dm",         false, NULL);
-    testing_scene_object_load(&s_testFogDoor,        TESTING_SCENE_PATH_PREFIX "test-fog_door.t3dm",        true,  &s_fogScrollParams);
-    testing_scene_object_load(&s_testNichesWindows,  TESTING_SCENE_PATH_PREFIX "test-niches_windows.t3dm",  false, NULL);
-    testing_scene_object_load(&s_testDecalsLayer1,   TESTING_SCENE_PATH_PREFIX "test-decals_layer1.t3dm",   false, NULL);
-    testing_scene_object_load(&s_testDecalsLayer2,   TESTING_SCENE_PATH_PREFIX "test-decals_layer2.t3dm",   false, NULL);
-}
-
-static void testing_scene_load_optimized_environment(bool frozen)
-{
-    /* No test, no-material, or decimated-frozen mesh is loaded in this state. */
-    testing_scene_object_load_optimized_floor(frozen);
+    testing_scene_object_load_optimized_floor(true);
 
     /*
-     * Reset the shared wall sprite chains once, then bind and record each wall
-     * model independently without reloading or invalidating those sprites.
+     * The wall models share their manually loaded mip sprites. Reset the shared
+     * chains once, then bind each model independently.
      */
     testing_scene_free_optimized_mip_chains(
         s_optimizedWallsMipChains,
         TESTING_SCENE_OPTIMIZED_WALLS_MIP_CHAIN_COUNT
     );
-    testing_scene_object_load_optimized_walls(frozen);
-    testing_scene_object_load_optimized_walls_back(frozen);
-    testing_scene_object_load_static(
-        &s_optimizedCeiling,
-        TESTING_SCENE_PATH_PREFIX "test-ceiling-opt.t3dm",
-        frozen
-    );
-    testing_scene_object_load_static(
+    testing_scene_object_load_optimized_walls(true);
+    testing_scene_object_load_optimized_walls_back(true);
+
+    testing_scene_object_load_frozen(
         &s_optimizedPillars,
-        TESTING_SCENE_PATH_PREFIX "test-pillars-opt.t3dm",
-        frozen
+        TESTING_SCENE_PATH_PREFIX "test-pillars-opt.t3dm"
     );
+    testing_scene_object_load_frozen(
+        &s_optimizedBrokenStatue,
+        TESTING_SCENE_PATH_PREFIX "test-broken_statue-opt.t3dm"
+    );
+    testing_scene_object_load_frozen(
+        &s_optimizedNichesWindows,
+        TESTING_SCENE_PATH_PREFIX "test-niches_windows-opt.t3dm"
+    );
+    testing_scene_object_load_frozen(
+        &s_optimizedDecalsLayer1,
+        TESTING_SCENE_PATH_PREFIX "test-decals_layer1-opt.t3dm"
+    );
+    testing_scene_object_load_frozen(
+        &s_optimizedDecalsLayer2,
+        TESTING_SCENE_PATH_PREFIX "test-decals_layer2-opt.t3dm"
+    );
+
+    /* The scrolling fog door remains dynamic. */
     testing_scene_object_load(
         &s_optimizedFogDoor,
         TESTING_SCENE_PATH_PREFIX "test-fog_door.t3dm",
         true,
         &s_fogScrollParams
     );
-}
 
-static void testing_scene_load_optimized_no_mips_environment(bool frozen)
-{
     /*
-     * Use the exact optimized meshes with Tiny3D's normal single-level texture
-     * loading. Frozen mode changes only how the static display lists execute.
+     * test-sunshafts.glb is converted by the asset pipeline to this runtime
+     * T3DM. It stays dynamic because both texture tiles scroll every frame.
      */
-    testing_scene_object_load_static(
-        &s_optimizedNoMipsFloor,
-        TESTING_SCENE_PATH_PREFIX "test-floor-opt.t3dm",
-        frozen
+    testing_scene_object_load_double_scroll(
+        &s_optimizedSunshafts,
+        TESTING_SCENE_PATH_PREFIX "test-sunshafts.t3dm",
+        &s_sunshaftsScrollParams
     );
-    testing_scene_object_load_static(
-        &s_optimizedNoMipsWalls,
-        TESTING_SCENE_PATH_PREFIX "test-walls-opt.t3dm",
-        frozen
-    );
-    testing_scene_object_load_static(
-        &s_optimizedNoMipsWallsBack,
-        TESTING_SCENE_PATH_PREFIX "test-walls_back-opt.t3dm",
-        frozen
-    );
-    testing_scene_object_load_static(
-        &s_optimizedNoMipsCeiling,
-        TESTING_SCENE_PATH_PREFIX "test-ceiling-opt.t3dm",
-        frozen
-    );
-    testing_scene_object_load_static(
-        &s_optimizedNoMipsPillars,
-        TESTING_SCENE_PATH_PREFIX "test-pillars-opt.t3dm",
-        frozen
-    );
-    testing_scene_object_load(
-        &s_optimizedNoMipsFogDoor,
-        TESTING_SCENE_PATH_PREFIX "test-fog_door.t3dm",
-        true,
-        &s_fogScrollParams
-    );
-}
-
-static void testing_scene_load_no_materials_environment(void)
-{
-    /* No test, optimized, or decimated-frozen mesh is loaded in this state. */
-    testing_scene_object_load(&s_noMaterialsFloor,      TESTING_SCENE_PATH_PREFIX "test-floor-nomat.t3dm",       false, NULL);
-    testing_scene_object_load(&s_noMaterialsFloorTiles, TESTING_SCENE_PATH_PREFIX "test-floor_tiles-nomat.t3dm", false, NULL);
-    testing_scene_object_load(&s_noMaterialsWalls,      TESTING_SCENE_PATH_PREFIX "test-walls-nomat.t3dm",       false, NULL);
-    testing_scene_object_load(&s_noMaterialsCeiling,    TESTING_SCENE_PATH_PREFIX "test-ceiling-nomat.t3dm",     false, NULL);
-    testing_scene_object_load(&s_noMaterialsWallsBack,  TESTING_SCENE_PATH_PREFIX "test-walls_back-nomat.t3dm",  false, NULL);
-    testing_scene_object_load(&s_noMaterialsPillars,    TESTING_SCENE_PATH_PREFIX "test-pillars-nomat.t3dm",     false, NULL);
-    testing_scene_object_load(&s_noMaterialsFogDoor,    TESTING_SCENE_PATH_PREFIX "test-fog_door.t3dm",          true,  &s_fogScrollParams);
-}
-
-static void testing_scene_load_decimated_frozen_environment(void)
-{
-    /*
-     * The decimated meshes retain their historical -solid filenames. Every
-     * static model is recorded lazily as a frozen block after its draw-pass
-     * RDP state is established. The scrolling fog door remains dynamic.
-     */
-    testing_scene_object_load_frozen(&s_decimatedFrozenFloor,      TESTING_SCENE_PATH_PREFIX "test-floor-solid.t3dm");
-    testing_scene_object_load_frozen(&s_decimatedFrozenFloorTiles, TESTING_SCENE_PATH_PREFIX "test-floor_tiles-solid.t3dm");
-    testing_scene_object_load_frozen(&s_decimatedFrozenWalls,      TESTING_SCENE_PATH_PREFIX "test-walls-solid.t3dm");
-    testing_scene_object_load_frozen(&s_decimatedFrozenCeiling,    TESTING_SCENE_PATH_PREFIX "test-ceiling-solid.t3dm");
-    testing_scene_object_load_frozen(&s_decimatedFrozenWallsBack,  TESTING_SCENE_PATH_PREFIX "test-walls_back-solid.t3dm");
-    testing_scene_object_load_frozen(&s_decimatedFrozenPillars,    TESTING_SCENE_PATH_PREFIX "test-pillars-solid.t3dm");
-    testing_scene_object_load(
-        &s_decimatedFrozenFogDoor,
-        TESTING_SCENE_PATH_PREFIX "test-fog_door.t3dm",
-        true,
-        &s_fogScrollParams
-    );
-}
-
-static void testing_scene_load_original_environment(void)
-{
-    testing_scene_object_load(&s_originalRoom,           TESTING_SCENE_PATH_PREFIX "room.t3dm",             false, NULL);
-    testing_scene_object_load(&s_originalFloor,          TESTING_SCENE_PATH_PREFIX "floor.t3dm",            false, NULL);
-    testing_scene_object_load(&s_originalRoomLedgeWalls, TESTING_SCENE_PATH_PREFIX "room_ledge_walls.t3dm", false, NULL);
-    testing_scene_object_load(&s_originalPillars,        TESTING_SCENE_PATH_PREFIX "pillars.t3dm",          false, NULL);
-    testing_scene_object_load(&s_originalPillarsFront,   TESTING_SCENE_PATH_PREFIX "pillars_front.t3dm",    false, NULL);
-    testing_scene_object_load(&s_originalFog,            TESTING_SCENE_PATH_PREFIX "fog.t3dm",              true,  &s_fogScrollParams);
-    testing_scene_object_load_double_scroll(&s_originalSunshafts, TESTING_SCENE_PATH_PREFIX "sunshafts.t3dm", &s_sunshaftsScrollParams);
-    testing_scene_object_load(&s_originalWindows,        TESTING_SCENE_PATH_PREFIX "windows.t3dm",          false, NULL);
-}
-
-static void testing_scene_delete_test_environment(void)
-{
-    testing_scene_object_free(&s_testFloor);
-    testing_scene_object_free(&s_testFloorTiles);
-    testing_scene_object_free(&s_testWalls);
-    testing_scene_object_free(&s_testCeiling);
-    testing_scene_object_free(&s_testCeilingRing);
-    testing_scene_object_free(&s_testWallsBack);
-    testing_scene_object_free(&s_testPillars);
-    testing_scene_object_free(&s_testFogDoor);
-    testing_scene_object_free(&s_testNichesWindows);
-    testing_scene_object_free(&s_testDecalsLayer1);
-    testing_scene_object_free(&s_testDecalsLayer2);
 }
 
 static void testing_scene_delete_optimized_environment(void)
@@ -2138,10 +1885,10 @@ static void testing_scene_delete_optimized_environment(void)
         s_optimizedFloorMipChains,
         TESTING_SCENE_OPTIMIZED_FLOOR_MIP_CHAIN_COUNT
     );
+
     /*
-     * Both wall draw lists reference the shared baseboard/detail mip sprites;
-     * the front wall list additionally references the door chain. Free both
-     * display lists before releasing any of those sprites.
+     * Free both wall blocks before releasing the mip sprites referenced by
+     * their recorded command streams.
      */
     testing_scene_object_free(&s_optimizedWalls);
     testing_scene_object_free(&s_optimizedWallsBack);
@@ -2149,144 +1896,14 @@ static void testing_scene_delete_optimized_environment(void)
         s_optimizedWallsMipChains,
         TESTING_SCENE_OPTIMIZED_WALLS_MIP_CHAIN_COUNT
     );
-    testing_scene_object_free(&s_optimizedCeiling);
+
     testing_scene_object_free(&s_optimizedPillars);
+    testing_scene_object_free(&s_optimizedBrokenStatue);
+    testing_scene_object_free(&s_optimizedNichesWindows);
+    testing_scene_object_free(&s_optimizedDecalsLayer1);
+    testing_scene_object_free(&s_optimizedDecalsLayer2);
     testing_scene_object_free(&s_optimizedFogDoor);
-}
-
-static void testing_scene_delete_optimized_no_mips_environment(void)
-{
-    testing_scene_object_free(&s_optimizedNoMipsFloor);
-    testing_scene_object_free(&s_optimizedNoMipsWalls);
-    testing_scene_object_free(&s_optimizedNoMipsWallsBack);
-    testing_scene_object_free(&s_optimizedNoMipsCeiling);
-    testing_scene_object_free(&s_optimizedNoMipsPillars);
-    testing_scene_object_free(&s_optimizedNoMipsFogDoor);
-}
-
-static void testing_scene_delete_no_materials_environment(void)
-{
-    testing_scene_object_free(&s_noMaterialsFloor);
-    testing_scene_object_free(&s_noMaterialsFloorTiles);
-    testing_scene_object_free(&s_noMaterialsWalls);
-    testing_scene_object_free(&s_noMaterialsCeiling);
-    testing_scene_object_free(&s_noMaterialsWallsBack);
-    testing_scene_object_free(&s_noMaterialsPillars);
-    testing_scene_object_free(&s_noMaterialsFogDoor);
-}
-
-static void testing_scene_delete_decimated_frozen_environment(void)
-{
-    testing_scene_object_free(&s_decimatedFrozenFloor);
-    testing_scene_object_free(&s_decimatedFrozenFloorTiles);
-    testing_scene_object_free(&s_decimatedFrozenWalls);
-    testing_scene_object_free(&s_decimatedFrozenCeiling);
-    testing_scene_object_free(&s_decimatedFrozenWallsBack);
-    testing_scene_object_free(&s_decimatedFrozenPillars);
-    testing_scene_object_free(&s_decimatedFrozenFogDoor);
-}
-
-static void testing_scene_delete_original_environment(void)
-{
-    testing_scene_object_free(&s_originalRoom);
-    testing_scene_object_free(&s_originalFloor);
-    testing_scene_object_free(&s_originalRoomLedgeWalls);
-    testing_scene_object_free(&s_originalPillars);
-    testing_scene_object_free(&s_originalPillarsFront);
-    testing_scene_object_free(&s_originalFog);
-    testing_scene_object_free(&s_originalSunshafts);
-    testing_scene_object_free(&s_originalWindows);
-}
-
-static void testing_scene_load_requested_environment(void)
-{
-    switch (s_requestedEnvironment) {
-        case TESTING_SCENE_ENVIRONMENT_TEST:
-            testing_scene_load_test_environment();
-            s_loadedEnvironment = TESTING_SCENE_ENVIRONMENT_TEST;
-            break;
-
-        case TESTING_SCENE_ENVIRONMENT_OPTIMIZED:
-            testing_scene_load_optimized_environment(false);
-            s_loadedEnvironment = TESTING_SCENE_ENVIRONMENT_OPTIMIZED;
-            break;
-
-        case TESTING_SCENE_ENVIRONMENT_OPTIMIZED_FROZEN:
-            testing_scene_load_optimized_environment(true);
-            s_loadedEnvironment = TESTING_SCENE_ENVIRONMENT_OPTIMIZED_FROZEN;
-            break;
-
-        case TESTING_SCENE_ENVIRONMENT_OPTIMIZED_NO_MIPS:
-            testing_scene_load_optimized_no_mips_environment(false);
-            s_loadedEnvironment = TESTING_SCENE_ENVIRONMENT_OPTIMIZED_NO_MIPS;
-            break;
-
-        case TESTING_SCENE_ENVIRONMENT_OPTIMIZED_NO_MIPS_FROZEN:
-            testing_scene_load_optimized_no_mips_environment(true);
-            s_loadedEnvironment =
-                TESTING_SCENE_ENVIRONMENT_OPTIMIZED_NO_MIPS_FROZEN;
-            break;
-
-        case TESTING_SCENE_ENVIRONMENT_NO_MATERIALS:
-            testing_scene_load_no_materials_environment();
-            s_loadedEnvironment = TESTING_SCENE_ENVIRONMENT_NO_MATERIALS;
-            break;
-
-        case TESTING_SCENE_ENVIRONMENT_DECIMATED_FROZEN:
-            testing_scene_load_decimated_frozen_environment();
-            s_loadedEnvironment = TESTING_SCENE_ENVIRONMENT_DECIMATED_FROZEN;
-            break;
-
-        case TESTING_SCENE_ENVIRONMENT_ORIGINAL:
-            testing_scene_load_original_environment();
-            s_loadedEnvironment = TESTING_SCENE_ENVIRONMENT_ORIGINAL;
-            break;
-
-        default:
-            debugf("testing_scene: invalid requested environment %d; loading original environment\n", s_requestedEnvironment);
-            s_requestedEnvironment = TESTING_SCENE_ENVIRONMENT_ORIGINAL;
-            testing_scene_load_original_environment();
-            s_loadedEnvironment = TESTING_SCENE_ENVIRONMENT_ORIGINAL;
-            break;
-    }
-
-    testing_scene_apply_extra_fx_for_loaded_environment();
-}
-
-static void testing_scene_delete_loaded_environment(void)
-{
-    switch (s_loadedEnvironment) {
-        case TESTING_SCENE_ENVIRONMENT_TEST:
-            testing_scene_delete_test_environment();
-            break;
-
-        case TESTING_SCENE_ENVIRONMENT_OPTIMIZED:
-        case TESTING_SCENE_ENVIRONMENT_OPTIMIZED_FROZEN:
-            testing_scene_delete_optimized_environment();
-            break;
-
-        case TESTING_SCENE_ENVIRONMENT_OPTIMIZED_NO_MIPS:
-        case TESTING_SCENE_ENVIRONMENT_OPTIMIZED_NO_MIPS_FROZEN:
-            testing_scene_delete_optimized_no_mips_environment();
-            break;
-
-        case TESTING_SCENE_ENVIRONMENT_NO_MATERIALS:
-            testing_scene_delete_no_materials_environment();
-            break;
-
-        case TESTING_SCENE_ENVIRONMENT_DECIMATED_FROZEN:
-            testing_scene_delete_decimated_frozen_environment();
-            break;
-
-        case TESTING_SCENE_ENVIRONMENT_ORIGINAL:
-            testing_scene_delete_original_environment();
-            break;
-
-        default:
-            break;
-    }
-
-    s_loadedEnvironment = TESTING_SCENE_ENVIRONMENT_COUNT;
+    testing_scene_object_free(&s_optimizedSunshafts);
 }
 
 // ------------------------------------------------------------
@@ -2313,198 +1930,26 @@ static void testing_scene_setup_lighting(void)
     colorAmbient[2] = 0xFF;
     colorAmbient[3] = 0xFF;
 
-    //t3d_light_set_exposure(1.5f);
+    //t3d_light_set_exposure(1.2f);
 }
 
-static bool testing_scene_should_use_extra_fx(void)
+static void testing_scene_update_optimized_environment(void)
 {
-    // Extra FX are intentionally disabled for every comparison state.
-    return false;
-}
-
-static const char *testing_scene_get_environment_name(TestingSceneEnvironment environment)
-{
-    switch (environment) {
-        case TESTING_SCENE_ENVIRONMENT_ORIGINAL:
-            return "original";
-
-        case TESTING_SCENE_ENVIRONMENT_TEST:
-            return "test";
-
-        case TESTING_SCENE_ENVIRONMENT_OPTIMIZED:
-            return "optimized (mipmaps)";
-
-        case TESTING_SCENE_ENVIRONMENT_OPTIMIZED_FROZEN:
-            return "optimized (mipmaps, frozen)";
-
-        case TESTING_SCENE_ENVIRONMENT_OPTIMIZED_NO_MIPS:
-            return "optimized (no mipmaps)";
-
-        case TESTING_SCENE_ENVIRONMENT_OPTIMIZED_NO_MIPS_FROZEN:
-            return "optimized (no mipmaps, frozen)";
-
-        case TESTING_SCENE_ENVIRONMENT_NO_MATERIALS:
-            return "no materials";
-
-        case TESTING_SCENE_ENVIRONMENT_DECIMATED_FROZEN:
-            return "decimated frozen";
-
-        default:
-            return "invalid";
-    }
-}
-
-static void testing_scene_draw_environment_label(void)
-{
-    /*
-     * Draw after this scene's 3D geometry and particles. The font is loaded and
-     * registered once by main() under FONT_BUILTIN_DEBUG_MONO.
-     */
-    rdpq_sync_pipe();
-    rdpq_set_mode_standard();
-    rdpq_mode_blender(RDPQ_BLENDER_MULTIPLY);
-    rdpq_text_printf(
-        NULL,
-        FONT_BUILTIN_DEBUG_MONO,
-        TESTING_SCENE_LABEL_X,
-        TESTING_SCENE_LABEL_Y,
-        "Environment: %s",
-        testing_scene_get_environment_name(s_loadedEnvironment)
-    );
-}
-
-static void testing_scene_apply_extra_fx_for_loaded_environment(void)
-{
-    bool extraFxEnabled = testing_scene_should_use_extra_fx();
-
-    display_utility_set_bloom_enabled(
-        extraFxEnabled && s_testingSceneBloomEnabled
-    );
-
-    dust_particles_fx_set_ambient_enabled(extraFxEnabled);
-
-    if (!extraFxEnabled) {
-        dust_particles_fx_reset();
-    }
-
-    debugf(
-        "testing_scene: extra fx %s for %s environment\n",
-        extraFxEnabled ? "enabled" : "disabled",
-        testing_scene_get_environment_name(s_loadedEnvironment)
-    );
-}
-
-static void testing_scene_set_bloom_enabled(bool enabled)
-{
-    s_testingSceneBloomEnabled = enabled;
-
-    display_utility_set_bloom_enabled(
-        testing_scene_should_use_extra_fx() && s_testingSceneBloomEnabled
-    );
-
-    debugf(
-        "testing_scene: cheap bloom preference %s\n",
-        s_testingSceneBloomEnabled ? "enabled" : "disabled"
-    );
-}
-
-static void testing_scene_toggle_bloom(void)
-{
-    testing_scene_set_bloom_enabled(!s_testingSceneBloomEnabled);
-}
-
-static void testing_scene_update_test_environment(void)
-{
-    // Test-environment-only animation/debug hooks can go here.
-}
-
-static void testing_scene_update_original_environment(void)
-{
-    // Original-environment-only animation/debug hooks can go here.
-}
-
-static void testing_scene_reload_with_requested_environment(void)
-{
-    rspq_wait();
-
-    testing_scene_delete_loaded_environment();
-    testing_scene_load_requested_environment();
-    testing_scene_reset();
-}
-
-/*
- * main updates the camera before it updates this scene. While the testing
- * scene is running, A/B belong to environment cycling, so cancel only the
- * vertical translation that freecam already applied this frame.
- *
- * The dev menu pauses scene updates. This function therefore does not run
- * while that menu is open, leaving A/B freecam movement unchanged there.
- */
-static void testing_scene_cancel_freecam_cycle_button_movement(bool aHeld, bool bHeld)
-{
-    if (cameraState != CAMERA_FREECAM) {
-        return;
-    }
-
-    float verticalOffset = 0.0f;
-
-    if (bHeld) {
-        verticalOffset += deltaTime * TESTING_SCENE_FREECAM_VERTICAL_SPEED;
-    }
-
-    if (aHeld) {
-        verticalOffset -= deltaTime * TESTING_SCENE_FREECAM_VERTICAL_SPEED;
-    }
-
-    if (verticalOffset == 0.0f) {
-        return;
-    }
-
-    camPos.v[1] -= verticalOffset;
-    camTarget.v[1] -= verticalOffset;
-    s_freecamViewNeedsRefresh = true;
+    // Optimized-environment-only animation/debug hooks can go here.
 }
 
 static void testing_scene_update_scene_control_input(void)
 {
     /*
-     * Read the controller's actual held state here and create local rising-edge
-     * events. This avoids depending on the shared `btn` pressed snapshot, which
-     * does not reliably expose every button in this scene (notably Start).
+     * Start restarts the camera tour. Z pauses/resumes it. A/B are deliberately
+     * not consumed here, so freecam retains its normal vertical controls.
      */
-    bool aHeld = joypad.btn.a;
-    bool bHeld = joypad.btn.b;
     bool startHeld = joypad.btn.start;
-
-    testing_scene_cancel_freecam_cycle_button_movement(aHeld, bHeld);
-
-    bool aJustPressed = aHeld && !s_lastAHeld;
-    bool bJustPressed = bHeld && !s_lastBHeld;
     bool startJustPressed = startHeld && !s_lastStartHeld;
-
-    s_lastAHeld = aHeld;
-    s_lastBHeld = bHeld;
     s_lastStartHeld = startHeld;
-
-    if (aJustPressed) {
-        testing_scene_cycle_requested_environment_forward();
-        testing_scene_reload_with_requested_environment();
-        return;
-    }
-
-    if (bJustPressed) {
-        testing_scene_cycle_requested_environment_backward();
-        testing_scene_reload_with_requested_environment();
-        return;
-    }
 
     if (startJustPressed) {
         testing_scene_start_autoplay_cutscene();
-    }
-
-    if (btn.c_up && testing_scene_should_use_extra_fx()) {
-        testing_scene_toggle_bloom();
-        testing_scene_apply_extra_fx_for_loaded_environment();
     }
 
     bool zHeld = joypad.btn.z;
@@ -2520,38 +1965,6 @@ static void testing_scene_update_scene_control_input(void)
 // Draw
 // ------------------------------------------------------------
 
-static void testing_scene_draw_test_environment(void)
-{
-    t3d_matrix_push_pos(1);
-
-        rdpq_mode_zbuf(false, false);
-        testing_scene_object_draw(&s_testWallsBack);
-        testing_scene_object_draw(&s_testWalls);
-        testing_scene_object_draw(&s_testCeiling);
-        //testing_scene_object_draw(&s_testCeilingRing);
-
-        rdpq_mode_zbuf(true, true);
-        testing_scene_object_draw(&s_testFloor);
-        testing_scene_object_draw(&s_testFloorTiles);
-        testing_scene_object_draw(&s_testPillars);
-
-        rdpq_mode_zbuf(true, false);
-        testing_scene_object_draw(&s_testFogDoor);
-
-        // // Niches/windows draw last among the depth-tested geometry.
-        // rdpq_mode_zbuf(true, true);
-        // testing_scene_object_draw(&s_testNichesWindows);
-        //
-        // // Decal layers draw on top with depth test/write disabled, layer2 last.
-        // rdpq_mode_zbuf(false, false);
-        // testing_scene_object_draw(&s_testDecalsLayer1);
-        // testing_scene_object_draw(&s_testDecalsLayer2);
-
-        rdpq_mode_zbuf(true, true);
-
-    t3d_matrix_pop(1);
-}
-
 static void testing_scene_draw_optimized_environment(void)
 {
     t3d_matrix_push_pos(1);
@@ -2559,109 +1972,25 @@ static void testing_scene_draw_optimized_environment(void)
         rdpq_mode_zbuf(false, false);
         testing_scene_object_draw(&s_optimizedWallsBack);
         testing_scene_object_draw(&s_optimizedWalls);
-        testing_scene_object_draw(&s_optimizedCeiling);
 
         rdpq_mode_zbuf(true, true);
         testing_scene_object_draw(&s_optimizedFloor);
+        testing_scene_object_draw(&s_optimizedNichesWindows);
+
+        rdpq_mode_zbuf(false, false);
+        testing_scene_object_draw(&s_optimizedDecalsLayer1);
+        testing_scene_object_draw(&s_optimizedDecalsLayer2);
+
+        rdpq_mode_zbuf(true, true);
         testing_scene_object_draw(&s_optimizedPillars);
+        testing_scene_object_draw(&s_optimizedBrokenStatue);
 
         rdpq_mode_zbuf(true, false);
-        testing_scene_object_draw(&s_optimizedFogDoor);
-
-        rdpq_mode_zbuf(true, true);
-
-    t3d_matrix_pop(1);
-}
-
-static void testing_scene_draw_optimized_no_mips_environment(void)
-{
-    t3d_matrix_push_pos(1);
-
-        rdpq_mode_zbuf(false, false);
-        testing_scene_object_draw(&s_optimizedNoMipsWallsBack);
-        testing_scene_object_draw(&s_optimizedNoMipsWalls);
-        testing_scene_object_draw(&s_optimizedNoMipsCeiling);
-
-        rdpq_mode_zbuf(true, true);
-        testing_scene_object_draw(&s_optimizedNoMipsFloor);
-        testing_scene_object_draw(&s_optimizedNoMipsPillars);
-
-        rdpq_mode_zbuf(true, false);
-        testing_scene_object_draw(&s_optimizedNoMipsFogDoor);
-
-        rdpq_mode_zbuf(true, true);
-
-    t3d_matrix_pop(1);
-}
-
-static void testing_scene_draw_no_materials_environment(void)
-{
-    t3d_matrix_push_pos(1);
-
-        rdpq_mode_zbuf(false, false);
-        testing_scene_object_draw(&s_noMaterialsWallsBack);
-        testing_scene_object_draw(&s_noMaterialsWalls);
-        testing_scene_object_draw(&s_noMaterialsCeiling);
-
-        rdpq_mode_zbuf(true, true);
-        testing_scene_object_draw(&s_noMaterialsFloor);
-        testing_scene_object_draw(&s_noMaterialsFloorTiles);
-        testing_scene_object_draw(&s_noMaterialsPillars);
-
-        rdpq_mode_zbuf(true, false);
-        testing_scene_object_draw(&s_noMaterialsFogDoor);
-
-        rdpq_mode_zbuf(true, true);
-
-    t3d_matrix_pop(1);
-}
-
-static void testing_scene_draw_decimated_frozen_environment(void)
-{
-    t3d_matrix_push_pos(1);
-
-        rdpq_mode_zbuf(false, false);
-        testing_scene_object_draw(&s_decimatedFrozenWallsBack);
-        testing_scene_object_draw(&s_decimatedFrozenWalls);
-        testing_scene_object_draw(&s_decimatedFrozenCeiling);
-
-        rdpq_mode_zbuf(true, true);
-        testing_scene_object_draw(&s_decimatedFrozenFloor);
-        testing_scene_object_draw(&s_decimatedFrozenFloorTiles);
-        testing_scene_object_draw(&s_decimatedFrozenPillars);
-
-        rdpq_mode_zbuf(true, false);
-        testing_scene_object_draw(&s_decimatedFrozenFogDoor);
-
-        rdpq_mode_zbuf(true, true);
-
-    t3d_matrix_pop(1);
-}
-
-static void testing_scene_draw_original_environment(void)
-{
-    t3d_matrix_push_pos(1);
-
-        // Match the Guardian scene's old room order: windows/base room first with no depth.
-        rdpq_mode_zbuf(false, false);
-        testing_scene_object_draw(&s_originalWindows);
-        testing_scene_object_draw(&s_originalRoom);
-
         if (testing_scene_should_draw_sunshafts()) {
-            testing_scene_object_draw(&s_originalSunshafts);
+            testing_scene_object_draw(&s_optimizedSunshafts);
         }
 
-        // Main depth-tested room geometry.
-
-        rdpq_mode_zbuf(true, true);
-        testing_scene_object_draw(&s_originalFloor);
-        testing_scene_object_draw(&s_originalRoomLedgeWalls);
-        testing_scene_object_draw(&s_originalPillars);
-        testing_scene_object_draw(&s_originalPillarsFront);
-
-        // Transparent fog door late.
-        rdpq_mode_zbuf(true, false);
-        testing_scene_object_draw(&s_originalFog);
+        testing_scene_object_draw(&s_optimizedFogDoor);
 
         rdpq_mode_zbuf(true, true);
 
@@ -2672,77 +2001,37 @@ static void testing_scene_draw_original_environment(void)
 // Scene lifecycle
 // ------------------------------------------------------------
 
-static void testing_scene_cycle_requested_environment_forward(void)
-{
-    s_requestedEnvironment = (TestingSceneEnvironment)(
-        (s_requestedEnvironment + 1) % TESTING_SCENE_ENVIRONMENT_COUNT
-    );
-}
-
-static void testing_scene_cycle_requested_environment_backward(void)
-{
-    s_requestedEnvironment = (TestingSceneEnvironment)(
-        (s_requestedEnvironment + TESTING_SCENE_ENVIRONMENT_COUNT - 1)
-        % TESTING_SCENE_ENVIRONMENT_COUNT
-    );
-}
-
 void testing_scene_init(void)
 {
     rspq_wait();
 
-    s_freecamViewNeedsRefresh = false;
-
-    testing_scene_delete_loaded_environment();
+    testing_scene_delete_optimized_environment();
     testing_scene_clear_all_object_handles();
     testing_scene_setup_lighting();
     testing_scene_setup_camera();
 
-    dust_particles_fx_init();
-    dust_particles_fx_reset();
-
-    dust_particles_fx_set_ambient_volume(
-        -560.0f, 560.0f,
-          20.0f, 470.0f,
-        -560.0f, 560.0f
-    );
-
-    /*
-     * Do not enable ambient dust globally here.
-     * The selected environment decides whether particle FX are active.
-     */
-    dust_particles_fx_set_ambient_enabled(false);
-
-    display_utility_set_bloom_alpha(TESTING_SCENE_BLOOM_ALPHA);
-    testing_scene_set_bloom_enabled(true);
-
-    testing_scene_load_requested_environment();
+    testing_scene_load_optimized_environment();
     testing_scene_start_autoplay_cutscene();
 
-    /* Do not treat buttons already held while entering the scene as presses. */
-    s_lastAHeld = joypad.btn.a;
-    s_lastBHeld = joypad.btn.b;
+    /* Do not treat buttons already held while entering as new presses. */
     s_lastStartHeld = joypad.btn.start;
 }
 
 void testing_scene_reset(void)
 {
     // Runtime-only reset. Do not allocate/free here.
-    // Preserve freecam and its transform across A/B environment reloads.
-    // For the normal cinematic camera, keep the existing reset behavior.
     if (cameraState != CAMERA_FREECAM) {
         cameraState = CAMERA_CUSTOM;
         lastCameraState = CAMERA_CUSTOM;
         camera_mode(CAMERA_CUSTOM);
     }
 
-    // Always keep the cinematic's background pose current. While freecam is
-    // active this updates only customCamPos/customCamTarget, not camPos/camTarget.
+    // Keep the cinematic's background pose current while freecam is active.
     testing_scene_update_cutscene_camera(
         testing_scene_get_cutscene_state_duration(s_cutsceneState)
     );
 
-    // Avoid a held Z from toggling pause immediately after a reset/reload.
+    // Avoid a held Z toggling pause immediately after reset/reload.
     s_lastZHeld = joypad.btn.z;
 }
 
@@ -2750,9 +2039,9 @@ void testing_scene_restart(void)
 {
     rspq_wait();
 
-    testing_scene_delete_loaded_environment();
+    testing_scene_delete_optimized_environment();
     testing_scene_reset();
-    testing_scene_load_requested_environment();
+    testing_scene_load_optimized_environment();
 }
 
 void testing_scene_update(void)
@@ -2760,29 +2049,7 @@ void testing_scene_update(void)
     scroll_update();
     testing_scene_update_scene_control_input();
     testing_scene_update_cutscene();
-
-    if (testing_scene_should_use_extra_fx()) {
-        dust_particles_fx_update(deltaTime);
-    }
-
-    switch (s_loadedEnvironment) {
-        case TESTING_SCENE_ENVIRONMENT_TEST:
-        case TESTING_SCENE_ENVIRONMENT_OPTIMIZED:
-        case TESTING_SCENE_ENVIRONMENT_OPTIMIZED_FROZEN:
-        case TESTING_SCENE_ENVIRONMENT_OPTIMIZED_NO_MIPS:
-        case TESTING_SCENE_ENVIRONMENT_OPTIMIZED_NO_MIPS_FROZEN:
-        case TESTING_SCENE_ENVIRONMENT_NO_MATERIALS:
-        case TESTING_SCENE_ENVIRONMENT_DECIMATED_FROZEN:
-            testing_scene_update_test_environment();
-            break;
-
-        case TESTING_SCENE_ENVIRONMENT_ORIGINAL:
-            testing_scene_update_original_environment();
-            break;
-
-        default:
-            break;
-    }
+    testing_scene_update_optimized_environment();
 }
 
 void testing_scene_fixed_update(void)
@@ -2799,18 +2066,6 @@ void testing_scene_draw(T3DViewport *viewport)
         rdpq_mode_dithering(DITHER_NONE_BAYER);
     }
 
-    /*
-     * A/B movement was cancelled after main's camera update, so rebuild the
-     * freecam view before this frame's viewport is attached and drawn.
-     */
-    if (s_freecamViewNeedsRefresh) {
-        if (cameraState == CAMERA_FREECAM) {
-            t3d_viewport_look_at(viewport, &camPos, &camTarget, &up);
-        }
-
-        s_freecamViewNeedsRefresh = false;
-    }
-
     t3d_viewport_attach(viewport);
 
     color_t fogColor = (color_t){ 0, 0, 0, 0xFF };
@@ -2823,56 +2078,13 @@ void testing_scene_draw(T3DViewport *viewport)
     t3d_screen_clear_depth();
 
     t3d_light_set_ambient(colorAmbient);
-
-    switch (s_loadedEnvironment) {
-        case TESTING_SCENE_ENVIRONMENT_TEST:
-            testing_scene_draw_test_environment();
-            break;
-
-        case TESTING_SCENE_ENVIRONMENT_OPTIMIZED:
-        case TESTING_SCENE_ENVIRONMENT_OPTIMIZED_FROZEN:
-            testing_scene_draw_optimized_environment();
-            break;
-
-        case TESTING_SCENE_ENVIRONMENT_OPTIMIZED_NO_MIPS:
-        case TESTING_SCENE_ENVIRONMENT_OPTIMIZED_NO_MIPS_FROZEN:
-            testing_scene_draw_optimized_no_mips_environment();
-            break;
-
-        case TESTING_SCENE_ENVIRONMENT_NO_MATERIALS:
-            testing_scene_draw_no_materials_environment();
-            break;
-
-        case TESTING_SCENE_ENVIRONMENT_DECIMATED_FROZEN:
-            testing_scene_draw_decimated_frozen_environment();
-            break;
-
-        case TESTING_SCENE_ENVIRONMENT_ORIGINAL:
-            testing_scene_draw_original_environment();
-            break;
-
-        default:
-            break;
-    }
-
-    if (testing_scene_should_use_extra_fx()) {
-        dust_particles_fx_draw(viewport);
-    }
-
-    testing_scene_draw_environment_label();
+    testing_scene_draw_optimized_environment();
 }
 
 void testing_scene_cleanup(void)
 {
     rspq_wait();
 
-    s_freecamViewNeedsRefresh = false;
-
-    testing_scene_set_bloom_enabled(false);
-
-    dust_particles_fx_set_ambient_enabled(false);
-    dust_particles_fx_cleanup();
-
-    testing_scene_delete_loaded_environment();
+    testing_scene_delete_optimized_environment();
     camera_reset();
 }

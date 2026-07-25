@@ -5,6 +5,7 @@
 #include <math.h>
 #include <string.h>
 #include <stdio.h>
+#include <stdint.h>
 
 #include "guardian_scene.h"
 #include "guardian_scene_sfx.h"
@@ -56,49 +57,15 @@
 #include "fx/blood_particles_fx.h"
 //#include "boulder_hazard.h" // close-range ground-boulder hazard
 
+// Declared here in case general_utility.h has not exposed the prototype yet.
+void tile_double_scroll(void *userData, rdpq_texparms_t *tp, rdpq_tile_t tile);
+
 // Forward declaration: scene_init() and scene_restart() start the Guardian intro.
 void scene_init_cutscene(void);
-
-T3DModel* mapModel;
-rspq_block_t* mapDpl;
-T3DMat4FP* mapMatrix;
-
-T3DModel* sunshaftsModel;
-rspq_block_t* sunshaftsDpl;
-T3DMat4FP* sunshaftsMatrix;
-
-T3DModel* pillarsModel;
-rspq_block_t* pillarsDpl;
-T3DMat4FP* pillarsMatrix;
-
-T3DModel* pillarsFrontModel;
-rspq_block_t* pillarsFrontDpl;
-T3DMat4FP* pillarsFrontMatrix;
 
 T3DModel* chainsModel;
 rspq_block_t* chainsDpl;
 T3DMat4FP* chainsMatrix;
-
-T3DModel* fogDoorModel;
-rspq_block_t* fogDoorDpl;
-T3DMat4FP* fogDoorMatrix;
-ScrollParams fogScrollParams = {
-    .xSpeed = 0.0f,
-    .ySpeed = 10.0f,
-    .scale  = 64
-};
-
-T3DModel* windowsModel;
-rspq_block_t* windowsDpl;
-T3DMat4FP* windowsMatrix;
-
-T3DModel* roomLedgeModel;
-rspq_block_t* roomLedgeDpl;
-T3DMat4FP* roomLedgeMatrix;
-
-T3DModel* roomFloorModel;
-rspq_block_t* roomFloorDpl;
-T3DMat4FP* roomFloorMatrix;
 
 T3DModel* floorGlowModel;
 rspq_block_t* floorGlowDpl;
@@ -132,6 +99,1412 @@ ScrollParams bossChainsGlowScrollParams = {
 
 // Guardian room vertical offset
 static float roomY = -1.0f;
+
+#define GUARDIAN_ENVIRONMENT_PATH_PREFIX "rom:/boss_room/"
+
+/* Reduce every replacement-room model uniformly by one third. */
+#define GUARDIAN_ENVIRONMENT_SCALE (MODEL_SCALE * (2.0f / 3.0f))
+
+#define GUARDIAN_ENVIRONMENT_OPTIMIZED_MAX_MIP_TEXTURE_COUNT 3
+#define GUARDIAN_ENVIRONMENT_OPTIMIZED_FLOOR_MIP_CHAIN_COUNT 4
+#define GUARDIAN_ENVIRONMENT_OPTIMIZED_WALLS_MIP_CHAIN_COUNT 4
+#define GUARDIAN_ENVIRONMENT_OPTIMIZED_WALLS_BACK_MIP_CHAIN_COUNT 3
+#define GUARDIAN_ENVIRONMENT_OPTIMIZED_MAX_MIP_CHAIN_COUNT 4
+
+_Static_assert(
+    GUARDIAN_ENVIRONMENT_OPTIMIZED_FLOOR_MIP_CHAIN_COUNT
+        <= GUARDIAN_ENVIRONMENT_OPTIMIZED_MAX_MIP_CHAIN_COUNT
+        && GUARDIAN_ENVIRONMENT_OPTIMIZED_WALLS_MIP_CHAIN_COUNT
+            <= GUARDIAN_ENVIRONMENT_OPTIMIZED_MAX_MIP_CHAIN_COUNT
+        && GUARDIAN_ENVIRONMENT_OPTIMIZED_WALLS_BACK_MIP_CHAIN_COUNT
+            <= GUARDIAN_ENVIRONMENT_OPTIMIZED_WALLS_MIP_CHAIN_COUNT,
+    "optimized mip binding storage is too small"
+);
+
+/*
+ * RDP level assignment:
+ *   0, 1       -> full-resolution source
+ *   2, 3       -> half-resolution source
+ *   4, 5, 6, 7 -> quarter-resolution source
+ *
+ * This is the default assignment. Individual chains can override their source
+ * start levels below. The carpet uses { 0, 2, 3 }, so its quarter-resolution
+ * source begins immediately after its single half-resolution level.
+ *
+ * The total level count can be at most eight because the RDP exposes TILE0
+ * through TILE7.
+ */
+#define GUARDIAN_ENVIRONMENT_OPTIMIZED_MIP1_START_RDP_LEVEL 2
+#define GUARDIAN_ENVIRONMENT_OPTIMIZED_MIP2_START_RDP_LEVEL 4
+#define GUARDIAN_ENVIRONMENT_OPTIMIZED_MIP_RDP_LEVEL_COUNT 8
+
+_Static_assert(
+    GUARDIAN_ENVIRONMENT_OPTIMIZED_MIP_RDP_LEVEL_COUNT >= 3
+        && GUARDIAN_ENVIRONMENT_OPTIMIZED_MIP_RDP_LEVEL_COUNT <= 8,
+    "optimized mipmapping requires between 3 and 8 RDP levels"
+);
+
+_Static_assert(
+    GUARDIAN_ENVIRONMENT_OPTIMIZED_MIP1_START_RDP_LEVEL > 0
+        && GUARDIAN_ENVIRONMENT_OPTIMIZED_MIP1_START_RDP_LEVEL
+            < GUARDIAN_ENVIRONMENT_OPTIMIZED_MIP2_START_RDP_LEVEL
+        && GUARDIAN_ENVIRONMENT_OPTIMIZED_MIP2_START_RDP_LEVEL
+            < GUARDIAN_ENVIRONMENT_OPTIMIZED_MIP_RDP_LEVEL_COUNT,
+    "optimized mip start levels must be ordered and inside the RDP chain"
+);
+
+typedef struct GuardianEnvironmentMipChain {
+    const char *chainName;
+    const char *materialName;
+    uint8_t sourceTextureCount;
+    const char *texturePaths[
+        GUARDIAN_ENVIRONMENT_OPTIMIZED_MAX_MIP_TEXTURE_COUNT
+    ];
+    uint8_t sourceStartRdpLevels[
+        GUARDIAN_ENVIRONMENT_OPTIMIZED_MAX_MIP_TEXTURE_COUNT
+    ];
+    sprite_t *sprites[
+        GUARDIAN_ENVIRONMENT_OPTIMIZED_MAX_MIP_TEXTURE_COUNT
+    ];
+    bool ready;
+} GuardianEnvironmentMipChain;
+
+static GuardianEnvironmentMipChain s_environmentFloorMipChains[
+    GUARDIAN_ENVIRONMENT_OPTIMIZED_FLOOR_MIP_CHAIN_COUNT
+] = {
+    {
+        .chainName = "floor6",
+        .materialName = "floor",
+        .sourceTextureCount = 3,
+        /* Source 0 uses the material's own textureA.texPath. */
+        .texturePaths = {
+            NULL,
+            GUARDIAN_ENVIRONMENT_PATH_PREFIX "floor6-mip1.i4.sprite",
+            GUARDIAN_ENVIRONMENT_PATH_PREFIX "floor6-mip2.i4.sprite",
+        },
+        .sourceStartRdpLevels = {
+            0,
+            GUARDIAN_ENVIRONMENT_OPTIMIZED_MIP1_START_RDP_LEVEL,
+            GUARDIAN_ENVIRONMENT_OPTIMIZED_MIP2_START_RDP_LEVEL,
+        },
+    },
+    {
+        .chainName = "floor_ornate11",
+        .materialName = "floor_ornate",
+        .sourceTextureCount = 3,
+        /* Source 0 uses floor_ornate11.i4.sprite from the material. */
+        .texturePaths = {
+            NULL,
+            GUARDIAN_ENVIRONMENT_PATH_PREFIX "floor_ornate11-mip1.i4.sprite",
+            GUARDIAN_ENVIRONMENT_PATH_PREFIX "floor_ornate11-mip2.i4.sprite",
+        },
+        .sourceStartRdpLevels = {
+            0,
+            GUARDIAN_ENVIRONMENT_OPTIMIZED_MIP1_START_RDP_LEVEL,
+            GUARDIAN_ENVIRONMENT_OPTIMIZED_MIP2_START_RDP_LEVEL,
+        },
+    },
+    {
+        .chainName = "floor_debris_pile5",
+        .materialName = "floor_debris_pile2",
+        .sourceTextureCount = 3,
+        /* Debris uses its explicitly renamed I4 source at all three stages. */
+        .texturePaths = {
+            GUARDIAN_ENVIRONMENT_PATH_PREFIX "floor_debris_pile5.i4.sprite",
+            GUARDIAN_ENVIRONMENT_PATH_PREFIX "floor_debris_pile5-mip1.i4.sprite",
+            GUARDIAN_ENVIRONMENT_PATH_PREFIX "floor_debris_pile5-mip2.i4.sprite",
+        },
+        .sourceStartRdpLevels = {
+            0,
+            GUARDIAN_ENVIRONMENT_OPTIMIZED_MIP1_START_RDP_LEVEL,
+            GUARDIAN_ENVIRONMENT_OPTIMIZED_MIP2_START_RDP_LEVEL,
+        },
+    },
+    {
+        .chainName = "carpet_border8",
+        .materialName = "carpet_border",
+        .sourceTextureCount = 3,
+        /* CI8 mip levels use source 0's palette. */
+        .texturePaths = {
+            GUARDIAN_ENVIRONMENT_PATH_PREFIX "carpet_border8.ci8.sprite",
+            GUARDIAN_ENVIRONMENT_PATH_PREFIX "carpet_border8-mip1.ci8.sprite",
+            GUARDIAN_ENVIRONMENT_PATH_PREFIX "carpet_border8-mip2.ci8.sprite",
+        },
+        /* Do not repeat mip1: mip2 starts on the immediately following level. */
+        .sourceStartRdpLevels = {
+            0,
+            GUARDIAN_ENVIRONMENT_OPTIMIZED_MIP1_START_RDP_LEVEL,
+            GUARDIAN_ENVIRONMENT_OPTIMIZED_MIP1_START_RDP_LEVEL + 1,
+        },
+    },
+};
+
+static GuardianEnvironmentMipChain s_environmentWallsMipChains[
+    GUARDIAN_ENVIRONMENT_OPTIMIZED_WALLS_MIP_CHAIN_COUNT
+] = {
+    {
+        .chainName = "baseboard8",
+        .materialName = "baseboard",
+        .sourceTextureCount = 3,
+        .texturePaths = {
+            GUARDIAN_ENVIRONMENT_PATH_PREFIX "baseboard8.i4.sprite",
+            GUARDIAN_ENVIRONMENT_PATH_PREFIX "baseboard8-mip1.i4.sprite",
+            GUARDIAN_ENVIRONMENT_PATH_PREFIX "baseboard8-mip2.i4.sprite",
+        },
+        /* Keep mip1 at level 2, but start mip2 on the following level. */
+        .sourceStartRdpLevels = {
+            0,
+            GUARDIAN_ENVIRONMENT_OPTIMIZED_MIP1_START_RDP_LEVEL,
+            GUARDIAN_ENVIRONMENT_OPTIMIZED_MIP1_START_RDP_LEVEL + 1,
+        },
+    },
+    {
+        .chainName = "door_detail_top3",
+        /* This 80x48 source matches the door_detail_top material. */
+        .materialName = "door_detail_top",
+        .sourceTextureCount = 2,
+        .texturePaths = {
+            GUARDIAN_ENVIRONMENT_PATH_PREFIX "door_detail_top3.ia4.sprite",
+            GUARDIAN_ENVIRONMENT_PATH_PREFIX "door_detail_top3-mip1.ia4.sprite",
+        },
+        /* Switch to the only authored mip at the earliest possible level. */
+        .sourceStartRdpLevels = {
+            0,
+            2,
+        },
+    },
+    {
+        .chainName = "door_detail_pillar4",
+        /* This 32x128 source matches the door_pillar material. */
+        .materialName = "door_pillar",
+        .sourceTextureCount = 3,
+        .texturePaths = {
+            GUARDIAN_ENVIRONMENT_PATH_PREFIX "door_detail_pillar4.i4.sprite",
+            GUARDIAN_ENVIRONMENT_PATH_PREFIX "door_detail_pillar4-mip1.i4.sprite",
+            GUARDIAN_ENVIRONMENT_PATH_PREFIX "door_detail_pillar4-mip2.i4.sprite",
+        },
+        /* Earliest possible transitions: base -> mip1 -> mip2. */
+        .sourceStartRdpLevels = {
+            0,
+            1,
+            3,
+        },
+    },
+    {
+        .chainName = "door6",
+        .materialName = "door",
+        .sourceTextureCount = 3,
+        .texturePaths = {
+            GUARDIAN_ENVIRONMENT_PATH_PREFIX "door6.i4.sprite",
+            GUARDIAN_ENVIRONMENT_PATH_PREFIX "door6-mip1.i4.sprite",
+            GUARDIAN_ENVIRONMENT_PATH_PREFIX "door6-mip2.i4.sprite",
+        },
+        /* Earliest possible transitions: base -> mip1 -> mip2. */
+        .sourceStartRdpLevels = {
+            0,
+            2,
+            3,
+        },
+    },
+};
+
+/*
+ * Nearest-level mipmapping does not consume a combiner cycle, so it is safe
+ * with the optimized materials' existing two-cycle combiners.
+ * MIPMAP_INTERPOLATE would require each affected material to use one pass.
+ */
+static const rdpq_mipmap_t GUARDIAN_ENVIRONMENT_OPTIMIZED_MIP_MODE = MIPMAP_NEAREST;
+
+
+
+static ScrollParams s_environmentFogScrollParams = {
+    .xSpeed = 0.0f,
+    .ySpeed = 10.0f,
+    .scale  = 64,
+};
+
+static ScrollParams s_environmentSunshaftsScrollParams = {
+    // TILE0: main/streak texture.
+    .xSpeed = -3.0f,
+    .ySpeed = -3.0f,
+    .scale  = 32,
+
+    // TILE1: secondary/dust texture.
+    .xSpeedTwo = -0.0f,
+    .ySpeedTwo = -8.0f,
+    .scaleTwo  = 32,
+};
+
+typedef struct GuardianEnvironmentObject {
+    const char *path;
+    T3DModel *model;
+    rspq_block_t *dpl;
+    T3DMat4FP *matrix;
+    bool drawCustom;
+    bool doubleScroll;
+    bool frozen;
+    bool optimizedMipDraw;
+    ScrollParams *scrollParams;
+    GuardianEnvironmentMipChain *mipChains;
+    T3DMaterial *boundMipMaterials[
+        GUARDIAN_ENVIRONMENT_OPTIMIZED_MAX_MIP_CHAIN_COUNT
+    ];
+    uint8_t mipChainCount;
+} GuardianEnvironmentObject;
+
+
+// Complete frozen optimized environment
+// ------------------------------------------------------------
+
+static GuardianEnvironmentObject s_environmentFloor;
+static GuardianEnvironmentObject s_environmentWalls;
+static GuardianEnvironmentObject s_environmentWallsBack;
+static GuardianEnvironmentObject s_environmentPillars;
+static GuardianEnvironmentObject s_environmentBrokenStatue;
+static GuardianEnvironmentObject s_environmentNichesWindows;
+static GuardianEnvironmentObject s_environmentDecalsLayer1;
+static GuardianEnvironmentObject s_environmentDecalsLayer2;
+static GuardianEnvironmentObject s_environmentFogDoor;
+static GuardianEnvironmentObject s_environmentSunshafts;
+
+
+static void guardian_environment_object_clear(GuardianEnvironmentObject *object)
+{
+    if (!object) return;
+
+    object->path = NULL;
+    object->model = NULL;
+    object->dpl = NULL;
+    object->matrix = NULL;
+    object->drawCustom = false;
+    object->doubleScroll = false;
+    object->frozen = false;
+    object->optimizedMipDraw = false;
+    object->scrollParams = NULL;
+    object->mipChains = NULL;
+    object->mipChainCount = 0;
+    memset(
+        object->boundMipMaterials,
+        0,
+        sizeof(object->boundMipMaterials)
+    );
+}
+static void guardian_environment_clear_all_object_handles(void)
+{
+    guardian_environment_object_clear(&s_environmentFloor);
+    guardian_environment_object_clear(&s_environmentWalls);
+    guardian_environment_object_clear(&s_environmentWallsBack);
+    guardian_environment_object_clear(&s_environmentPillars);
+    guardian_environment_object_clear(&s_environmentBrokenStatue);
+    guardian_environment_object_clear(&s_environmentNichesWindows);
+    guardian_environment_object_clear(&s_environmentDecalsLayer1);
+    guardian_environment_object_clear(&s_environmentDecalsLayer2);
+    guardian_environment_object_clear(&s_environmentFogDoor);
+    guardian_environment_object_clear(&s_environmentSunshafts);
+}
+
+static void guardian_environment_object_free(GuardianEnvironmentObject *object)
+{
+    if (!object) return;
+
+    if (object->dpl) {
+        rspq_block_free(object->dpl);
+        object->dpl = NULL;
+    }
+
+    if (object->model) {
+        t3d_model_free(object->model);
+        object->model = NULL;
+    }
+
+    if (object->matrix) {
+        free_uncached(object->matrix);
+        object->matrix = NULL;
+    }
+
+    object->path = NULL;
+    object->drawCustom = false;
+    object->doubleScroll = false;
+    object->frozen = false;
+    object->optimizedMipDraw = false;
+    object->scrollParams = NULL;
+    object->mipChains = NULL;
+    object->mipChainCount = 0;
+    memset(
+        object->boundMipMaterials,
+        0,
+        sizeof(object->boundMipMaterials)
+    );
+}
+
+static bool guardian_environment_object_load_internal(
+    GuardianEnvironmentObject *object,
+    const char *path,
+    bool drawCustom,
+    ScrollParams *scrollParams,
+    bool frozen
+) {
+    if (!object || !path) return false;
+
+    object->path = path;
+    object->drawCustom = drawCustom;
+    object->doubleScroll = false;
+    object->frozen = frozen && !drawCustom;
+    object->optimizedMipDraw = false;
+    object->scrollParams = scrollParams;
+    object->mipChains = NULL;
+    object->mipChainCount = 0;
+    memset(
+        object->boundMipMaterials,
+        0,
+        sizeof(object->boundMipMaterials)
+    );
+
+    object->model = t3d_model_load(path);
+    if (!object->model) {
+        debugf("guardian_scene environment: failed to load model: %s\n", path);
+        return false;
+    }
+
+    /*
+     * Regular blocks can be recorded while loading because they resolve their
+     * RDP commands at playback. Frozen blocks must wait until the draw pass has
+     * established the exact live RDP state they will use.
+     */
+    if (!drawCustom && !object->frozen) {
+        rspq_block_begin();
+            t3d_model_draw(object->model);
+        object->dpl = rspq_block_end();
+    }
+
+    object->matrix = malloc_uncached(sizeof(T3DMat4FP));
+    if (!object->matrix) {
+        debugf("guardian_scene environment: failed to allocate matrix: %s\n", path);
+        guardian_environment_object_free(object);
+        return false;
+    }
+
+    t3d_mat4fp_from_srt_euler(
+        object->matrix,
+        (float[3]){
+            GUARDIAN_ENVIRONMENT_SCALE,
+            GUARDIAN_ENVIRONMENT_SCALE,
+            GUARDIAN_ENVIRONMENT_SCALE
+        },
+        (float[3]){ 0.0f, 0.0f, 0.0f },
+        (float[3]){ 0.0f, roomY, 0.0f }
+    );
+
+    return true;
+}
+
+static bool guardian_environment_object_load(
+    GuardianEnvironmentObject *object,
+    const char *path,
+    bool drawCustom,
+    ScrollParams *scrollParams
+) {
+    return guardian_environment_object_load_internal(
+        object,
+        path,
+        drawCustom,
+        scrollParams,
+        false
+    );
+}
+
+static bool guardian_environment_object_load_frozen(
+    GuardianEnvironmentObject *object,
+    const char *path
+) {
+    return guardian_environment_object_load_internal(
+        object,
+        path,
+        false,
+        NULL,
+        true
+    );
+}
+
+static bool guardian_environment_object_load_double_scroll(
+    GuardianEnvironmentObject *object,
+    const char *path,
+    ScrollParams *scrollParams
+) {
+    bool loaded = guardian_environment_object_load(
+        object,
+        path,
+        true,
+        scrollParams
+    );
+    if (!loaded) return false;
+
+    object->doubleScroll = true;
+    return true;
+}
+static void guardian_environment_free_optimized_mip_chain_sprites(
+    GuardianEnvironmentMipChain *chain
+)
+{
+    if (!chain) return;
+
+    for (int sourceIndex = 0;
+         sourceIndex < GUARDIAN_ENVIRONMENT_OPTIMIZED_MAX_MIP_TEXTURE_COUNT;
+         ++sourceIndex
+    ) {
+        if (chain->sprites[sourceIndex]) {
+            sprite_free(chain->sprites[sourceIndex]);
+            chain->sprites[sourceIndex] = NULL;
+        }
+    }
+
+    chain->ready = false;
+}
+
+static void guardian_environment_free_optimized_mip_chains(
+    GuardianEnvironmentMipChain *chains,
+    int chainCount
+)
+{
+    if (!chains || chainCount <= 0) return;
+
+    for (int chainIndex = 0; chainIndex < chainCount; ++chainIndex) {
+        guardian_environment_free_optimized_mip_chain_sprites(&chains[chainIndex]);
+    }
+}
+
+static bool guardian_environment_optimized_mip_chain_uses_palette(
+    const GuardianEnvironmentMipChain *chain
+) {
+    if (!chain || !chain->sprites[0]) return false;
+
+    tex_format_t format = sprite_get_format(chain->sprites[0]);
+    return format == FMT_CI4 || format == FMT_CI8;
+}
+
+static bool guardian_environment_is_power_of_two_u16(uint16_t value)
+{
+    return value != 0 && (value & (value - 1)) == 0;
+}
+
+/* Match the tile settings Tiny3D would derive from the original material. */
+static rdpq_texparms_t guardian_environment_get_material_texture_params(
+    const T3DMaterialTexture *texture
+) {
+    rdpq_texparms_t params = (rdpq_texparms_t){};
+
+    params.s.translate = texture->s.low;
+    params.s.mirror = texture->s.mirror;
+    params.s.repeats = REPEAT_INFINITE;
+    params.s.scale_log = (int)texture->s.shift;
+
+    if (texture->s.clamp) {
+        params.s.repeats = guardian_environment_is_power_of_two_u16(texture->texWidth)
+            ? (texture->s.height - texture->s.low + 1.0f) / (float)texture->texWidth
+            : 1.0f;
+    }
+
+    params.t.translate = texture->t.low;
+    params.t.mirror = texture->t.mirror;
+    params.t.repeats = REPEAT_INFINITE;
+    params.t.scale_log = (int)texture->t.shift;
+
+    if (texture->t.clamp) {
+        params.t.repeats = guardian_environment_is_power_of_two_u16(texture->texHeight)
+            ? (texture->t.height - texture->t.low + 1.0f) / (float)texture->texHeight
+            : 1.0f;
+    }
+
+    return params;
+}
+
+static bool guardian_environment_load_optimized_mip_chain(
+    GuardianEnvironmentMipChain *chain,
+    const T3DMaterial *material
+) {
+    if (!chain || !material) return false;
+
+    guardian_environment_free_optimized_mip_chain_sprites(chain);
+
+    if (chain->sourceTextureCount < 2
+        || chain->sourceTextureCount
+            > GUARDIAN_ENVIRONMENT_OPTIMIZED_MAX_MIP_TEXTURE_COUNT
+    ) {
+        debugf(
+            "guardian_scene environment: mip chain '%s' has invalid source texture count %d\n",
+            chain->chainName,
+            chain->sourceTextureCount
+        );
+        return false;
+    }
+
+    if (chain->sourceStartRdpLevels[0] != 0) {
+        debugf(
+            "guardian_scene environment: mip chain '%s' source 0 must start at RDP level 0\n",
+            chain->chainName
+        );
+        return false;
+    }
+
+    for (int sourceIndex = 1;
+         sourceIndex < chain->sourceTextureCount;
+         ++sourceIndex
+    ) {
+        uint8_t previousStart =
+            chain->sourceStartRdpLevels[sourceIndex - 1];
+        uint8_t currentStart =
+            chain->sourceStartRdpLevels[sourceIndex];
+
+        if (currentStart <= previousStart
+            || currentStart >= GUARDIAN_ENVIRONMENT_OPTIMIZED_MIP_RDP_LEVEL_COUNT
+        ) {
+            debugf(
+                "guardian_scene environment: mip chain '%s' has invalid source %d "
+                "start level %d after level %d\n",
+                chain->chainName,
+                sourceIndex,
+                currentStart,
+                previousStart
+            );
+            return false;
+        }
+    }
+
+    if ((int)material->textureA.s.shift
+            + chain->sourceTextureCount - 1 >= 11
+        || (int)material->textureA.t.shift
+            + chain->sourceTextureCount - 1 >= 11
+    ) {
+        debugf(
+            "guardian_scene environment: mip chain '%s' leaves no texture shift room for %d mip textures\n",
+            chain->chainName,
+            chain->sourceTextureCount
+        );
+        return false;
+    }
+
+    for (int sourceIndex = 0;
+         sourceIndex < chain->sourceTextureCount;
+         ++sourceIndex
+    ) {
+        const char *path = chain->texturePaths[sourceIndex]
+            ? chain->texturePaths[sourceIndex]
+            : material->textureA.texPath;
+
+        if (!path) {
+            debugf(
+                "guardian_scene environment: mip chain '%s' source %d has no texture path\n",
+                chain->chainName,
+                sourceIndex
+            );
+            guardian_environment_free_optimized_mip_chain_sprites(chain);
+            return false;
+        }
+
+        chain->sprites[sourceIndex] = sprite_load(path);
+
+        if (!chain->sprites[sourceIndex]) {
+            debugf(
+                "guardian_scene environment: failed to load mip chain '%s' source %d: %s\n",
+                chain->chainName,
+                sourceIndex,
+                path
+            );
+            guardian_environment_free_optimized_mip_chain_sprites(chain);
+            return false;
+        }
+    }
+
+    sprite_t *base = chain->sprites[0];
+    tex_format_t baseFormat = sprite_get_format(base);
+
+    if (base->width != material->textureA.texWidth
+        || base->height != material->textureA.texHeight
+    ) {
+        debugf(
+            "guardian_scene environment: mip chain '%s' base is %dx%d; model expects %dx%d\n",
+            chain->chainName,
+            base->width,
+            base->height,
+            material->textureA.texWidth,
+            material->textureA.texHeight
+        );
+        guardian_environment_free_optimized_mip_chain_sprites(chain);
+        return false;
+    }
+
+    if ((baseFormat == FMT_CI4 || baseFormat == FMT_CI8)
+        && !sprite_get_palette(base)
+    ) {
+        debugf(
+            "guardian_scene environment: CI mip chain '%s' source 0 has no palette\n",
+            chain->chainName
+        );
+        guardian_environment_free_optimized_mip_chain_sprites(chain);
+        return false;
+    }
+
+    for (int sourceIndex = 1;
+         sourceIndex < chain->sourceTextureCount;
+         ++sourceIndex
+    ) {
+        sprite_t *previous = chain->sprites[sourceIndex - 1];
+        sprite_t *current = chain->sprites[sourceIndex];
+        uint16_t expectedWidth = previous->width > 1
+            ? previous->width / 2
+            : 1;
+        uint16_t expectedHeight = previous->height > 1
+            ? previous->height / 2
+            : 1;
+
+        if (current->width != expectedWidth || current->height != expectedHeight) {
+            debugf(
+                "guardian_scene environment: mip chain '%s' source %d is %dx%d; expected %dx%d\n",
+                chain->chainName,
+                sourceIndex,
+                current->width,
+                current->height,
+                expectedWidth,
+                expectedHeight
+            );
+            guardian_environment_free_optimized_mip_chain_sprites(chain);
+            return false;
+        }
+
+        if (sprite_get_format(current) != baseFormat) {
+            debugf(
+                "guardian_scene environment: mip chain '%s' source %d format differs from source 0\n",
+                chain->chainName,
+                sourceIndex
+            );
+            guardian_environment_free_optimized_mip_chain_sprites(chain);
+            return false;
+        }
+    }
+
+    chain->ready = true;
+    return true;
+}
+
+/*
+ * A loaded sprite chain may be shared by several models, but every model owns
+ * different T3DMaterial instances. Verify that the shared base sprite still
+ * matches the material metadata before recording that model's draw list.
+ */
+static bool guardian_environment_optimized_mip_chain_matches_material(
+    const GuardianEnvironmentMipChain *chain,
+    const T3DMaterial *material
+) {
+    if (!chain || !chain->ready || !chain->sprites[0] || !material) {
+        return false;
+    }
+
+    const sprite_t *base = chain->sprites[0];
+
+    if (base->width != material->textureA.texWidth
+        || base->height != material->textureA.texHeight
+    ) {
+        debugf(
+            "guardian_scene environment: shared mip chain '%s' base is %dx%d; "
+            "model material expects %dx%d\n",
+            chain->chainName,
+            base->width,
+            base->height,
+            material->textureA.texWidth,
+            material->textureA.texHeight
+        );
+        return false;
+    }
+
+    if ((int)material->textureA.s.shift
+            + chain->sourceTextureCount - 1 >= 11
+        || (int)material->textureA.t.shift
+            + chain->sourceTextureCount - 1 >= 11
+    ) {
+        debugf(
+            "guardian_scene environment: shared mip chain '%s' leaves no texture shift "
+            "room for this material\n",
+            chain->chainName
+        );
+        return false;
+    }
+
+    return true;
+}
+
+static void guardian_environment_upload_optimized_mip_chain(
+    const GuardianEnvironmentMipChain *chain,
+    const T3DMaterial *material
+) {
+    rdpq_texparms_t sourceParams =
+        guardian_environment_get_material_texture_params(&material->textureA);
+    bool usesPalette =
+        guardian_environment_optimized_mip_chain_uses_palette(chain);
+    int sourceIndex = 0;
+
+    rdpq_tex_multi_begin();
+
+    for (int rdpLevel = 0;
+         rdpLevel < GUARDIAN_ENVIRONMENT_OPTIMIZED_MIP_RDP_LEVEL_COUNT;
+         ++rdpLevel
+    ) {
+        bool startsNextSource =
+            sourceIndex + 1 < chain->sourceTextureCount
+            && rdpLevel
+                == chain->sourceStartRdpLevels[sourceIndex + 1];
+
+        if (startsNextSource) {
+            ++sourceIndex;
+
+            /* Each source texture is half the preceding source's dimensions. */
+            ++sourceParams.s.scale_log;
+            ++sourceParams.t.scale_log;
+            sourceParams.s.translate *= 0.5f;
+            sourceParams.t.translate *= 0.5f;
+        }
+
+        rdpq_tile_t tile = (rdpq_tile_t)(TILE0 + rdpLevel);
+
+        if (rdpLevel == 0) {
+            /* Upload source 0 normally so a CI chain installs its palette. */
+            rdpq_sprite_upload(
+                tile,
+                chain->sprites[sourceIndex],
+                &sourceParams
+            );
+        } else if (startsNextSource) {
+            if (usesPalette) {
+                /*
+                 * Every CI mip level must use source 0's palette. Upload only
+                 * these index surfaces so their private palettes cannot replace
+                 * the base palette in the RDP's single CI8 TLUT.
+                 */
+                surface_t mipPixels =
+                    sprite_get_pixels(chain->sprites[sourceIndex]);
+                rdpq_tex_upload(tile, &mipPixels, &sourceParams);
+            } else {
+                rdpq_sprite_upload(
+                    tile,
+                    chain->sprites[sourceIndex],
+                    &sourceParams
+                );
+            }
+        } else {
+            /* Point this level at the previous upload without using more TMEM. */
+            rdpq_tex_reuse(tile, &sourceParams);
+        }
+    }
+
+    rdpq_tex_multi_end();
+}
+
+static GuardianEnvironmentMipChain *guardian_environment_find_optimized_mip_chain(
+    T3DMaterial *material,
+    GuardianEnvironmentMipChain *chains,
+    T3DMaterial *const *boundMaterials,
+    int chainCount
+)
+{
+    if (!material || !chains || !boundMaterials || chainCount <= 0) {
+        return NULL;
+    }
+
+    for (int chainIndex = 0; chainIndex < chainCount; ++chainIndex) {
+        GuardianEnvironmentMipChain *chain = &chains[chainIndex];
+
+        if (chain->ready && boundMaterials[chainIndex] == material) {
+            return chain;
+        }
+    }
+
+    return NULL;
+}
+
+/*
+ * Record one optimized model manually. Objects using a configured mip material
+ * receive its texture chain; every other material keeps Tiny3D's normal state
+ * minimization and automatic texture loading.
+ */
+static void guardian_environment_record_optimized_model_with_mipmaps(
+    const T3DModel *model,
+    GuardianEnvironmentMipChain *chains,
+    T3DMaterial *const *boundMaterials,
+    int chainCount
+) {
+    T3DModelState state = t3d_model_state_create();
+    T3DModelIter iterator = t3d_model_iter_create(
+        model,
+        T3D_CHUNK_TYPE_OBJECT
+    );
+    GuardianEnvironmentMipChain *activeMipChain = NULL;
+    T3DMaterial *activeMipMaterial = NULL;
+
+    while (t3d_model_iter_next(&iterator)) {
+        T3DObject *modelObject = iterator.object;
+        T3DMaterial *material = modelObject->material;
+
+        if (material) {
+            GuardianEnvironmentMipChain *requestedMipChain =
+                guardian_environment_find_optimized_mip_chain(
+                    material,
+                    chains,
+                    boundMaterials,
+                    chainCount
+                );
+
+            if (requestedMipChain && requestedMipChain != activeMipChain) {
+                guardian_environment_upload_optimized_mip_chain(
+                    requestedMipChain,
+                    material
+                );
+                rdpq_mode_mipmap(
+                    GUARDIAN_ENVIRONMENT_OPTIMIZED_MIP_MODE,
+                    GUARDIAN_ENVIRONMENT_OPTIMIZED_MIP_RDP_LEVEL_COUNT
+                );
+
+                /*
+                 * The custom chain is already in TMEM. Pretend this material's
+                 * ordinary texture is current so t3d_model_draw_material()
+                 * applies every other setting without overwriting the chain.
+                 */
+                state.lastTextureHashA = material->textureA.textureHash;
+                state.lastTextureHashB = material->textureB.textureHash;
+
+                /*
+                 * Force Tiny3D to rebuild its triangle command after enabling
+                 * mipmapping; the command captures the RDP LOD state.
+                 */
+                state.lastRenderFlags = ~material->renderFlags;
+                activeMipChain = requestedMipChain;
+                activeMipMaterial = material;
+            } else if (!requestedMipChain && activeMipChain) {
+                rdpq_mode_mipmap(MIPMAP_NONE, 0);
+
+                if (guardian_environment_optimized_mip_chain_uses_palette(
+                        activeMipChain
+                    )
+                ) {
+                    rdpq_mode_tlut(TLUT_NONE);
+                }
+
+                /* Rebuild Tiny3D's triangle command for ordinary materials. */
+                state.lastRenderFlags = ~material->renderFlags;
+                activeMipChain = NULL;
+                activeMipMaterial = NULL;
+            }
+
+            t3d_model_draw_material(material, &state);
+        }
+
+        t3d_model_draw_object(modelObject, NULL);
+    }
+
+    if (activeMipChain) {
+        /* Do not leak mipmap or palette state past the optimized model. */
+        rdpq_mode_mipmap(MIPMAP_NONE, 0);
+
+        if (guardian_environment_optimized_mip_chain_uses_palette(
+                activeMipChain
+            )
+        ) {
+            rdpq_mode_tlut(TLUT_NONE);
+        }
+
+        t3d_state_set_drawflags(activeMipMaterial->renderFlags);
+    }
+
+    if (state.lastVertFXFunc != T3D_VERTEX_FX_NONE) {
+        t3d_state_set_vertex_fx(T3D_VERTEX_FX_NONE, 0, 0);
+    }
+}
+
+static void guardian_environment_record_object_commands(
+    const GuardianEnvironmentObject *object
+) {
+    if (!object || !object->model) return;
+
+    if (object->optimizedMipDraw) {
+        guardian_environment_record_optimized_model_with_mipmaps(
+            object->model,
+            object->mipChains,
+            object->boundMipMaterials,
+            object->mipChainCount
+        );
+        return;
+    }
+
+    t3d_model_draw(object->model);
+}
+
+static void guardian_environment_record_regular_object_display_list(
+    GuardianEnvironmentObject *object
+) {
+    if (!object || !object->model) return;
+
+    rspq_block_begin();
+        guardian_environment_record_object_commands(object);
+    object->dpl = rspq_block_end();
+    object->drawCustom = false;
+}
+
+static bool guardian_environment_record_frozen_object_display_list(
+    GuardianEnvironmentObject *object
+) {
+    if (!object || !object->model) return false;
+
+    /*
+     * The old block may still be referenced by queued RSP/RDP work. Free it
+     * only after that work has completed, then record into a fresh allocation.
+     * This avoids a synchronous rspq_wait() stall when a block becomes stale.
+     */
+    if (object->dpl) {
+        rdpq_call_deferred(
+            (void (*)(void *))rspq_block_free,
+            object->dpl
+        );
+        object->dpl = NULL;
+    }
+
+    rspq_block_begin_frozen(NULL);
+        guardian_environment_record_object_commands(object);
+    object->dpl = rspq_block_end_frozen();
+    object->drawCustom = false;
+
+    return object->dpl != NULL;
+}
+
+static void guardian_environment_log_frozen_stale_reasons(
+    const GuardianEnvironmentObject *object,
+    int reasons,
+    const char *context
+) {
+    debugf(
+        "guardian_scene environment: frozen block %s for %s; reasons=%08lx",
+        context,
+        object && object->path ? object->path : "<unknown>",
+        (unsigned long)(uint32_t)reasons
+    );
+
+    for (int bitIndex = 0; bitIndex < 32; ++bitIndex) {
+        uint32_t bit = 1U << bitIndex;
+
+        if (((uint32_t)reasons & bit) != 0) {
+            debugf(" %s", rdpq_block_stale_reason_str((int)bit));
+        }
+    }
+
+    debugf("\n");
+}
+
+static bool guardian_environment_object_load_optimized_mip_model(
+    GuardianEnvironmentObject *object,
+    const char *modelPath,
+    const char *modelName,
+    GuardianEnvironmentMipChain *chains,
+    int chainCount,
+    bool resetMipSprites,
+    bool frozen
+)
+{
+    if (!object || !modelPath || !modelName || !chains || chainCount <= 0) {
+        return false;
+    }
+
+    if (chainCount > GUARDIAN_ENVIRONMENT_OPTIMIZED_MAX_MIP_CHAIN_COUNT) {
+        debugf(
+            "guardian_scene environment: %s requests %d mip chains; maximum is %d\n",
+            modelName,
+            chainCount,
+            GUARDIAN_ENVIRONMENT_OPTIMIZED_MAX_MIP_CHAIN_COUNT
+        );
+        return false;
+    }
+
+    if (resetMipSprites) {
+        guardian_environment_free_optimized_mip_chains(chains, chainCount);
+    }
+
+    bool loaded = guardian_environment_object_load_internal(
+        object,
+        modelPath,
+        true,
+        NULL,
+        frozen
+    );
+
+    if (!loaded) return false;
+
+    int readyChainCount = 0;
+    T3DMaterial *boundMaterials[
+        GUARDIAN_ENVIRONMENT_OPTIMIZED_MAX_MIP_CHAIN_COUNT
+    ] = { NULL };
+
+    for (int chainIndex = 0; chainIndex < chainCount; ++chainIndex) {
+        GuardianEnvironmentMipChain *chain = &chains[chainIndex];
+        T3DMaterial *material = t3d_model_get_material(
+            object->model,
+            chain->materialName
+        );
+
+        if (!material) {
+            debugf(
+                "guardian_scene environment: material '%s' not found in %s; "
+                "that material will use its normal draw\n",
+                chain->materialName,
+                modelName
+            );
+            continue;
+        }
+
+        if (material->textureB.texPath
+            || material->textureB.texReference
+        ) {
+            debugf(
+                "guardian_scene environment: material '%s' in %s already uses TILE1; "
+                "that material cannot use the custom mip chain\n",
+                chain->materialName,
+                modelName
+            );
+            continue;
+        }
+
+        if (!material->textureA.texPath) {
+            debugf(
+                "guardian_scene environment: material '%s' in %s has no loadable "
+                "textureA path; "
+                "that material will use its normal draw\n",
+                chain->materialName,
+                modelName
+            );
+            continue;
+        }
+
+        bool chainAvailable = chain->ready
+            ? guardian_environment_optimized_mip_chain_matches_material(
+                chain,
+                material
+            )
+            : guardian_environment_load_optimized_mip_chain(chain, material);
+
+        if (!chainAvailable) {
+            debugf(
+                "guardian_scene environment: material '%s' in %s custom mip chain '%s' "
+                "is invalid; "
+                "that material will use its normal draw\n",
+                chain->materialName,
+                modelName,
+                chain->chainName
+            );
+            continue;
+        }
+
+        boundMaterials[chainIndex] = material;
+        ++readyChainCount;
+        debugf(
+            "guardian_scene environment: material '%s' in %s using mip chain '%s': "
+            "%d textures across %d RDP mip levels\n",
+            chain->materialName,
+            modelName,
+            chain->chainName,
+            chain->sourceTextureCount,
+            GUARDIAN_ENVIRONMENT_OPTIMIZED_MIP_RDP_LEVEL_COUNT
+        );
+    }
+
+    object->drawCustom = false;
+    object->frozen = frozen;
+    object->optimizedMipDraw = readyChainCount > 0;
+    object->mipChains = object->optimizedMipDraw ? chains : NULL;
+    object->mipChainCount = object->optimizedMipDraw
+        ? (uint8_t)chainCount
+        : 0;
+    memcpy(
+        object->boundMipMaterials,
+        boundMaterials,
+        sizeof(object->boundMipMaterials)
+    );
+
+    if (readyChainCount == 0) {
+        debugf(
+            "guardian_scene environment: no custom mip chains are available for %s; "
+            "using the model's normal draw\n",
+            modelName
+        );
+    }
+
+    /*
+     * Frozen display lists are recorded lazily by guardian_environment_object_draw()
+     * after the object's Z-buffer/pass state has been established.
+     */
+    if (!object->frozen) {
+        guardian_environment_record_regular_object_display_list(object);
+    }
+
+    return true;
+}
+
+static bool guardian_environment_object_load_optimized_floor(bool frozen)
+{
+    return guardian_environment_object_load_optimized_mip_model(
+        &s_environmentFloor,
+        GUARDIAN_ENVIRONMENT_PATH_PREFIX "test-floor-opt.t3dm",
+        "test-floor-opt",
+        s_environmentFloorMipChains,
+        GUARDIAN_ENVIRONMENT_OPTIMIZED_FLOOR_MIP_CHAIN_COUNT,
+        true,
+        frozen
+    );
+}
+
+static bool guardian_environment_object_load_optimized_walls(bool frozen)
+{
+    return guardian_environment_object_load_optimized_mip_model(
+        &s_environmentWalls,
+        GUARDIAN_ENVIRONMENT_PATH_PREFIX "test-walls-opt.t3dm",
+        "test-walls-opt",
+        s_environmentWallsMipChains,
+        GUARDIAN_ENVIRONMENT_OPTIMIZED_WALLS_MIP_CHAIN_COUNT,
+        false,
+        frozen
+    );
+}
+
+static bool guardian_environment_object_load_optimized_walls_back(bool frozen)
+{
+    return guardian_environment_object_load_optimized_mip_model(
+        &s_environmentWallsBack,
+        GUARDIAN_ENVIRONMENT_PATH_PREFIX "test-walls_back-opt.t3dm",
+        "test-walls_back-opt",
+        s_environmentWallsMipChains,
+        GUARDIAN_ENVIRONMENT_OPTIMIZED_WALLS_BACK_MIP_CHAIN_COUNT,
+        false,
+        frozen
+    );
+}
+
+static void guardian_environment_object_draw(GuardianEnvironmentObject *object)
+{
+    if (!object || !object->matrix || !object->model) return;
+
+    t3d_matrix_set(object->matrix, true);
+
+    if (object->drawCustom) {
+        t3d_model_draw_custom(object->model, (T3DModelDrawConf){
+            .userData = object->scrollParams,
+            .tileCb = object->scrollParams
+                ? (object->doubleScroll ? tile_double_scroll : tile_scroll)
+                : NULL,
+        });
+        return;
+    }
+
+    if (object->frozen) {
+        if (rspq_block_run_frozen(object->dpl)) {
+            return;
+        }
+
+        if (object->dpl) {
+            guardian_environment_log_frozen_stale_reasons(
+                object,
+                rdpq_block_stale_reasons(object->dpl),
+                "stale"
+            );
+        }
+
+        if (!guardian_environment_record_frozen_object_display_list(object)) {
+            debugf(
+                "guardian_scene environment: failed to record frozen block for %s\n",
+                object->path ? object->path : "<unknown>"
+            );
+            return;
+        }
+
+        if (!rspq_block_run_frozen(object->dpl)) {
+            int reasons = rdpq_block_stale_reasons(object->dpl);
+            guardian_environment_log_frozen_stale_reasons(
+                object,
+                reasons,
+                "immediately stale after recording"
+            );
+
+            /*
+             * Preserve the frame visually while exposing the state-tracking
+             * failure in the debug log. This fallback should never be reached
+             * in a stable pass.
+             */
+            guardian_environment_record_object_commands(object);
+        }
+
+        return;
+    }
+
+    if (object->dpl) {
+        rspq_block_run(object->dpl);
+    }
+}
+
+
+static void guardian_environment_load(void)
+{
+    guardian_environment_object_load_optimized_floor(true);
+
+    /*
+     * The wall models share their manually loaded mip sprites. Reset the shared
+     * chains once, then bind each model independently.
+     */
+    guardian_environment_free_optimized_mip_chains(
+        s_environmentWallsMipChains,
+        GUARDIAN_ENVIRONMENT_OPTIMIZED_WALLS_MIP_CHAIN_COUNT
+    );
+    guardian_environment_object_load_optimized_walls(true);
+    guardian_environment_object_load_optimized_walls_back(true);
+
+    guardian_environment_object_load_frozen(
+        &s_environmentPillars,
+        GUARDIAN_ENVIRONMENT_PATH_PREFIX "test-pillars-opt.t3dm"
+    );
+    guardian_environment_object_load_frozen(
+        &s_environmentBrokenStatue,
+        GUARDIAN_ENVIRONMENT_PATH_PREFIX "test-broken_statue-opt.t3dm"
+    );
+    guardian_environment_object_load_frozen(
+        &s_environmentNichesWindows,
+        GUARDIAN_ENVIRONMENT_PATH_PREFIX "test-niches_windows-opt.t3dm"
+    );
+    guardian_environment_object_load_frozen(
+        &s_environmentDecalsLayer1,
+        GUARDIAN_ENVIRONMENT_PATH_PREFIX "test-decals_layer1-opt.t3dm"
+    );
+    guardian_environment_object_load_frozen(
+        &s_environmentDecalsLayer2,
+        GUARDIAN_ENVIRONMENT_PATH_PREFIX "test-decals_layer2-opt.t3dm"
+    );
+
+    /* The scrolling fog door remains dynamic. */
+    guardian_environment_object_load(
+        &s_environmentFogDoor,
+        GUARDIAN_ENVIRONMENT_PATH_PREFIX "test-fog_door.t3dm",
+        true,
+        &s_environmentFogScrollParams
+    );
+
+    /*
+     * test-sunshafts.glb is converted by the asset pipeline to this runtime
+     * T3DM. It stays dynamic because both texture tiles scroll every frame.
+     */
+    guardian_environment_object_load_double_scroll(
+        &s_environmentSunshafts,
+        GUARDIAN_ENVIRONMENT_PATH_PREFIX "test-sunshafts.t3dm",
+        &s_environmentSunshaftsScrollParams
+    );
+}
+
+static void guardian_environment_delete(void)
+{
+    guardian_environment_object_free(&s_environmentFloor);
+    guardian_environment_free_optimized_mip_chains(
+        s_environmentFloorMipChains,
+        GUARDIAN_ENVIRONMENT_OPTIMIZED_FLOOR_MIP_CHAIN_COUNT
+    );
+
+    /*
+     * Free both wall blocks before releasing the mip sprites referenced by
+     * their recorded command streams.
+     */
+    guardian_environment_object_free(&s_environmentWalls);
+    guardian_environment_object_free(&s_environmentWallsBack);
+    guardian_environment_free_optimized_mip_chains(
+        s_environmentWallsMipChains,
+        GUARDIAN_ENVIRONMENT_OPTIMIZED_WALLS_MIP_CHAIN_COUNT
+    );
+
+    guardian_environment_object_free(&s_environmentPillars);
+    guardian_environment_object_free(&s_environmentBrokenStatue);
+    guardian_environment_object_free(&s_environmentNichesWindows);
+    guardian_environment_object_free(&s_environmentDecalsLayer1);
+    guardian_environment_object_free(&s_environmentDecalsLayer2);
+    guardian_environment_object_free(&s_environmentFogDoor);
+    guardian_environment_object_free(&s_environmentSunshafts);
+}
+
+
+// ------------------------------------------------------------
+// Optimized environment draw passes
+// ------------------------------------------------------------
+
+void scene_draw_environment_walls(void)
+{
+    rdpq_mode_zbuf(false, false);
+
+    t3d_matrix_push_pos(1);
+        guardian_environment_object_draw(&s_environmentWallsBack);
+        guardian_environment_object_draw(&s_environmentWalls);
+    t3d_matrix_pop(1);
+
+    rdpq_mode_zbuf(true, true);
+}
+
+void scene_draw_environment_floor(void)
+{
+    rdpq_mode_zbuf(true, true);
+
+    t3d_matrix_push_pos(1);
+        guardian_environment_object_draw(&s_environmentFloor);
+    t3d_matrix_pop(1);
+}
+
+void scene_draw_environment_niches_windows(void)
+{
+    rdpq_mode_zbuf(true, true);
+
+    t3d_matrix_push_pos(1);
+        guardian_environment_object_draw(&s_environmentNichesWindows);
+    t3d_matrix_pop(1);
+}
+
+void scene_draw_environment_decals(void)
+{
+    rdpq_mode_zbuf(false, false);
+
+    t3d_matrix_push_pos(1);
+        guardian_environment_object_draw(&s_environmentDecalsLayer1);
+        guardian_environment_object_draw(&s_environmentDecalsLayer2);
+    t3d_matrix_pop(1);
+
+    rdpq_mode_zbuf(true, true);
+}
+
+void scene_draw_environment_pillars_statue(void)
+{
+    rdpq_mode_zbuf(true, true);
+
+    t3d_matrix_push_pos(1);
+        guardian_environment_object_draw(&s_environmentPillars);
+        guardian_environment_object_draw(&s_environmentBrokenStatue);
+    t3d_matrix_pop(1);
+}
+
+void scene_draw_environment_sunshafts(void)
+{
+    rdpq_mode_zbuf(false, false);
+
+    t3d_matrix_push_pos(1);
+        guardian_environment_object_draw(&s_environmentSunshafts);
+    t3d_matrix_pop(1);
+
+    rdpq_mode_zbuf(true, true);
+}
+
+void scene_draw_environment_fog_door(void)
+{
+    rdpq_mode_zbuf(true, false);
+
+    t3d_matrix_push_pos(1);
+        guardian_environment_object_draw(&s_environmentFogDoor);
+    t3d_matrix_pop(1);
+
+    rdpq_mode_zbuf(true, true);
+}
 
 // Cutscene/screen transition state shared with Guardian cutscene context.
 static bool screenTransition = false;
@@ -372,165 +1745,63 @@ static void scene_update_video_preroll(void)
 
 void scene_load_environment(void)
 {
-    // ===== LOAD MAP =====
-    mapModel = t3d_model_load("rom:/boss_room/room.t3dm");
-    rspq_block_begin();
-        t3d_model_draw(mapModel);
-    mapDpl = rspq_block_end();
+    guardian_environment_load();
 
-    mapMatrix = malloc_uncached(sizeof(T3DMat4FP));
-    t3d_mat4fp_from_srt_euler(
-        mapMatrix,
-        (float[3]){MODEL_SCALE, MODEL_SCALE, MODEL_SCALE},
-        (float[3]){0.0f, 0.0f, 0.0f},
-        (float[3]){0.0f, roomY, 0.0f}
-    );
-
-    // ===== LOAD PILLARS =====
-    pillarsModel = t3d_model_load("rom:/boss_room/pillars.t3dm");
-    rspq_block_begin();
-        t3d_model_draw(pillarsModel);
-    pillarsDpl = rspq_block_end();
-
-    pillarsMatrix = malloc_uncached(sizeof(T3DMat4FP));
-    t3d_mat4fp_from_srt_euler(
-        pillarsMatrix,
-        (float[3]){MODEL_SCALE, MODEL_SCALE, MODEL_SCALE},
-        (float[3]){0.0f, 0.0f, 0.0f},
-        (float[3]){0.0f, roomY, 0.0f}
-    );
-
-    pillarsFrontModel = t3d_model_load("rom:/boss_room/pillars_front.t3dm");
-    rspq_block_begin();
-        t3d_model_draw(pillarsFrontModel);
-    pillarsFrontDpl = rspq_block_end();
-
-    pillarsFrontMatrix = malloc_uncached(sizeof(T3DMat4FP));
-    t3d_mat4fp_from_srt_euler(
-        pillarsFrontMatrix,
-        (float[3]){MODEL_SCALE, MODEL_SCALE, MODEL_SCALE},
-        (float[3]){0.0f, 0.0f, 0.0f},
-        (float[3]){0.0f, roomY, 0.0f}
-    );
-
-    // ===== LOAD LEDGE =====
-    roomLedgeModel = t3d_model_load("rom:/boss_room/room_ledge_walls.t3dm");
-    rspq_block_begin();
-        t3d_model_draw(roomLedgeModel);
-    roomLedgeDpl = rspq_block_end();
-
-    roomLedgeMatrix = malloc_uncached(sizeof(T3DMat4FP));
-    t3d_mat4fp_from_srt_euler(
-        roomLedgeMatrix,
-        (float[3]){MODEL_SCALE, MODEL_SCALE, MODEL_SCALE},
-        (float[3]){0.0f, 0.0f, 0.0f},
-        (float[3]){0.0f, roomY, 0.0f}
-    );
-
-    // ===== LOAD WINDOWS =====
-    windowsModel = t3d_model_load("rom:/boss_room/windows.t3dm");
-    rspq_block_begin();
-        t3d_model_draw(windowsModel);
-    windowsDpl = rspq_block_end();
-
-    windowsMatrix = malloc_uncached(sizeof(T3DMat4FP));
-    t3d_mat4fp_from_srt_euler(
-        windowsMatrix,
-        (float[3]){MODEL_SCALE, MODEL_SCALE, MODEL_SCALE},
-        (float[3]){0.0f, 0.0f, 0.0f},
-        (float[3]){0.0f, roomY, 0.0f}
-    );
-
-    // ===== LOAD PERSISTENT CEILING CHAINS =====
+    // Persistent ceiling chains remain separate from the replacement room.
     chainsModel = t3d_model_load("rom:/boss_room/ceiling_chains.t3dm");
-    rspq_block_begin();
-        t3d_model_draw(chainsModel);
-    chainsDpl = rspq_block_end();
+    if (chainsModel) {
+        rspq_block_begin();
+            t3d_model_draw(chainsModel);
+        chainsDpl = rspq_block_end();
+    }
 
     chainsMatrix = malloc_uncached(sizeof(T3DMat4FP));
-    t3d_mat4fp_from_srt_euler(
-        chainsMatrix,
-        (float[3]){MODEL_SCALE, MODEL_SCALE, MODEL_SCALE},
-        (float[3]){0.0f, 0.0f, 0.0f},
-        (float[3]){0.0f, roomY, 0.0f}
-    );
+    if (chainsMatrix) {
+        t3d_mat4fp_from_srt_euler(
+            chainsMatrix,
+            (float[3]){MODEL_SCALE, MODEL_SCALE, MODEL_SCALE},
+            (float[3]){0.0f, 0.0f, 0.0f},
+            (float[3]){0.0f, roomY, 0.0f}
+        );
+    }
 
-    // ===== LOAD SUN SHAFTS =====
-    sunshaftsModel = t3d_model_load("rom:/boss_room/sunshafts.t3dm");
-    rspq_block_begin();
-        t3d_model_draw(sunshaftsModel);
-    sunshaftsDpl = rspq_block_end();
-
-    sunshaftsMatrix = malloc_uncached(sizeof(T3DMat4FP));
-    t3d_mat4fp_from_srt_euler(
-        sunshaftsMatrix,
-        (float[3]){MODEL_SCALE, MODEL_SCALE, MODEL_SCALE},
-        (float[3]){0.0f, 0.0f, 0.0f},
-        (float[3]){0.0f, roomY, 0.0f}
-    );
-
-    // ===== LOAD FOG DOOR =====
-    fogDoorModel = t3d_model_load("rom:/boss_room/fog.t3dm");
-    rspq_block_begin();
-        t3d_model_draw(fogDoorModel);
-    fogDoorDpl = rspq_block_end();
-
-    fogDoorMatrix = malloc_uncached(sizeof(T3DMat4FP));
-    t3d_mat4fp_from_srt_euler(
-        fogDoorMatrix,
-        (float[3]){MODEL_SCALE, MODEL_SCALE, MODEL_SCALE},
-        (float[3]){0.0f, 0.0f, 0.0f},
-        (float[3]){0.0f, roomY, 0.0f}
-    );
-
-    // ===== LOAD FLOOR GLOW =====
+    // Existing death-state floor glow remains independent of the room meshes.
     floorGlowModel = t3d_model_load("rom:/boss_room/floor_glow.t3dm");
-    rspq_block_begin();
-        t3d_model_draw(floorGlowModel);
-    floorGlowDpl = rspq_block_end();
+    if (floorGlowModel) {
+        rspq_block_begin();
+            t3d_model_draw(floorGlowModel);
+        floorGlowDpl = rspq_block_end();
+    }
 
     floorGlowMatrix = malloc_uncached(sizeof(T3DMat4FP));
-    t3d_mat4fp_from_srt_euler(
-        floorGlowMatrix,
-        (float[3]){MODEL_SCALE, MODEL_SCALE, MODEL_SCALE},
-        (float[3]){0.0f, 0.0f, 0.0f},
-        (float[3]){0.0f, roomY, 0.0f}
-    );
+    if (floorGlowMatrix) {
+        t3d_mat4fp_from_srt_euler(
+            floorGlowMatrix,
+            (float[3]){MODEL_SCALE, MODEL_SCALE, MODEL_SCALE},
+            (float[3]){0.0f, 0.0f, 0.0f},
+            (float[3]){0.0f, roomY, 0.0f}
+        );
+    }
 
-    // ===== LOAD FLOOR =====
-    roomFloorModel = t3d_model_load("rom:/boss_room/floor.t3dm");
-    rspq_block_begin();
-        t3d_model_draw(roomFloorModel);
-    roomFloorDpl = rspq_block_end();
-
-    roomFloorMatrix = malloc_uncached(sizeof(T3DMat4FP));
-    t3d_mat4fp_from_srt_euler(
-        roomFloorMatrix,
-        (float[3]){MODEL_SCALE, MODEL_SCALE, MODEL_SCALE},
-        (float[3]){0.0f, 0.0f, 0.0f},
-        (float[3]){0.0f, roomY, 0.0f}
-    );
-
-    // ===== LOAD BOSS CHAINS GLOW =====
-    // Keep this here only if it is visible after the phase-2 cutscene / during gameplay.
-    // If it is phase-2-cutscene-only, move it into cutscene_guardian_phase2.c instead.
+    // Existing phase-2 boss-chain glow remains a boss/cutscene asset.
     bossChainsGlowModel = t3d_model_load("rom:/boss/boss_chain_glow.t3dm");
-    rspq_block_begin();
-        t3d_model_draw(bossChainsGlowModel);
-    bossChainsGlowDpl = rspq_block_end();
+    if (bossChainsGlowModel) {
+        rspq_block_begin();
+            t3d_model_draw(bossChainsGlowModel);
+        bossChainsGlowDpl = rspq_block_end();
+    }
 
     bossChainsGlowMatrix = malloc_uncached(sizeof(T3DMat4FP));
-    t3d_mat4fp_from_srt_euler(
-        bossChainsGlowMatrix,
-        (float[3]){MODEL_SCALE, MODEL_SCALE, MODEL_SCALE},
-        (float[3]){0.0f, 0.0f, 0.0f},
-        (float[3]){0.0f, roomY, 0.0f}
-    );
-
-    // Global/system-level effect. Keep loaded if it is used outside one cutscene,
-    // or move it later if it is phase-2-only.
-    // lightning_fx_system_init("rom:/boss/boss_back_sword_lightning2.t3dm");
+    if (bossChainsGlowMatrix) {
+        t3d_mat4fp_from_srt_euler(
+            bossChainsGlowMatrix,
+            (float[3]){MODEL_SCALE, MODEL_SCALE, MODEL_SCALE},
+            (float[3]){0.0f, 0.0f, 0.0f},
+            (float[3]){0.0f, roomY, 0.0f}
+        );
+    }
 }
+
 
 void scene_init(void)
 {
@@ -560,6 +1831,7 @@ void scene_init(void)
     // lightDirVec = (T3DVec3){{-0.9833f, 0.1790f, -0.0318f}};
     // t3d_vec3_norm(&lightDirVec);
 
+    guardian_environment_clear_all_object_handles();
     scene_load_environment();
 
     g_boss = boss_spawn();
@@ -1045,6 +2317,7 @@ static void scene_finish_phase2_cutscene(void)
 
 // Temporary scene context until memory management is added and cutscenes become their own scenes.
 static SceneContext sceneContext;
+
 static void scene_update_context(void)
 {
     sceneContext.boss = g_boss;
@@ -1054,33 +2327,6 @@ static void scene_update_context(void)
     sceneContext.gameState = &gameState;
     sceneContext.screenTransition = &screenTransition;
 
-    sceneContext.windowsModel = windowsModel;
-    sceneContext.windowsDpl = windowsDpl;
-    sceneContext.windowsMatrix = windowsMatrix;
-
-    sceneContext.mapModel = mapModel;
-    sceneContext.mapDpl = mapDpl;
-    sceneContext.mapMatrix = mapMatrix;
-
-    sceneContext.roomFloorModel = roomFloorModel;
-    sceneContext.roomFloorDpl = roomFloorDpl;
-    sceneContext.roomFloorMatrix = roomFloorMatrix;
-
-    sceneContext.roomLedgeModel = roomLedgeModel;
-    sceneContext.roomLedgeDpl = roomLedgeDpl;
-    sceneContext.roomLedgeMatrix = roomLedgeMatrix;
-
-    sceneContext.pillarsModel = pillarsModel;
-    sceneContext.pillarsDpl = pillarsDpl;
-    sceneContext.pillarsMatrix = pillarsMatrix;
-
-    sceneContext.pillarsFrontModel = pillarsFrontModel;
-    sceneContext.pillarsFrontDpl = pillarsFrontDpl;
-    sceneContext.pillarsFrontMatrix = pillarsFrontMatrix;
-
-    sceneContext.sunshaftsModel = sunshaftsModel;
-    sceneContext.sunshaftsDpl = sunshaftsDpl;
-    sceneContext.sunshaftsMatrix = sunshaftsMatrix;
 
     sceneContext.chainsModel = chainsModel;
     sceneContext.chainsDpl = chainsDpl;
@@ -1094,6 +2340,7 @@ static void scene_update_context(void)
     sceneContext.init_playing = scene_init_playing;
     sceneContext.finish_phase2_cutscene = scene_finish_phase2_cutscene;
 }
+
 
 void scene_init_cutscene(void)
 {
@@ -1519,41 +2766,14 @@ void scene_draw_cutscene(T3DViewport *viewport)
     switch (cutsceneState) {
         case CUTSCENE_POST_BOSS_RESTORED: {
             /*
-             * Render the normal scene while the post-boss dialog is active.
-             * This avoids a black screen because this cutscene is camera/dialog only.
+             * Render the complete replacement room while this camera/dialog-only
+             * cutscene is active.
              */
+            scene_draw_environment_walls();
+            scene_draw_environment_sunshafts();
+            scene_draw_environment_floor();
 
-            rdpq_sync_pipe();
             rdpq_mode_zbuf(false, false);
-
-            // No-depth environment first.
-            t3d_matrix_push_pos(1);
-                if (windowsMatrix && windowsDpl) {
-                    t3d_matrix_set(windowsMatrix, true);
-                    rspq_block_run(windowsDpl);
-                }
-
-                if (mapMatrix && mapDpl) {
-                    t3d_matrix_set(mapMatrix, true);
-                    rspq_block_run(mapDpl);
-                }
-            t3d_matrix_pop(1);
-
-            // Floor.
-            rdpq_sync_pipe();
-            rdpq_mode_zbuf(true, true);
-
-            t3d_matrix_push_pos(1);
-                if (roomFloorMatrix && roomFloorDpl) {
-                    t3d_matrix_set(roomFloorMatrix, true);
-                    rspq_block_run(roomFloorDpl);
-                }
-            t3d_matrix_pop(1);
-
-            // Shadows.
-            rdpq_sync_pipe();
-            rdpq_mode_zbuf(false, false);
-
             t3d_matrix_push_pos(1);
                 character_draw_shadow();
 
@@ -1562,28 +2782,11 @@ void scene_draw_cutscene(T3DViewport *viewport)
                 }
             t3d_matrix_pop(1);
 
-            // Room pieces.
-            rdpq_sync_pipe();
+            scene_draw_environment_niches_windows();
+            scene_draw_environment_decals();
+            scene_draw_environment_pillars_statue();
+
             rdpq_mode_zbuf(true, true);
-
-            t3d_matrix_push_pos(1);
-                if (roomLedgeMatrix && roomLedgeDpl) {
-                    t3d_matrix_set(roomLedgeMatrix, true);
-                    rspq_block_run(roomLedgeDpl);
-                }
-
-                if (pillarsMatrix && pillarsDpl) {
-                    t3d_matrix_set(pillarsMatrix, true);
-                    rspq_block_run(pillarsDpl);
-                }
-
-                if (pillarsFrontMatrix && pillarsFrontDpl) {
-                    t3d_matrix_set(pillarsFrontMatrix, true);
-                    rspq_block_run(pillarsFrontDpl);
-                }
-            t3d_matrix_pop(1);
-
-            // Characters.
             t3d_matrix_push_pos(1);
                 character_draw();
 
@@ -1592,8 +2795,9 @@ void scene_draw_cutscene(T3DViewport *viewport)
                 }
             t3d_matrix_pop(1);
 
+            scene_draw_environment_fog_door();
+
             // Persistent gameplay chains only.
-            // cinematicChains moved into cutscene_guardian_phase1.c and should not be referenced here.
             t3d_matrix_push_pos(1);
                 if (chainsMatrix && chainsDpl) {
                     t3d_matrix_set(chainsMatrix, true);
@@ -1601,7 +2805,6 @@ void scene_draw_cutscene(T3DViewport *viewport)
                 }
             t3d_matrix_pop(1);
 
-            // 2D dialog overlay.
             if (cutsceneDialogActive) {
                 int height = 70;
                 int width = 220;
@@ -1616,6 +2819,7 @@ void scene_draw_cutscene(T3DViewport *viewport)
             break;
     }
 }
+
 
 static void scene_draw_video_preroll_fade(void)
 {
@@ -1683,86 +2887,53 @@ void scene_draw(T3DViewport *viewport)
     }
     // ===== DRAW 3D =====
 
-    rdpq_mode_zbuf(false, false);
+    scene_draw_environment_walls();
+    //scene_draw_environment_sunshafts();
+    scene_draw_environment_floor();
 
-    // Draw no depth environment first
+    // Projection effects and blob shadows remain between the floor and room details.
+    rdpq_mode_zbuf(false, false);
     t3d_matrix_push_pos(1);
+        boss_ground_crush_draw();
+        character_draw_shadow();
 
-    t3d_matrix_set(windowsMatrix, true);
-    rspq_block_run(windowsDpl);
+        if (g_boss) {
+            boss_draw_shadow(g_boss);
+        }
+    t3d_matrix_pop(1);
 
-    t3d_matrix_set(mapMatrix, true);
-    rspq_block_run(mapDpl);
+    scene_draw_environment_niches_windows();
+    scene_draw_environment_decals();
+    scene_draw_environment_pillars_statue();
 
-    //Draw depth environment
-    rdpq_mode_zbuf(true, true);
-
-    t3d_matrix_set(roomFloorMatrix, true);
-    rspq_block_run(roomFloorDpl);
-
-    rdpq_mode_zbuf(false, false);
-
-    // projection effects
-    boss_ground_crush_draw();
-    // blob shadows
-    character_draw_shadow();
-    if (g_boss) {
-        boss_draw_shadow(g_boss);
+    // Existing death-state floor glow remains separate from the room replacement.
+    if (g_boss && g_boss->health <= 0 && floorGlowMatrix && floorGlowModel) {
+        rdpq_mode_zbuf(false, false);
+        t3d_matrix_push_pos(1);
+            t3d_matrix_set(floorGlowMatrix, true);
+            t3d_model_draw_custom(floorGlowModel, (T3DModelDrawConf){
+                .userData = &floorGlowScrollParams,
+                .tileCb = tile_scroll,
+            });
+        t3d_matrix_pop(1);
     }
 
     rdpq_mode_zbuf(true, true);
+    t3d_matrix_push_pos(1);
+        character_draw();
 
+        if (g_boss) {
+            boss_draw(g_boss);
+        }
+    t3d_matrix_pop(1);
 
-    t3d_matrix_set(roomLedgeMatrix, true);
-    rspq_block_run(roomLedgeDpl);
+    scene_draw_environment_fog_door();
 
-    t3d_matrix_set(pillarsMatrix, true);
-    rspq_block_run(pillarsDpl);
-
-    t3d_matrix_set(pillarsFrontMatrix, true);
-    rspq_block_run(pillarsFrontDpl);
-
-    rdpq_mode_zbuf(false, false);
-
-    // floor glow
-    if(g_boss->health <= 0)
-    {
-        t3d_matrix_set(floorGlowMatrix, true);
-        // Create a struct to pass the scrolling parameters to the tile callback
-        t3d_model_draw_custom(floorGlowModel, (T3DModelDrawConf){
-            .userData = &floorGlowScrollParams,
-            .tileCb = tile_scroll,
-        });
-    }
-
-
-    rdpq_mode_zbuf(true, true);
-
-    // Draw characters
-    character_draw();
-    if (g_boss) {
-        boss_draw(g_boss);
-    }
-
-    //msa_draw_visuals(viewport); // multi sword attack
-    //boulder_hazard_draw(viewport); // close-range ground boulders
-
-    // Fog door (transparent): depth test ON, depth write OFF so it can be drawn late.
-    rdpq_mode_zbuf(true, false);
-
-    if (fogDoorMatrix && fogDoorModel) {
-        t3d_matrix_set(fogDoorMatrix, true);
-        t3d_model_draw_custom(fogDoorModel, (T3DModelDrawConf){
-            .userData = &fogScrollParams,
-            .tileCb = tile_scroll,
-        });
-    }
-
-    rdpq_mode_zbuf(true, true);
-
-    t3d_matrix_set(chainsMatrix, true);
-    rspq_block_run(chainsDpl);
-
+    t3d_matrix_push_pos(1);
+        if (chainsMatrix && chainsDpl) {
+            t3d_matrix_set(chainsMatrix, true);
+            rspq_block_run(chainsDpl);
+        }
     t3d_matrix_pop(1);
 
     // Screen-space ribbon trails, drawn right after 3D so they feel "in world"
@@ -2000,39 +3171,48 @@ void scene_draw(T3DViewport *viewport)
 
 void scene_delete_environment(void)
 {
-    // --- DPLs ---
-    if (mapDpl)        { rspq_block_free(mapDpl);        mapDpl = NULL; }
-    if (pillarsDpl)    { rspq_block_free(pillarsDpl);    pillarsDpl = NULL; }
-    if (pillarsFrontDpl) { rspq_block_free(pillarsFrontDpl); pillarsFrontDpl = NULL; }
-    if (roomLedgeDpl)  { rspq_block_free(roomLedgeDpl);  roomLedgeDpl = NULL; }
-    if (windowsDpl)    { rspq_block_free(windowsDpl);    windowsDpl = NULL; }
-    if (chainsDpl)     { rspq_block_free(chainsDpl);     chainsDpl = NULL; }
-    if (sunshaftsDpl)  { rspq_block_free(sunshaftsDpl);  sunshaftsDpl = NULL; }
-    if (fogDoorDpl)    { rspq_block_free(fogDoorDpl);    fogDoorDpl = NULL; }
-    if (roomFloorDpl)  { rspq_block_free(roomFloorDpl);  roomFloorDpl = NULL; }
+    guardian_environment_delete();
 
-    // --- Models ---
-    if (mapModel)       { t3d_model_free(mapModel);       mapModel = NULL; }
-    if (pillarsModel)   { t3d_model_free(pillarsModel);   pillarsModel = NULL; }
-    if (pillarsFrontModel) { t3d_model_free(pillarsFrontModel); pillarsFrontModel = NULL; }
-    if (roomLedgeModel) { t3d_model_free(roomLedgeModel); roomLedgeModel = NULL; }
-    if (windowsModel)   { t3d_model_free(windowsModel);   windowsModel = NULL; }
-    if (chainsModel)    { t3d_model_free(chainsModel);    chainsModel = NULL; }
-    if (sunshaftsModel) { t3d_model_free(sunshaftsModel); sunshaftsModel = NULL; }
-    if (fogDoorModel)   { t3d_model_free(fogDoorModel);   fogDoorModel = NULL; }
-    if (roomFloorModel) { t3d_model_free(roomFloorModel); roomFloorModel = NULL; }
+    if (chainsDpl) {
+        rspq_block_free(chainsDpl);
+        chainsDpl = NULL;
+    }
+    if (floorGlowDpl) {
+        rspq_block_free(floorGlowDpl);
+        floorGlowDpl = NULL;
+    }
+    if (bossChainsGlowDpl) {
+        rspq_block_free(bossChainsGlowDpl);
+        bossChainsGlowDpl = NULL;
+    }
 
-    // --- Matrices (malloc_uncached) ---
-    if (mapMatrix)       { free_uncached(mapMatrix);       mapMatrix = NULL; }
-    if (pillarsMatrix)   { free_uncached(pillarsMatrix);   pillarsMatrix = NULL; }
-    if (pillarsFrontMatrix) { free_uncached(pillarsFrontMatrix); pillarsFrontMatrix = NULL; }
-    if (roomLedgeMatrix) { free_uncached(roomLedgeMatrix); roomLedgeMatrix = NULL; }
-    if (windowsMatrix)   { free_uncached(windowsMatrix);   windowsMatrix = NULL; }
-    if (chainsMatrix)    { free_uncached(chainsMatrix);    chainsMatrix = NULL; }
-    if (sunshaftsMatrix) { free_uncached(sunshaftsMatrix); sunshaftsMatrix = NULL; }
-    if (fogDoorMatrix)   { free_uncached(fogDoorMatrix);   fogDoorMatrix = NULL; }
-    if (roomFloorMatrix) { free_uncached(roomFloorMatrix); roomFloorMatrix = NULL; }
+    if (chainsModel) {
+        t3d_model_free(chainsModel);
+        chainsModel = NULL;
+    }
+    if (floorGlowModel) {
+        t3d_model_free(floorGlowModel);
+        floorGlowModel = NULL;
+    }
+    if (bossChainsGlowModel) {
+        t3d_model_free(bossChainsGlowModel);
+        bossChainsGlowModel = NULL;
+    }
+
+    if (chainsMatrix) {
+        free_uncached(chainsMatrix);
+        chainsMatrix = NULL;
+    }
+    if (floorGlowMatrix) {
+        free_uncached(floorGlowMatrix);
+        floorGlowMatrix = NULL;
+    }
+    if (bossChainsGlowMatrix) {
+        free_uncached(bossChainsGlowMatrix);
+        bossChainsGlowMatrix = NULL;
+    }
 }
+
 
 void scene_cleanup(void)
 {

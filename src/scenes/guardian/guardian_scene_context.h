@@ -14,6 +14,19 @@
 #include "../../game/boss/boss.h"
 #include "../../utilities/general_utility.h"
 
+/*
+ * The optimized room remains owned by guardian_scene.c. These functions expose
+ * its stable render passes to the existing cutscene files without copying raw
+ * frozen-block state into SceneContext.
+ */
+void scene_draw_environment_walls(void);
+void scene_draw_environment_floor(void);
+void scene_draw_environment_niches_windows(void);
+void scene_draw_environment_decals(void);
+void scene_draw_environment_pillars_statue(void);
+void scene_draw_environment_sunshafts(void);
+void scene_draw_environment_fog_door(void);
+
 typedef struct SceneContext {
     Boss *boss;
 
@@ -22,36 +35,7 @@ typedef struct SceneContext {
     GameState *gameState;
     bool *screenTransition;
 
-    // Main room assets.
-
-    T3DModel *windowsModel;
-    rspq_block_t *windowsDpl;
-    T3DMat4FP *windowsMatrix;
-
-    T3DModel *mapModel;
-    rspq_block_t *mapDpl;
-    T3DMat4FP *mapMatrix;
-
-    T3DModel *roomFloorModel;
-    rspq_block_t *roomFloorDpl;
-    T3DMat4FP *roomFloorMatrix;
-
-    T3DModel *roomLedgeModel;
-    rspq_block_t *roomLedgeDpl;
-    T3DMat4FP *roomLedgeMatrix;
-
-    T3DModel *pillarsModel;
-    rspq_block_t *pillarsDpl;
-    T3DMat4FP *pillarsMatrix;
-
-    T3DModel *pillarsFrontModel;
-    rspq_block_t *pillarsFrontDpl;
-    T3DMat4FP *pillarsFrontMatrix;
-
-    T3DModel *sunshaftsModel;
-    rspq_block_t *sunshaftsDpl;
-    T3DMat4FP *sunshaftsMatrix;
-
+    // Persistent ceiling chains remain separate from the room replacement.
     T3DModel *chainsModel;
     rspq_block_t *chainsDpl;
     T3DMat4FP *chainsMatrix;
