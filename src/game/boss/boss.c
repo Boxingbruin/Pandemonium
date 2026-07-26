@@ -705,10 +705,11 @@ void boss_init(Boss* boss)
     boss->currentAnimState = BOSS_ANIM_KNEEL;
     t3d_anim_set_playing(animations[BOSS_ANIM_KNEEL], true);
 
-    rspq_block_begin();
-    t3d_model_draw_skinned(bossModel, skeleton);
-    rspq_block_t* dpl = rspq_block_end();
-    boss->dpl = dpl;
+    /*
+     * boss_render.c records the full custom boss draw lazily as a frozen block
+     * at the real draw location, after the scene's live RDP state is active.
+     */
+    boss->dpl = NULL;
 
     if (!s_bossShadowModel) {
         s_bossShadowModel = t3d_model_load("rom:/blob_shadow/shadow.t3dm");

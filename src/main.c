@@ -183,32 +183,28 @@ int main(void)
         if (!devMenuOpen)
         {
             /*
-             * Opening credits are a real scene now, but they do not need camera,
-             * menu, character, or fixed-update ownership.
+             * Keep the old camera order for non-Guardian scenes.
+             * Guardian is the diagnostic case: apply its camera after character and
+             * scene updates have produced this frame's final camera target.
              */
-            if (!isOpeningCredits) {
+            if (!isOpeningCredits && !isGuardian) {
                 camera_update(&viewport);
             }
 
-            /*
-             * Title menu input is updated inside title_scene_update()
-             * via menu_controller_update_title().
-             *
-             * Normal menu_controller_update() still asks scene.c for GameState,
-             * so only call it while Guardian is active.
-             */
             if (isGuardian) {
                 menu_controller_update();
             }
 
             scene_controller_update();
 
-            /*
-             * Fixed update currently belongs to Guardian only.
-             * Title and Opening Credits do not need it.
-             */
             if (isGuardian) {
                 scene_fixed_update();
+
+                /*
+                 * TEMPORARY CAMERA-JITTER TEST:
+                 * Build the viewport after the Guardian character update.
+                 */
+                camera_update(&viewport);
             }
         }
         else

@@ -33,6 +33,23 @@ T3DModel* characterModel;
 T3DModel* characterShadowModel;
 Character character;
 
+/*
+ * Frozen-block benchmark toggle.
+ *
+ * 1: character_draw() uses a lazily recorded frozen block.
+ * 0: character_draw() uses the existing regular character.dpl_model block.
+ *
+ * character.dpl_model remains allocated in both modes because other render
+ * passes may replay it directly under a different RDP state.
+ */
+#define CHARACTER_RENDER_USE_FROZEN_BLOCK 1
+
+#if CHARACTER_RENDER_USE_FROZEN_BLOCK
+static rspq_block_t* s_characterFrozenDpl = NULL;
+static bool s_characterFrozenStateInitialized = false;
+static bool s_characterFrozenRecordedFlashActive = false;
+#endif
+
 // Sword collider config (player)
 static int   characterSwordBoneIndex = -1;       // cached bone index for sword/hand
 static const float SWORD_LENGTH = 640.0f;        // local-space length of sword capsule segment
@@ -2205,6 +2222,12 @@ void character_init(void)
 {
     sword_trail_init();
 
+#if CHARACTER_RENDER_USE_FROZEN_BLOCK
+    s_characterFrozenDpl = NULL;
+    s_characterFrozenStateInitialized = false;
+    s_characterFrozenRecordedFlashActive = false;
+#endif
+
     characterModel = t3d_model_load("rom:/knight/knight.t3dm");
     characterShadowModel = t3d_model_load("rom:/blob_shadow/shadow.t3dm");
 
@@ -2925,6 +2948,149 @@ void character_update_camera(void)
     lastLockOnActive = cameraLockOnActive;
 }
 
+#if CHARACTER_RENDER_USE_FROZEN_BLOCK
+
+static void character_log_frozen_stale_reasons(
+    int reasons,
+    const char* context
+) {
+    if (!DEV_MODE) return;
+
+    debugf(
+        "character: frozen block %s; reasons=%08lx",
+        context ? context : "<unknown>",
+        (unsigned long)(uint32_t)reasons
+    );
+
+    for (int bitIndex = 0; bitIndex < 32; ++bitIndex) {
+        uint32_t bit = 1U << bitIndex;
+
+        if (((uint32_t)reasons & bit) != 0) {
+            debugf(" %s", rdpq_block_stale_reason_str((int)bit));
+        }
+    }
+
+    debugf("\n");
+}
+
+static void character_discard_frozen_block(void)
+{
+    if (!s_characterFrozenDpl) return;
+
+    /*
+     * A previously replayed block may still be present in queued graphics work.
+     * Defer freeing it instead of forcing a synchronous rspq_wait().
+     */
+    rdpq_call_deferred(
+        (void (*)(void*))rspq_block_free,
+        s_characterFrozenDpl
+    );
+
+    s_characterFrozenDpl = NULL;
+}
+
+static bool character_record_frozen_block(void)
+{
+    if (!characterModel || !character.skeleton) {
+        return false;
+    }
+
+    character_discard_frozen_block();
+
+    /*
+     * Record only the skinned model commands. The changing world transform and
+     * primitive damage-flash color remain outside the frozen block.
+     *
+     * The model commands keep referencing the live skeleton matrix memory, so
+     * normal animation updates continue to change the rendered pose.
+     */
+    rspq_block_begin_frozen(NULL);
+        t3d_model_draw_skinned(characterModel, character.skeleton);
+    s_characterFrozenDpl = rspq_block_end_frozen();
+
+    if (!s_characterFrozenDpl) {
+        return false;
+    }
+
+    s_characterFrozenStateInitialized = true;
+    s_characterFrozenRecordedFlashActive =
+        character.damageFlashTimer > 0.0f;
+
+    return true;
+}
+
+static void character_draw_frozen(void)
+{
+    if (!character.modelMat || !characterModel || !character.skeleton) {
+        return;
+    }
+
+    /*
+     * Position, rotation and scale remain dynamic.
+     */
+    t3d_matrix_set(character.modelMat, true);
+
+    const bool flashActiveNow = character.damageFlashTimer > 0.0f;
+
+    /*
+     * Primitive color changes throughout the damage flash. Re-record while the
+     * flash is active and once when it ends so the frozen block is captured
+     * under the current live RDP state.
+     *
+     * Ordinary non-flashing frames reuse the same frozen block.
+     */
+    const bool frozenInputsChanged =
+        !s_characterFrozenStateInitialized
+        || flashActiveNow
+        || flashActiveNow != s_characterFrozenRecordedFlashActive;
+
+    if (frozenInputsChanged) {
+        character_discard_frozen_block();
+    }
+
+    if (s_characterFrozenDpl
+        && rspq_block_run_frozen(s_characterFrozenDpl)
+    ) {
+        return;
+    }
+
+    if (s_characterFrozenDpl) {
+        character_log_frozen_stale_reasons(
+            rdpq_block_stale_reasons(s_characterFrozenDpl),
+            "stale"
+        );
+    }
+
+    /*
+     * Record lazily at the real character draw location, after the scene has
+     * established the actual viewport, depth, fog, lighting and material state.
+     */
+    if (!character_record_frozen_block()) {
+        debugf("character: failed to record frozen model block\n");
+
+        if (character.dpl_model) {
+            rspq_block_run(character.dpl_model);
+        }
+        return;
+    }
+
+    if (!rspq_block_run_frozen(s_characterFrozenDpl)) {
+        character_log_frozen_stale_reasons(
+            rdpq_block_stale_reasons(s_characterFrozenDpl),
+            "immediately stale after recording"
+        );
+
+        /*
+         * Preserve the frame using the existing regular display list.
+         */
+        if (character.dpl_model) {
+            rspq_block_run(character.dpl_model);
+        }
+    }
+}
+
+#endif
+
 void character_draw_shadow(void)
 {
     if (!character.visible) return;
@@ -2962,8 +3128,14 @@ void character_draw(void)
 
     rdpq_set_prim_color(RGBA32(cr, cg, cb, ca));
 
+#if CHARACTER_RENDER_USE_FROZEN_BLOCK
+    character_draw_frozen();
+#else
+    if (!character.modelMat || !character.dpl_model) return;
+
     t3d_matrix_set(character.modelMat, true);
     rspq_block_run(character.dpl_model);
+#endif
 }
 
 void character_draw_ui(void)
@@ -3038,6 +3210,16 @@ void character_apply_damage(float amount)
 void character_delete(void)
 {
     rspq_wait();
+
+#if CHARACTER_RENDER_USE_FROZEN_BLOCK
+    if (s_characterFrozenDpl) {
+        rspq_block_free(s_characterFrozenDpl);
+        s_characterFrozenDpl = NULL;
+    }
+
+    s_characterFrozenStateInitialized = false;
+    s_characterFrozenRecordedFlashActive = false;
+#endif
 
     t3d_model_free(characterModel);
 

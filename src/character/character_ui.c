@@ -11,6 +11,13 @@
 #define CHARACTER_UI_TRAIL_HOLD_TIME 0.35f
 #define CHARACTER_UI_TRAIL_DECAY_RATE 0.6f
 
+/*
+ * Profiling toggle:
+ * 1 = draw the C-button diamond, potion icon and potion count.
+ * 0 = draw only health and stamina.
+ */
+#define CHARACTER_UI_DRAW_C_BUTTONS 1
+
 typedef struct {
     float lossTrail;
     float gainTrail;
@@ -42,6 +49,27 @@ static float character_ui_clampf(float x, float lo, float hi)
     if (x < lo) return lo;
     if (x > hi) return hi;
     return x;
+}
+
+
+static void character_ui_begin(void)
+{
+    /*
+     * Configure the 2D HUD pipeline once. No manual sync-pipe calls are needed;
+     * libdragon tracks and resolves mode changes internally.
+     */
+    rdpq_set_mode_standard();
+
+#ifdef RDPQ_FOG_DISABLED
+    rdpq_mode_fog(RDPQ_FOG_DISABLED);
+#else
+    rdpq_mode_fog(0);
+#endif
+
+    rdpq_mode_antialias(AA_NONE);
+    rdpq_mode_alphacompare(0);
+    rdpq_mode_blender(RDPQ_BLENDER_MULTIPLY);
+    rdpq_mode_filter(FILTER_BILINEAR);
 }
 
 static void character_ui_reset_bar_trail(CharacterUiBarTrailState *s, float ratio)
@@ -194,23 +222,12 @@ void character_ui_set_intro(float progress)
     s_playerUiIntro = character_ui_clampf(progress, 0.0f, 1.0f);
 }
 
-void character_ui_draw_health_bar(const char *name, float ratio, float flash)
+static void character_ui_draw_health_bar_impl(const char *name, float ratio, float flash)
 {
     (void)name;
 
     ratio = character_ui_clampf(ratio, 0.0f, 1.0f);
     flash = character_ui_clampf(flash, 0.0f, 1.0f);
-
-    rdpq_set_mode_standard();
-
-#ifdef RDPQ_FOG_DISABLED
-    rdpq_mode_fog(RDPQ_FOG_DISABLED);
-#else
-    rdpq_mode_fog(0);
-#endif
-
-    rdpq_mode_combiner(RDPQ_COMBINER_FLAT);
-    rdpq_mode_blender(RDPQ_BLENDER_MULTIPLY);
 
     const int marginX = ui_safe_margin_x();
     const int marginY = ui_safe_margin_y();
@@ -271,20 +288,9 @@ void character_ui_draw_health_bar(const char *name, float ratio, float flash)
     rdpq_fill_rectangle(right - 1, top, right, bottom);
 }
 
-void character_ui_draw_stamina_bar(float ratio)
+static void character_ui_draw_stamina_bar_impl(float ratio)
 {
     ratio = character_ui_clampf(ratio, 0.0f, 1.0f);
-
-    rdpq_set_mode_standard();
-
-#ifdef RDPQ_FOG_DISABLED
-    rdpq_mode_fog(RDPQ_FOG_DISABLED);
-#else
-    rdpq_mode_fog(0);
-#endif
-
-    rdpq_mode_combiner(RDPQ_COMBINER_FLAT);
-    rdpq_mode_blender(RDPQ_BLENDER_MULTIPLY);
 
     const int marginX = ui_safe_margin_x();
     const int marginY = ui_safe_margin_y();
@@ -349,7 +355,7 @@ void character_ui_draw_stamina_bar(float ratio)
     rdpq_fill_rectangle(right - 1, top, right, bottom);
 }
 
-void character_ui_draw_c_buttons(void)
+static void character_ui_draw_c_buttons_impl(void)
 {
     // Bottom-left C-button diamond.
     // This should be called by scene after the 3D/world pass, with the rest of
@@ -396,10 +402,12 @@ void character_ui_draw_c_buttons(void)
     int downX  = centerX;
     int downY  = centerY + spacingY;
 
-    rdpq_set_mode_standard();
+    /*
+     * Switch only the combiner needed for sprite drawing. The rest of the
+     * pipeline was configured once by character_ui_begin().
+     */
     rdpq_mode_alphacompare(0);
-    rdpq_mode_blender(RDPQ_BLENDER_MULTIPLY);
-    rdpq_mode_filter(FILTER_BILINEAR);
+    rdpq_mode_combiner(RDPQ_COMBINER_TEX);
 
     if (s_cUpSprite && s_cUpSurf.width > 0 && s_cUpSurf.height > 0) {
         rdpq_sprite_blit(s_cUpSprite, upX, upY, &(rdpq_blitparms_t){
@@ -461,11 +469,8 @@ void character_ui_draw_c_buttons(void)
 
         // Tint the IA8 bottle sprite dark red so it contrasts against the
         // yellow button.
-        rdpq_set_mode_standard();
         rdpq_mode_alphacompare(1);
         rdpq_mode_combiner(RDPQ_COMBINER_TEX_FLAT);
-        rdpq_mode_blender(RDPQ_BLENDER_MULTIPLY);
-        rdpq_mode_filter(FILTER_BILINEAR);
         rdpq_set_prim_color(RGBA32(180, 30, 30, 255));
 
         rdpq_sprite_blit(s_healthBottleSprite, leftX, leftY, &(rdpq_blitparms_t){
@@ -481,13 +486,32 @@ void character_ui_draw_c_buttons(void)
         const int textX = leftX + (drawW / 2) + 2;
         const int textY = leftY + 4;
 
-        rdpq_set_mode_standard();
+        rdpq_mode_alphacompare(0);
         rdpq_mode_combiner(RDPQ_COMBINER_FLAT);
-        rdpq_mode_blender(RDPQ_BLENDER_MULTIPLY);
         rdpq_set_prim_color(RGBA32(0, 0, 0, 255));
 
         rdpq_text_printf(NULL, FONT_UNBALANCED, textX, textY, "%d", potionCount);
     }
+}
+
+void character_ui_draw_health_bar(const char *name, float ratio, float flash)
+{
+    character_ui_begin();
+    rdpq_mode_combiner(RDPQ_COMBINER_FLAT);
+    character_ui_draw_health_bar_impl(name, ratio, flash);
+}
+
+void character_ui_draw_stamina_bar(float ratio)
+{
+    character_ui_begin();
+    rdpq_mode_combiner(RDPQ_COMBINER_FLAT);
+    character_ui_draw_stamina_bar_impl(ratio);
+}
+
+void character_ui_draw_c_buttons(void)
+{
+    character_ui_begin();
+    character_ui_draw_c_buttons_impl();
 }
 
 void character_ui_draw(void)
@@ -499,12 +523,19 @@ void character_ui_draw(void)
 
     float hpRatio = (maxHp > 0.0f) ? (hp / maxHp) : 0.0f;
     float staminaRatio = (maxStamina > 0.0f) ? (stamina / maxStamina) : 0.0f;
+    float damageFlash = character_get_damage_flash_ratio();
 
-    // If your character module does not expose a damage flash value yet,
-    // keep this at 0.0f. Later this should come from character visual feedback.
-    float damageFlash = 0.0f;
+    /*
+     * One standard-mode setup for the complete character HUD.
+     * Subsequent sections change only combiner/alpha state as needed.
+     */
+    character_ui_begin();
 
-    character_ui_draw_health_bar("Player", hpRatio, damageFlash);
-    character_ui_draw_stamina_bar(staminaRatio);
-    character_ui_draw_c_buttons();
+    rdpq_mode_combiner(RDPQ_COMBINER_FLAT);
+    character_ui_draw_health_bar_impl("Player", hpRatio, damageFlash);
+    character_ui_draw_stamina_bar_impl(staminaRatio);
+
+#if CHARACTER_UI_DRAW_C_BUTTONS
+    character_ui_draw_c_buttons_impl();
+#endif
 }

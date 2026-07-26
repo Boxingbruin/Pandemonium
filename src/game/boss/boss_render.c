@@ -21,6 +21,17 @@ static const float BOSS_SHADOW_GROUND_Y = -1.0f;  // Match roomY floor level
 static const float BOSS_JUMP_REF_HEIGHT = 120.0f;
 static const float BOSS_SHADOW_BASE_ALPHA = 120.0f;
 
+/*
+ * Frozen-block benchmark toggle.
+ *
+ * 1: lazily record the old full custom boss draw as a frozen block and replay it.
+ * 0: use the original per-frame t3d_model_draw_custom() path.
+ *
+ * The frozen path keeps animation and the boss model matrix live, but the
+ * scrolling texture coordinates are captured when the block is recorded.
+ */
+#define BOSS_RENDER_USE_FROZEN_BLOCK 1
+
 // Damage flash material tint cache: t3d sets prim color per material from the
 // model asset, so an external rdpq_set_prim_color() gets clobbered. We mutate
 // each material's primColor while flashing and restore on flash end.
@@ -210,8 +221,10 @@ void boss_draw_init(void)
     }
 }
 
-static void boss_draw_scrolling(Boss* boss)
+static void boss_submit_model_commands(Boss* boss)
 {
+    if (!boss || !boss->model || !boss->skeleton) return;
+
     BossDrawUserData ud = {
         .scroll = &bossScrollDyn,
         .boss = boss,
@@ -219,36 +232,169 @@ static void boss_draw_scrolling(Boss* boss)
 
     T3DSkeleton* skel = (T3DSkeleton*)boss->skeleton;
 
-    // If the scrolling texture was not loaded, avoid the custom dyn texture path.
-    // This prevents startup crashes if the sprite is not present in the current ROM.
-    if (!bossScrollDyn.spr) {
-        t3d_matrix_set(boss->modelMat, true);
-
-        t3d_model_draw_custom(boss->model, (T3DModelDrawConf){
-            .userData = &ud,
-            .tileCb = NULL,
-            .filterCb = boss_filter_hide_swords_when_dead,
-            .dynTextureCb = NULL,
-            .matrices = (skel && skel->bufferCount == 1)
-                ? skel->boneMatricesFP
-                : (const T3DMat4FP*)t3d_segment_placeholder(T3D_SEGMENT_SKELETON),
-        });
-
-        return;
-    }
-
-    t3d_matrix_set(boss->modelMat, true);
-
     t3d_model_draw_custom(boss->model, (T3DModelDrawConf){
         .userData = &ud,
         .tileCb = NULL,
         .filterCb = boss_filter_hide_swords_when_dead,
-        .dynTextureCb = boss_scroll_dyn_cb_wrapper,
+        .dynTextureCb = bossScrollDyn.spr
+            ? boss_scroll_dyn_cb_wrapper
+            : NULL,
         .matrices = (skel && skel->bufferCount == 1)
             ? skel->boneMatricesFP
-            : (const T3DMat4FP*)t3d_segment_placeholder(T3D_SEGMENT_SKELETON),
+            : (const T3DMat4FP*)t3d_segment_placeholder(
+                T3D_SEGMENT_SKELETON
+            ),
     });
 }
+
+#if BOSS_RENDER_USE_FROZEN_BLOCK
+
+static bool s_bossFrozenStateInitialized = false;
+static bool s_bossFrozenRecordedDead = false;
+static bool s_bossFrozenRecordedFlashActive = false;
+
+static void boss_log_frozen_stale_reasons(
+    const Boss* boss,
+    int reasons,
+    const char* context
+) {
+    if (!DEV_MODE) return;
+
+    debugf(
+        "boss_render: frozen block %s; state=%d reasons=%08lx",
+        context ? context : "<unknown>",
+        boss ? (int)boss->state : -1,
+        (unsigned long)(uint32_t)reasons
+    );
+
+    for (int bitIndex = 0; bitIndex < 32; ++bitIndex) {
+        uint32_t bit = 1U << bitIndex;
+
+        if (((uint32_t)reasons & bit) != 0) {
+            debugf(" %s", rdpq_block_stale_reason_str((int)bit));
+        }
+    }
+
+    debugf("\n");
+}
+
+static void boss_discard_frozen_block(Boss* boss)
+{
+    if (!boss || !boss->dpl) return;
+
+    /*
+     * The old block may still be referenced by queued RSP/RDP work. Defer the
+     * free rather than synchronously stalling with rspq_wait().
+     */
+    rdpq_call_deferred(
+        (void (*)(void*))rspq_block_free,
+        boss->dpl
+    );
+
+    boss->dpl = NULL;
+}
+
+static bool boss_record_frozen_block(Boss* boss)
+{
+    if (!boss || !boss->model || !boss->skeleton) return false;
+
+    boss_discard_frozen_block(boss);
+
+    rspq_block_begin_frozen(NULL);
+        boss_submit_model_commands(boss);
+    boss->dpl = rspq_block_end_frozen();
+
+    if (!boss->dpl) {
+        return false;
+    }
+
+    s_bossFrozenStateInitialized = true;
+    s_bossFrozenRecordedDead = boss->state == BOSS_STATE_DEAD;
+    s_bossFrozenRecordedFlashActive = boss->damageFlashTimer > 0.0f;
+
+    return true;
+}
+
+static void boss_draw_frozen(Boss* boss)
+{
+    if (!boss || !boss->modelMat) return;
+
+    /*
+     * Keep the changing world transform outside the frozen block.
+     * The model's skinning commands still reference the live skeleton matrices.
+     */
+    t3d_matrix_set((T3DMat4FP*)boss->modelMat, true);
+
+    const bool deadNow = boss->state == BOSS_STATE_DEAD;
+    const bool flashActiveNow = boss->damageFlashTimer > 0.0f;
+
+    /*
+     * The filter result changes when the boss dies. The damage-flash code also
+     * mutates material colors, so rebuild during the short flash and once when
+     * it ends. Normal frames reuse one frozen block.
+     *
+     * Scrolling texture coordinates are intentionally NOT a rebuild trigger;
+     * they remain fixed at the values captured when the block was recorded.
+     */
+    const bool frozenInputsChanged =
+        !s_bossFrozenStateInitialized
+        || deadNow != s_bossFrozenRecordedDead
+        || flashActiveNow
+        || flashActiveNow != s_bossFrozenRecordedFlashActive;
+
+    if (frozenInputsChanged) {
+        boss_discard_frozen_block(boss);
+    }
+
+    if (boss->dpl && rspq_block_run_frozen((rspq_block_t*)boss->dpl)) {
+        return;
+    }
+
+    if (boss->dpl) {
+        boss_log_frozen_stale_reasons(
+            boss,
+            rdpq_block_stale_reasons((rspq_block_t*)boss->dpl),
+            "stale"
+        );
+    }
+
+    /*
+     * Record lazily here, after the scene has established the real draw-pass
+     * state. Recording during boss_init() would capture unrelated initialization
+     * state and make the block immediately stale.
+     */
+    if (!boss_record_frozen_block(boss)) {
+        debugf("boss_render: failed to record frozen boss block\n");
+        boss_submit_model_commands(boss);
+        return;
+    }
+
+    if (!rspq_block_run_frozen((rspq_block_t*)boss->dpl)) {
+        boss_log_frozen_stale_reasons(
+            boss,
+            rdpq_block_stale_reasons((rspq_block_t*)boss->dpl),
+            "immediately stale after recording"
+        );
+
+        /*
+         * Preserve the frame visually if the live state cannot support a frozen
+         * block at this draw location.
+         */
+        boss_submit_model_commands(boss);
+    }
+}
+
+#else
+
+static void boss_draw_original_dynamic(Boss* boss)
+{
+    if (!boss || !boss->modelMat) return;
+
+    t3d_matrix_set((T3DMat4FP*)boss->modelMat, true);
+    boss_submit_model_commands(boss);
+}
+
+#endif
 
 // Draw only the shadow - should be called in a batched shadow pass with zbuf(false, false)
 void boss_draw_shadow(Boss* boss)
@@ -307,7 +453,11 @@ void boss_render_draw(Boss* boss)
         boss_flash_restore();
     }
 
-    boss_draw_scrolling(boss);
+#if BOSS_RENDER_USE_FROZEN_BLOCK
+    boss_draw_frozen(boss);
+#else
+    boss_draw_original_dynamic(boss);
+#endif
 
     // Draw sword attached to Hand-Right bone.
     if (boss->handRightBoneIndex >= 0 && boss->swordDpl && boss->swordMatFP) {

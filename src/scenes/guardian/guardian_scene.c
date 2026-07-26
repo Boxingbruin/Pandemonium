@@ -43,6 +43,9 @@
 #include "../../fx/sword_trail.h"
 #include "../../fx/screen_shake.h"
 
+/* Loaded and owned by character.c; used only to record a material-free shadow DPL. */
+extern T3DModel *characterModel;
+
 // TODO: This should not be declared in the header file, as it is only used externally (temp)
 #include "dev.h"
 #include "debug_draw.h"
@@ -62,6 +65,10 @@ void tile_double_scroll(void *userData, rdpq_texparms_t *tp, rdpq_tile_t tile);
 
 // Forward declaration: scene_init() and scene_restart() start the Guardian intro.
 void scene_init_cutscene(void);
+
+/* Debug-start helpers are defined later in this file. */
+void scene_init_playing(bool skippedCutscene);
+static void scene_debug_force_boss_defeated(void);
 
 T3DModel* chainsModel;
 rspq_block_t* chainsDpl;
@@ -99,6 +106,14 @@ ScrollParams bossChainsGlowScrollParams = {
 
 // Guardian room vertical offset
 static float roomY = -1.0f;
+
+/*
+ * Temporary startup override.
+ *
+ * 1: skip the Guardian intro/fight and begin directly in the post-defeat state.
+ * 0: use the normal phase-1 intro and boss fight.
+ */
+#define GUARDIAN_DEBUG_START_BOSS_DEFEATED 0
 
 #define GUARDIAN_ENVIRONMENT_PATH_PREFIX "rom:/boss_room/"
 
@@ -366,6 +381,891 @@ static GuardianEnvironmentObject s_environmentDecalsLayer1;
 static GuardianEnvironmentObject s_environmentDecalsLayer2;
 static GuardianEnvironmentObject s_environmentFogDoor;
 static GuardianEnvironmentObject s_environmentSunshafts;
+
+/*
+ * Shared realtime actor shadows
+ * -----------------------------
+ *
+ * One 128x64 I8 render target is split into two non-owning 64x64 sub-surfaces:
+ *
+ *   x = 0..63    character silhouette
+ *   x = 64..127  boss silhouette
+ *
+ * Both actors are captured during one attach / clear / Tiny3D pass. The two
+ * 64x64 I8 sub-surfaces are then uploaded independently because either one
+ * exactly fills the RDP's 4 KiB TMEM.
+ *
+ * The projected quads are still independent world-space geometry, allowing the
+ * character and boss to use different capture framing and floor-shadow sizes.
+ */
+#define GUARDIAN_RT_SHADOW_TILE_WIDTH 64
+#define GUARDIAN_RT_SHADOW_TILE_HEIGHT 64
+#define GUARDIAN_RT_SHADOW_ATLAS_WIDTH \
+    (GUARDIAN_RT_SHADOW_TILE_WIDTH * 2)
+#define GUARDIAN_RT_SHADOW_ATLAS_HEIGHT \
+    GUARDIAN_RT_SHADOW_TILE_HEIGHT
+
+/*
+ * Capture both silhouettes together every second rendered frame. The most
+ * recent two 64x64 textures and both projected quads are reused on the skipped
+ * frame.
+ */
+#define GUARDIAN_RT_SHADOW_CAPTURE_INTERVAL 2
+
+/* Shared light-ray direction and draw state. */
+#define GUARDIAN_RT_SHADOW_GROUND_Y 4.10f
+#define GUARDIAN_RT_SHADOW_DEPTH_OFFSET (-0x60)
+
+/* Character capture framing and projection dimensions. */
+#define GUARDIAN_CHARACTER_RT_SHADOW_CAPTURE_DISTANCE 40.0f
+#define GUARDIAN_CHARACTER_RT_SHADOW_CAPTURE_TARGET_HEIGHT 14.0f
+#define GUARDIAN_CHARACTER_RT_SHADOW_CAPTURE_FOV_DEG 32.0f
+#define GUARDIAN_CHARACTER_RT_SHADOW_CAPTURE_ASPECT 1.0f
+#define GUARDIAN_CHARACTER_RT_SHADOW_NEAR_PLANE 5.0f
+#define GUARDIAN_CHARACTER_RT_SHADOW_FAR_PLANE 450.0f
+
+#define GUARDIAN_CHARACTER_RT_SHADOW_LENGTH 40.0f
+#define GUARDIAN_CHARACTER_RT_SHADOW_HALF_WIDTH 20.0f
+
+/*
+ * Pull the near edge slightly farther behind the character so the projected
+ * silhouette reaches underneath the feet rather than beginning just beyond
+ * the contact point.
+ */
+#define GUARDIAN_CHARACTER_RT_SHADOW_ORIGIN_BACK_OFFSET 3.0f
+#define GUARDIAN_CHARACTER_RT_SHADOW_ALPHA 70
+
+/*
+ * Initial boss framing values.
+ *
+ * The boss is much larger than the character, so its camera is farther away
+ * and centered higher. These constants are intentionally grouped here for
+ * visual tuning after the first hardware test.
+ */
+#define GUARDIAN_BOSS_RT_SHADOW_CAPTURE_DISTANCE 140.0f
+#define GUARDIAN_BOSS_RT_SHADOW_CAPTURE_TARGET_HEIGHT 40.0f
+#define GUARDIAN_BOSS_RT_SHADOW_CAPTURE_FOV_DEG 32.0f
+#define GUARDIAN_BOSS_RT_SHADOW_CAPTURE_ASPECT 1.0f
+#define GUARDIAN_BOSS_RT_SHADOW_NEAR_PLANE 5.0f
+#define GUARDIAN_BOSS_RT_SHADOW_FAR_PLANE 700.0f
+
+#define GUARDIAN_BOSS_RT_SHADOW_LENGTH 80.0f
+#define GUARDIAN_BOSS_RT_SHADOW_HALF_WIDTH 40.0f
+#define GUARDIAN_BOSS_RT_SHADOW_ORIGIN_BACK_OFFSET 4.0f
+#define GUARDIAN_BOSS_RT_SHADOW_ALPHA 70
+
+/*
+ * Actor light and shadow source
+ * -----------------------------
+ *
+ * The conceptual source sits 400 units above and 400 units along world Z-:
+ *
+ *     source = (0, 400, -400)
+ *
+ * Light rays travel from that source toward scene origin at 45 degrees:
+ *
+ *     shadow ray = (0, -0.7071, +0.7071)
+ *
+ * Tiny3D's actor-light vector is supplied in the opposite, surface-to-light
+ * direction:
+ *
+ *     actor light = (0, +0.7071, -0.7071)
+ *
+ * The source position independently derives each actor's shadow ray, allowing
+ * projected shadows to rotate as the character and boss move around the room.
+ */
+#define GUARDIAN_ACTOR_LIGHT_SOURCE_X 0.0f
+#define GUARDIAN_ACTOR_LIGHT_SOURCE_Y 400.0f
+#define GUARDIAN_ACTOR_LIGHT_SOURCE_Z (-400.0f)
+
+#define GUARDIAN_ACTOR_DIRECTIONAL_LIGHT_LEVEL 255
+
+/*
+ * Actors use 65% of the scene ambient while the directional light is
+ * active. This gives the maximum-strength directional light enough contrast
+ * without making the actors dramatically darker than the environment.
+ */
+#define GUARDIAN_ACTOR_AMBIENT_SCALE 0.65f
+
+static const uint8_t s_actorDirectionalLightColor[4] = {
+    GUARDIAN_ACTOR_DIRECTIONAL_LIGHT_LEVEL,
+    GUARDIAN_ACTOR_DIRECTIONAL_LIGHT_LEVEL,
+    GUARDIAN_ACTOR_DIRECTIONAL_LIGHT_LEVEL,
+    255,
+};
+
+/* Updated from colorAmbient immediately before each actor draw. */
+static uint8_t s_actorAmbientColor[4] = {0, 0, 0, 255};
+
+static const T3DVec3 s_actorDirectionalLightDirection = {{
+    0.0f,
+    0.70710678f,
+    -0.70710678f,
+}};
+
+static const T3DVec3 s_rtShadowLightSource = {{
+    GUARDIAN_ACTOR_LIGHT_SOURCE_X,
+    GUARDIAN_ACTOR_LIGHT_SOURCE_Y,
+    GUARDIAN_ACTOR_LIGHT_SOURCE_Z,
+}};
+
+/*
+ * Call only after the onscreen viewport has been attached. Tiny3D transforms
+ * directional lights into the current viewport's view space when configured.
+ */
+static void guardian_actor_directional_light_enable(void)
+{
+    /*
+     * Derive actor ambient from the current scene ambient so cutscene or room
+     * lighting changes are preserved, only reduced in strength.
+     */
+    for (int channel = 0; channel < 3; ++channel) {
+        float scaled =
+            (float)colorAmbient[channel] * GUARDIAN_ACTOR_AMBIENT_SCALE;
+
+        if (scaled < 0.0f) scaled = 0.0f;
+        if (scaled > 255.0f) scaled = 255.0f;
+
+        s_actorAmbientColor[channel] = (uint8_t)lroundf(scaled);
+    }
+    s_actorAmbientColor[3] = colorAmbient[3];
+
+    t3d_light_set_ambient(s_actorAmbientColor);
+    t3d_light_set_directional(
+        0,
+        s_actorDirectionalLightColor,
+        &s_actorDirectionalLightDirection
+    );
+    t3d_light_set_count(1);
+}
+
+static void guardian_actor_directional_light_disable(void)
+{
+    /*
+     * Return immediately to the room's normal ambient-only state so fog door,
+     * chains, projections, particles and UI do not inherit actor lighting.
+     */
+    t3d_light_set_count(0);
+    t3d_light_set_ambient(colorAmbient);
+}
+
+/* One owned capture buffer and two non-owning 64x64 texture views. */
+static surface_t s_rtShadowAtlas;
+static surface_t s_characterRtShadowTexture;
+static surface_t s_bossRtShadowTexture;
+
+/* Independent viewport/camera state for each 64x64 atlas region. */
+static T3DViewport s_characterRtShadowViewport;
+static T3DViewport s_bossRtShadowViewport;
+
+/* Independent projected floor quads; both use one shared identity matrix. */
+static T3DVertPacked *s_characterRtShadowVertices = NULL;
+static T3DVertPacked *s_bossRtShadowVertices = NULL;
+static T3DMat4FP *s_rtShadowIdentityMatrix = NULL;
+
+/*
+ * Geometry-only command blocks. They reference the actors' existing live
+ * skeleton matrices and intentionally contain no materials or textures.
+ */
+static rspq_block_t *s_characterRtShadowGeometryDpl = NULL;
+static rspq_block_t *s_bossRtShadowGeometryDpl = NULL;
+
+static bool s_rtShadowsInitialized = false;
+static uint8_t s_rtShadowCaptureCountdown = 0;
+
+static void guardian_rt_shadows_cleanup(void);
+
+static inline int16_t guardian_rt_shadow_to_s16(float value)
+{
+    if (value < -32768.0f) value = -32768.0f;
+    if (value > 32767.0f) value = 32767.0f;
+    return (int16_t)lroundf(value);
+}
+
+static inline int16_t guardian_rt_shadow_uv(float texel)
+{
+    /* Tiny3D UVs use signed 10.5 fixed-point pixel coordinates. */
+    return (int16_t)lroundf(texel * 32.0f);
+}
+
+static void guardian_rt_shadow_write_vertex(
+    T3DVertPacked *pair,
+    bool vertexB,
+    float x,
+    float y,
+    float z,
+    int16_t s,
+    int16_t t,
+    uint16_t packedNormal
+) {
+    if (!pair) return;
+
+    if (vertexB) {
+        pair->posB[0] = guardian_rt_shadow_to_s16(x);
+        pair->posB[1] = guardian_rt_shadow_to_s16(y);
+        pair->posB[2] = guardian_rt_shadow_to_s16(z);
+        pair->normB = packedNormal;
+        pair->rgbaB = 0xFFFFFFFFu;
+        pair->stB[0] = s;
+        pair->stB[1] = t;
+    } else {
+        pair->posA[0] = guardian_rt_shadow_to_s16(x);
+        pair->posA[1] = guardian_rt_shadow_to_s16(y);
+        pair->posA[2] = guardian_rt_shadow_to_s16(z);
+        pair->normA = packedNormal;
+        pair->rgbaA = 0xFFFFFFFFu;
+        pair->stA[0] = s;
+        pair->stA[1] = t;
+    }
+}
+
+static rspq_block_t *guardian_rt_shadow_record_geometry(
+    const T3DModel *model,
+    const T3DMat4FP *boneMatrices
+) {
+    if (!model || !boneMatrices) return NULL;
+
+    rspq_block_begin();
+
+        T3DModelIter iterator = t3d_model_iter_create(
+            model,
+            T3D_CHUNK_TYPE_OBJECT
+        );
+
+        while (t3d_model_iter_next(&iterator)) {
+            t3d_model_draw_object(iterator.object, boneMatrices);
+        }
+
+    return rspq_block_end();
+}
+
+static bool guardian_rt_shadows_init(Boss *boss)
+{
+    if (s_rtShadowsInitialized) return true;
+
+    if (!characterModel
+        || !character.skeleton
+        || !character.skeleton->boneMatricesFP
+    ) {
+        debugf("guardian realtime shadows: character model/skeleton unavailable\n");
+        return false;
+    }
+
+    if (!boss
+        || !boss->model
+        || !boss->skeleton
+        || !((T3DSkeleton *)boss->skeleton)->boneMatricesFP
+    ) {
+        debugf("guardian realtime shadows: boss model/skeleton unavailable\n");
+        return false;
+    }
+
+    memset(&s_rtShadowAtlas, 0, sizeof(s_rtShadowAtlas));
+    memset(&s_characterRtShadowTexture, 0, sizeof(s_characterRtShadowTexture));
+    memset(&s_bossRtShadowTexture, 0, sizeof(s_bossRtShadowTexture));
+    memset(&s_characterRtShadowViewport, 0, sizeof(s_characterRtShadowViewport));
+    memset(&s_bossRtShadowViewport, 0, sizeof(s_bossRtShadowViewport));
+
+    /*
+     * I8 is the smallest format that can be used directly as an RDP color
+     * target. The complete atlas is 128x64x1 byte = 8192 bytes.
+     */
+    s_rtShadowAtlas = surface_alloc(
+        FMT_I8,
+        GUARDIAN_RT_SHADOW_ATLAS_WIDTH,
+        GUARDIAN_RT_SHADOW_ATLAS_HEIGHT
+    );
+
+    if (!s_rtShadowAtlas.buffer) {
+        debugf("guardian realtime shadows: failed to allocate 128x64 I8 atlas\n");
+        goto fail;
+    }
+
+    /*
+     * These are only rectangular views into the atlas. No additional pixel
+     * buffers or copies are allocated.
+     */
+    s_characterRtShadowTexture = surface_make_sub(
+        &s_rtShadowAtlas,
+        0,
+        0,
+        GUARDIAN_RT_SHADOW_TILE_WIDTH,
+        GUARDIAN_RT_SHADOW_TILE_HEIGHT
+    );
+
+    s_bossRtShadowTexture = surface_make_sub(
+        &s_rtShadowAtlas,
+        GUARDIAN_RT_SHADOW_TILE_WIDTH,
+        0,
+        GUARDIAN_RT_SHADOW_TILE_WIDTH,
+        GUARDIAN_RT_SHADOW_TILE_HEIGHT
+    );
+
+    s_characterRtShadowVertices = malloc_uncached(
+        sizeof(T3DVertPacked) * 2
+    );
+    s_bossRtShadowVertices = malloc_uncached(
+        sizeof(T3DVertPacked) * 2
+    );
+    s_rtShadowIdentityMatrix = malloc_uncached(sizeof(T3DMat4FP));
+
+    if (!s_characterRtShadowVertices
+        || !s_bossRtShadowVertices
+        || !s_rtShadowIdentityMatrix
+    ) {
+        debugf("guardian realtime shadows: failed to allocate quad/matrix data\n");
+        goto fail;
+    }
+
+    memset(
+        s_characterRtShadowVertices,
+        0,
+        sizeof(T3DVertPacked) * 2
+    );
+    memset(
+        s_bossRtShadowVertices,
+        0,
+        sizeof(T3DVertPacked) * 2
+    );
+    t3d_mat4fp_identity(s_rtShadowIdentityMatrix);
+
+    s_characterRtShadowGeometryDpl = guardian_rt_shadow_record_geometry(
+        characterModel,
+        character.skeleton->boneMatricesFP
+    );
+
+    T3DSkeleton *bossSkeleton = (T3DSkeleton *)boss->skeleton;
+
+    s_bossRtShadowGeometryDpl = guardian_rt_shadow_record_geometry(
+        (const T3DModel *)boss->model,
+        bossSkeleton->boneMatricesFP
+    );
+
+    if (!s_characterRtShadowGeometryDpl || !s_bossRtShadowGeometryDpl) {
+        debugf("guardian realtime shadows: failed to record actor geometry blocks\n");
+        goto fail;
+    }
+
+    s_characterRtShadowViewport = t3d_viewport_create_buffered(
+        FRAME_BUFFER_COUNT
+    );
+    s_bossRtShadowViewport = t3d_viewport_create_buffered(
+        FRAME_BUFFER_COUNT
+    );
+
+    t3d_viewport_set_area(
+        &s_characterRtShadowViewport,
+        0,
+        0,
+        GUARDIAN_RT_SHADOW_TILE_WIDTH,
+        GUARDIAN_RT_SHADOW_TILE_HEIGHT
+    );
+    t3d_viewport_set_perspective(
+        &s_characterRtShadowViewport,
+        T3D_DEG_TO_RAD(GUARDIAN_CHARACTER_RT_SHADOW_CAPTURE_FOV_DEG),
+        GUARDIAN_CHARACTER_RT_SHADOW_CAPTURE_ASPECT,
+        GUARDIAN_CHARACTER_RT_SHADOW_NEAR_PLANE,
+        GUARDIAN_CHARACTER_RT_SHADOW_FAR_PLANE
+    );
+
+    t3d_viewport_set_area(
+        &s_bossRtShadowViewport,
+        GUARDIAN_RT_SHADOW_TILE_WIDTH,
+        0,
+        GUARDIAN_RT_SHADOW_TILE_WIDTH,
+        GUARDIAN_RT_SHADOW_TILE_HEIGHT
+    );
+    t3d_viewport_set_perspective(
+        &s_bossRtShadowViewport,
+        T3D_DEG_TO_RAD(GUARDIAN_BOSS_RT_SHADOW_CAPTURE_FOV_DEG),
+        GUARDIAN_BOSS_RT_SHADOW_CAPTURE_ASPECT,
+        GUARDIAN_BOSS_RT_SHADOW_NEAR_PLANE,
+        GUARDIAN_BOSS_RT_SHADOW_FAR_PLANE
+    );
+
+    s_rtShadowCaptureCountdown = 0;
+    s_rtShadowsInitialized = true;
+    return true;
+
+fail:
+    guardian_rt_shadows_cleanup();
+    return false;
+}
+
+static void guardian_rt_shadows_cleanup(void)
+{
+    if (s_characterRtShadowGeometryDpl) {
+        rspq_block_free(s_characterRtShadowGeometryDpl);
+        s_characterRtShadowGeometryDpl = NULL;
+    }
+
+    if (s_bossRtShadowGeometryDpl) {
+        rspq_block_free(s_bossRtShadowGeometryDpl);
+        s_bossRtShadowGeometryDpl = NULL;
+    }
+
+    if (s_characterRtShadowVertices) {
+        free_uncached(s_characterRtShadowVertices);
+        s_characterRtShadowVertices = NULL;
+    }
+
+    if (s_bossRtShadowVertices) {
+        free_uncached(s_bossRtShadowVertices);
+        s_bossRtShadowVertices = NULL;
+    }
+
+    if (s_rtShadowIdentityMatrix) {
+        free_uncached(s_rtShadowIdentityMatrix);
+        s_rtShadowIdentityMatrix = NULL;
+    }
+
+    /*
+     * Sub-surfaces do not own memory. surface_free only clears their surface
+     * structures; the atlas owns and frees the actual 8192-byte buffer.
+     */
+    surface_free(&s_characterRtShadowTexture);
+    surface_free(&s_bossRtShadowTexture);
+
+    if (s_rtShadowAtlas.buffer) {
+        surface_free(&s_rtShadowAtlas);
+    }
+
+    t3d_viewport_destroy(&s_characterRtShadowViewport);
+    t3d_viewport_destroy(&s_bossRtShadowViewport);
+
+    memset(&s_rtShadowAtlas, 0, sizeof(s_rtShadowAtlas));
+    memset(&s_characterRtShadowTexture, 0, sizeof(s_characterRtShadowTexture));
+    memset(&s_bossRtShadowTexture, 0, sizeof(s_bossRtShadowTexture));
+    memset(&s_characterRtShadowViewport, 0, sizeof(s_characterRtShadowViewport));
+    memset(&s_bossRtShadowViewport, 0, sizeof(s_bossRtShadowViewport));
+
+    s_rtShadowCaptureCountdown = 0;
+    s_rtShadowsInitialized = false;
+}
+
+static T3DVec3 guardian_rt_shadow_get_ray_direction(
+    float actorX,
+    float actorY,
+    float actorZ
+) {
+    /*
+     * Direction travelled by light rays: source -> actor/floor.
+     * At scene origin this exactly matches the directional actor light.
+     */
+    T3DVec3 rayDirection = {{
+        actorX - s_rtShadowLightSource.v[0],
+        actorY - s_rtShadowLightSource.v[1],
+        actorZ - s_rtShadowLightSource.v[2],
+    }};
+
+    float lengthSq =
+        rayDirection.v[0] * rayDirection.v[0]
+        + rayDirection.v[1] * rayDirection.v[1]
+        + rayDirection.v[2] * rayDirection.v[2];
+
+    if (lengthSq <= 0.000001f) {
+        return s_actorDirectionalLightDirection;
+    }
+
+    t3d_vec3_norm(&rayDirection);
+    return rayDirection;
+}
+
+static void guardian_rt_shadow_position_camera(
+    T3DViewport *viewport,
+    const T3DVec3 *rayDirection,
+    float actorX,
+    float actorY,
+    float actorZ,
+    float targetHeight,
+    float distance
+) {
+    if (!viewport || !rayDirection) return;
+
+    const T3DVec3 worldUp = {{0.0f, 1.0f, 0.0f}};
+
+    T3DVec3 target = {{
+        actorX,
+        actorY + targetHeight,
+        actorZ,
+    }};
+
+    /*
+     * The camera looks along the same direction travelled by the light rays.
+     * Placing the eye opposite that direction puts it toward the light source.
+     */
+    T3DVec3 eye = {{
+        target.v[0] - rayDirection->v[0] * distance,
+        target.v[1] - rayDirection->v[1] * distance,
+        target.v[2] - rayDirection->v[2] * distance,
+    }};
+
+    t3d_viewport_look_at(viewport, &eye, &target, &worldUp);
+}
+
+static void guardian_rt_shadows_capture(Boss *boss)
+{
+    if (!s_rtShadowsInitialized) return;
+    if (!s_rtShadowAtlas.buffer) return;
+
+    bool characterReady =
+        character.visible
+        && character.modelMat
+        && s_characterRtShadowGeometryDpl;
+
+    bool bossReady =
+        boss
+        && boss_is_active(boss)
+        && boss->visible
+        && boss->modelMat
+        && s_bossRtShadowGeometryDpl;
+
+    if (!characterReady && !bossReady) return;
+
+    /*
+     * Reuse both most recent 64x64 textures on the skipped frame. Both actors
+     * share one countdown so their silhouettes are always captured together.
+     */
+    if (s_rtShadowCaptureCountdown > 0) {
+        --s_rtShadowCaptureCountdown;
+        return;
+    }
+
+    s_rtShadowCaptureCountdown = GUARDIAN_RT_SHADOW_CAPTURE_INTERVAL - 1;
+
+    if (characterReady) {
+        T3DVec3 characterRayDirection =
+            guardian_rt_shadow_get_ray_direction(
+                character.pos[0],
+                character.pos[1],
+                character.pos[2]
+            );
+
+        guardian_rt_shadow_position_camera(
+            &s_characterRtShadowViewport,
+            &characterRayDirection,
+            character.pos[0],
+            character.pos[1],
+            character.pos[2],
+            GUARDIAN_CHARACTER_RT_SHADOW_CAPTURE_TARGET_HEIGHT,
+            GUARDIAN_CHARACTER_RT_SHADOW_CAPTURE_DISTANCE
+        );
+    }
+
+    if (bossReady) {
+        T3DVec3 bossRayDirection =
+            guardian_rt_shadow_get_ray_direction(
+                boss->pos[0],
+                boss->pos[1],
+                boss->pos[2]
+            );
+
+        guardian_rt_shadow_position_camera(
+            &s_bossRtShadowViewport,
+            &bossRayDirection,
+            boss->pos[0],
+            boss->pos[1],
+            boss->pos[2],
+            GUARDIAN_BOSS_RT_SHADOW_CAPTURE_TARGET_HEIGHT,
+            GUARDIAN_BOSS_RT_SHADOW_CAPTURE_DISTANCE
+        );
+    }
+
+    /*
+     * One offscreen attach, one 128x64 clear and one shared render-state setup
+     * for both actor silhouettes.
+     */
+    rdpq_attach(&s_rtShadowAtlas, NULL);
+
+    t3d_frame_start();
+
+    /*
+     * Clear the complete atlas before either 64x64 viewport narrows the
+     * scissor to its own half.
+     */
+    rdpq_set_scissor(
+        0,
+        0,
+        GUARDIAN_RT_SHADOW_ATLAS_WIDTH,
+        GUARDIAN_RT_SHADOW_ATLAS_HEIGHT
+    );
+    t3d_screen_clear_color(RGBA32(255, 255, 255, 255));
+
+    t3d_fog_set_enabled(false);
+    t3d_light_set_count(0);
+
+    rdpq_mode_begin();
+        rdpq_set_mode_standard();
+        rdpq_mode_persp(true);
+        rdpq_mode_fog(0);
+        rdpq_mode_zbuf(false, false);
+        rdpq_mode_antialias(AA_NONE);
+        rdpq_mode_combiner(RDPQ_COMBINER_FLAT);
+        rdpq_mode_blender(0);
+    rdpq_mode_end();
+
+    rdpq_set_prim_color(RGBA32(0, 0, 0, 255));
+    t3d_state_set_drawflags(T3D_FLAG_NO_LIGHT);
+
+    if (characterReady) {
+        t3d_viewport_attach(&s_characterRtShadowViewport);
+
+        t3d_matrix_push_pos(1);
+            t3d_matrix_set(character.modelMat, true);
+            rspq_block_run(s_characterRtShadowGeometryDpl);
+        t3d_matrix_pop(1);
+    }
+
+    if (bossReady) {
+        t3d_viewport_attach(&s_bossRtShadowViewport);
+
+        t3d_matrix_push_pos(1);
+            t3d_matrix_set((T3DMat4FP *)boss->modelMat, true);
+            rspq_block_run(s_bossRtShadowGeometryDpl);
+        t3d_matrix_pop(1);
+    }
+
+    t3d_tri_sync();
+    rdpq_detach();
+}
+
+static void guardian_rt_shadow_update_quad(
+    T3DVertPacked *vertices,
+    float actorX,
+    float actorY,
+    float actorZ,
+    float groundY,
+    float length,
+    float halfWidth,
+    float originBackOffset
+) {
+    if (!vertices) return;
+
+    T3DVec3 rayDirection = guardian_rt_shadow_get_ray_direction(
+        actorX,
+        actorY,
+        actorZ
+    );
+
+    float dirX = rayDirection.v[0];
+    float dirZ = rayDirection.v[2];
+    float dirLength = sqrtf(dirX * dirX + dirZ * dirZ);
+
+    if (dirLength <= 0.0001f) {
+        /*
+         * The source is directly above the actor. Preserve the requested Z+
+         * orientation as the horizontal fallback.
+         */
+        dirX = 0.0f;
+        dirZ = 1.0f;
+    } else {
+        dirX /= dirLength;
+        dirZ /= dirLength;
+    }
+
+    /* This matches both capture cameras' horizontal screen axis. */
+    float rightX = -dirZ;
+    float rightZ = dirX;
+
+    float nearCenterX = actorX - dirX * originBackOffset;
+    float nearCenterZ = actorZ - dirZ * originBackOffset;
+    float farCenterX = nearCenterX + dirX * length;
+    float farCenterZ = nearCenterZ + dirZ * length;
+
+    float nearLeftX = nearCenterX - rightX * halfWidth;
+    float nearLeftZ = nearCenterZ - rightZ * halfWidth;
+    float nearRightX = nearCenterX + rightX * halfWidth;
+    float nearRightZ = nearCenterZ + rightZ * halfWidth;
+    float farLeftX = farCenterX - rightX * halfWidth;
+    float farLeftZ = farCenterZ - rightZ * halfWidth;
+    float farRightX = farCenterX + rightX * halfWidth;
+    float farRightZ = farCenterZ + rightZ * halfWidth;
+
+    const T3DVec3 floorNormal = {{0.0f, 1.0f, 0.0f}};
+    uint16_t packedNormal = t3d_vert_pack_normal(&floorNormal);
+
+    /*
+     * Each sub-surface is exposed to the RDP as an independent local 64x64
+     * texture, so both actor quads use the same 0..63 UV range.
+     */
+    const int16_t uvLeft = guardian_rt_shadow_uv(0.0f);
+    const int16_t uvRight = guardian_rt_shadow_uv(
+        (float)(GUARDIAN_RT_SHADOW_TILE_WIDTH - 1)
+    );
+    const int16_t uvTop = guardian_rt_shadow_uv(0.0f);
+    const int16_t uvBottom = guardian_rt_shadow_uv(
+        (float)(GUARDIAN_RT_SHADOW_TILE_HEIGHT - 1)
+    );
+
+    guardian_rt_shadow_write_vertex(
+        &vertices[0],
+        false,
+        nearLeftX,
+        groundY,
+        nearLeftZ,
+        uvLeft,
+        uvBottom,
+        packedNormal
+    );
+    guardian_rt_shadow_write_vertex(
+        &vertices[0],
+        true,
+        nearRightX,
+        groundY,
+        nearRightZ,
+        uvRight,
+        uvBottom,
+        packedNormal
+    );
+    guardian_rt_shadow_write_vertex(
+        &vertices[1],
+        false,
+        farLeftX,
+        groundY,
+        farLeftZ,
+        uvLeft,
+        uvTop,
+        packedNormal
+    );
+    guardian_rt_shadow_write_vertex(
+        &vertices[1],
+        true,
+        farRightX,
+        groundY,
+        farRightZ,
+        uvRight,
+        uvTop,
+        packedNormal
+    );
+}
+
+static void guardian_rt_shadow_draw_quad(
+    const surface_t *texture,
+    T3DVertPacked *vertices,
+    uint8_t alpha
+) {
+    if (!texture || !texture->buffer || !vertices) return;
+
+    rdpq_set_prim_color(RGBA32(0, 0, 0, alpha));
+
+    rdpq_texparms_t textureParams = (rdpq_texparms_t){};
+    textureParams.s.repeats = 1;
+    textureParams.t.repeats = 1;
+
+    /*
+     * One 64x64 I8 texture is 4096 bytes and therefore occupies all TMEM.
+     * Upload the requested atlas half, draw it, flush the Tiny3D triangle,
+     * then allow the next actor upload to replace TMEM.
+     */
+    rdpq_tex_upload(TILE0, texture, &textureParams);
+
+    t3d_vert_load(vertices, 0, 4);
+    t3d_quad_draw_unindexed(0, 1);
+    t3d_tri_sync();
+}
+
+static void guardian_rt_shadows_draw(Boss *boss)
+{
+    if (!s_rtShadowsInitialized) return;
+    if (!s_rtShadowIdentityMatrix) return;
+
+    bool characterReady =
+        character.visible
+        && s_characterRtShadowVertices
+        && s_characterRtShadowTexture.buffer;
+
+    bool bossReady =
+        boss
+        && boss_is_active(boss)
+        && boss->visible
+        && s_bossRtShadowVertices
+        && s_bossRtShadowTexture.buffer;
+
+    if (!characterReady && !bossReady) return;
+
+    if (characterReady) {
+        guardian_rt_shadow_update_quad(
+            s_characterRtShadowVertices,
+            character.pos[0],
+            character.pos[1],
+            character.pos[2],
+            GUARDIAN_RT_SHADOW_GROUND_Y,
+            GUARDIAN_CHARACTER_RT_SHADOW_LENGTH,
+            GUARDIAN_CHARACTER_RT_SHADOW_HALF_WIDTH,
+            GUARDIAN_CHARACTER_RT_SHADOW_ORIGIN_BACK_OFFSET
+        );
+    }
+
+    if (bossReady) {
+        guardian_rt_shadow_update_quad(
+            s_bossRtShadowVertices,
+            boss->pos[0],
+            boss->pos[1],
+            boss->pos[2],
+            GUARDIAN_RT_SHADOW_GROUND_Y,
+            GUARDIAN_BOSS_RT_SHADOW_LENGTH,
+            GUARDIAN_BOSS_RT_SHADOW_HALF_WIDTH,
+            GUARDIAN_BOSS_RT_SHADOW_ORIGIN_BACK_OFFSET
+        );
+    }
+
+    /*
+     * Flush the preceding world triangles before changing the projection
+     * combiner/texture state. No manual rdpq_sync_pipe() is needed.
+     */
+    t3d_tri_sync();
+
+    rdpq_mode_push();
+
+    rdpq_mode_begin();
+        rdpq_set_mode_standard();
+        rdpq_mode_persp(true);
+        rdpq_mode_fog(0);
+        rdpq_mode_zbuf(true, false);
+        rdpq_mode_antialias(AA_NONE);
+        rdpq_mode_filter(FILTER_BILINEAR);
+        rdpq_mode_combiner(
+            RDPQ_COMBINER1(
+                (0, 0, 0, PRIM),
+                (1, TEX0, PRIM, 0)
+            )
+        );
+        rdpq_mode_blender(RDPQ_BLENDER_MULTIPLY);
+    rdpq_mode_end();
+
+    t3d_state_set_drawflags(
+        T3D_FLAG_DEPTH
+        | T3D_FLAG_TEXTURED
+        | T3D_FLAG_NO_LIGHT
+    );
+    t3d_state_set_depth_offset(GUARDIAN_RT_SHADOW_DEPTH_OFFSET);
+
+    t3d_matrix_push_pos(1);
+        t3d_matrix_set(s_rtShadowIdentityMatrix, true);
+
+        if (characterReady) {
+            guardian_rt_shadow_draw_quad(
+                &s_characterRtShadowTexture,
+                s_characterRtShadowVertices,
+                GUARDIAN_CHARACTER_RT_SHADOW_ALPHA
+            );
+        }
+
+        if (bossReady) {
+            guardian_rt_shadow_draw_quad(
+                &s_bossRtShadowTexture,
+                s_bossRtShadowVertices,
+                GUARDIAN_BOSS_RT_SHADOW_ALPHA
+            );
+        }
+
+    t3d_matrix_pop(1);
+
+    t3d_state_set_depth_offset(0);
+
+    rdpq_mode_pop();
+    rdpq_set_prim_color(RGBA32(255, 255, 255, 255));
+}
 
 
 static void guardian_environment_object_clear(GuardianEnvironmentObject *object)
@@ -1844,6 +2744,14 @@ void scene_init(void)
     // but the boss owns the actual active/cinematic/combat mode internally.
     boss_deactivate(g_boss);
 
+    /*
+     * The shared actor-shadow system needs both the already-owned character
+     * model/skeleton and the newly spawned boss model/skeleton.
+     */
+    if (!guardian_rt_shadows_init(g_boss)) {
+        debugf("guardian scene: realtime actor shadows failed to initialize\n");
+    }
+
     boss_ground_crush_init();
 
     // reset character
@@ -1880,6 +2788,43 @@ void scene_init(void)
 
     //msa_init();
 
+#if GUARDIAN_DEBUG_START_BOSS_DEFEATED
+    /*
+     * Enter normal gameplay first so the character, camera and boss transforms
+     * are initialized exactly as they would be after skipping the intro.
+     */
+    gameState = GAME_STATE_PLAYING;
+    cutscene_manager_reset();
+    scene_init_playing(true);
+
+    /*
+     * Reuse the existing debug defeat path so the boss is fully stopped,
+     * non-attacking, collider-safe and placed in its post-defeat mode.
+     */
+    scene_debug_force_boss_defeated();
+
+    /*
+     * This startup override is for free testing, not for showing the victory
+     * card or recording a completed boss attempt.
+     */
+    gameState = GAME_STATE_PLAYING;
+    victoryTitleTimer = 0.0f;
+    victoryTitleDone = true;
+    bossWasDead = true;
+
+    s_bossRunActive = false;
+    s_bossRunStartS = 0.0;
+    s_pendingBossLoopMusic = false;
+
+    cameraLockOnActive = false;
+    cameraLockBlend = 0.0f;
+    bossTitleFade = 0.0f;
+    bossUiIntro = 1.0f;
+    boss_ui_set_intro(bossUiIntro);
+
+    audio_stop_music();
+    audio_stop_all_sfx();
+#else
     // Guardian scene normal startup: entering the scene starts the phase-1 intro.
     gameState = GAME_STATE_PLAYING;
     cutsceneState = CUTSCENE_PHASE1_INTRO;
@@ -1891,6 +2836,7 @@ void scene_init(void)
     // DEBUG: uncomment to start the fight in phase 2
     // if (g_boss) g_boss->phaseIndex = 2;
     // phase2CutsceneTriggered = true;
+#endif
 }
 
 
@@ -2775,7 +3721,7 @@ void scene_draw_cutscene(T3DViewport *viewport)
 
             rdpq_mode_zbuf(false, false);
             t3d_matrix_push_pos(1);
-                character_draw_shadow();
+                /* character blob shadow disabled while profiling realtime projection */
 
                 if (g_boss) {
                     boss_draw_shadow(g_boss);
@@ -2787,6 +3733,8 @@ void scene_draw_cutscene(T3DViewport *viewport)
             scene_draw_environment_pillars_statue();
 
             rdpq_mode_zbuf(true, true);
+            guardian_actor_directional_light_enable();
+
             t3d_matrix_push_pos(1);
                 character_draw();
 
@@ -2794,6 +3742,8 @@ void scene_draw_cutscene(T3DViewport *viewport)
                     boss_draw(g_boss);
                 }
             t3d_matrix_pop(1);
+
+            guardian_actor_directional_light_disable();
 
             scene_draw_environment_fog_door();
 
@@ -2848,13 +3798,16 @@ void scene_draw(T3DViewport *viewport)
     if(gameState == GAME_STATE_VIDEO)
         return;
 
-    t3d_frame_start();
-
-    if(!DITHER_ENABLED && !debugDraw)
-    {
-        rdpq_mode_dithering(DITHER_NONE_BAYER);
+    /*
+     * Capture only during normal gameplay. The main framebuffer is already
+     * attached by main.c and is restored automatically by rdpq_detach().
+     */
+    if (cutsceneState == CUTSCENE_NONE) {
+        guardian_rt_shadows_capture(g_boss);
     }
 
+    /* Start the real onscreen Tiny3D pass from a clean state. */
+    t3d_frame_start();
     t3d_viewport_attach(viewport);
 
     // Fog
@@ -2869,12 +3822,13 @@ void scene_draw(T3DViewport *viewport)
     if(cutsceneState != CUTSCENE_NONE){
         cutscene_manager_draw_fog();
     }else{
-        t3d_fog_set_range(450.0f, 800.0f);
+        t3d_fog_set_range(100.0f, 450.0f);
     }
     t3d_fog_set_enabled(true);
 
-    // Lighting
+    // Lighting: environment remains ambient-only.
     t3d_light_set_ambient(colorAmbient);
+    t3d_light_set_count(0);
 
     if(cutsceneState != CUTSCENE_NONE)
     {
@@ -2891,15 +3845,11 @@ void scene_draw(T3DViewport *viewport)
     //scene_draw_environment_sunshafts();
     scene_draw_environment_floor();
 
-    // Projection effects and blob shadows remain between the floor and room details.
+    // Projection effects remain between the floor and room details.
     rdpq_mode_zbuf(false, false);
     t3d_matrix_push_pos(1);
         boss_ground_crush_draw();
-        character_draw_shadow();
-
-        if (g_boss) {
-            boss_draw_shadow(g_boss);
-        }
+        /* Character and boss blob shadows are replaced by realtime projections. */
     t3d_matrix_pop(1);
 
     scene_draw_environment_niches_windows();
@@ -2918,7 +3868,13 @@ void scene_draw(T3DViewport *viewport)
         t3d_matrix_pop(1);
     }
 
+    /*
+     * Enable the directional light only while drawing the two animated actors.
+     * Environment, projection effects, particles and UI remain ambient-only.
+     */
     rdpq_mode_zbuf(true, true);
+    guardian_actor_directional_light_enable();
+
     t3d_matrix_push_pos(1);
         character_draw();
 
@@ -2926,6 +3882,8 @@ void scene_draw(T3DViewport *viewport)
             boss_draw(g_boss);
         }
     t3d_matrix_pop(1);
+
+    guardian_actor_directional_light_disable();
 
     scene_draw_environment_fog_door();
 
@@ -2935,6 +3893,12 @@ void scene_draw(T3DViewport *viewport)
             rspq_block_run(chainsDpl);
         }
     t3d_matrix_pop(1);
+
+    /*
+     * Draw both realtime floor projections after all normal actor/environment
+     * models. They depth-test against the completed scene without writing depth.
+     */
+    guardian_rt_shadows_draw(g_boss);
 
     // Screen-space ribbon trails, drawn right after 3D so they feel "in world"
     sword_trail_draw_all(viewport);
@@ -3217,6 +4181,7 @@ void scene_delete_environment(void)
 void scene_cleanup(void)
 {
     rspq_wait();
+    guardian_rt_shadows_cleanup();
     //collision_mesh_cleanup();
     scene_delete_environment();
     boss_ground_crush_cleanup();
