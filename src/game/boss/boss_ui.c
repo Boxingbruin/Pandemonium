@@ -13,13 +13,14 @@
 // Overall decorative frame layout.
 // Safe-area anchoring still comes from video_layout/ui_safe_margin_y().
 #define BOSS_UI_HEALTH_FRAME_WIDTH 200
-#define BOSS_UI_HEALTH_FRAME_SCALE 0.45f
+#define BOSS_UI_HEALTH_FRAME_SCALE_X 0.45f
+#define BOSS_UI_HEALTH_FRAME_SCALE_Y 0.225f
 
 // Health fill layout, independent from the decorative frame width.
 #define BOSS_UI_HEALTH_FILL_WIDTH 184
 #define BOSS_UI_HEALTH_FILL_X_OFFSET 0
-#define BOSS_UI_HEALTH_FILL_Y_OFFSET 2
-#define BOSS_UI_HEALTH_FILL_HEIGHT 8
+#define BOSS_UI_HEALTH_FILL_Y_OFFSET 1
+#define BOSS_UI_HEALTH_FILL_HEIGHT 4
 
 // Boss name layout, relative to the frame.
 // X offset is now a fine-tune value after centering.
@@ -64,7 +65,13 @@ static sprite_t* s_bossHealthBarNameSprite = NULL;
 static surface_t s_bossHealthBarNameSurf = {0};
 
 static float s_bossUiIntro = 1.0f;
-static BossUiBarTrailState s_bossHealthBarState = {1.0f, 1.0f, 1.0f, 0.0f, 0.0f};
+static BossUiBarTrailState s_bossHealthBarState = {
+    1.0f,
+    1.0f,
+    1.0f,
+    0.0f,
+    0.0f
+};
 
 static float boss_ui_clampf(float x, float lo, float hi)
 {
@@ -84,8 +91,10 @@ static int boss_ui_scaled_int(float x)
     return (int)(x + 0.5f);
 }
 
-static void boss_ui_reset_bar_trail(BossUiBarTrailState *s, float ratio)
-{
+static void boss_ui_reset_bar_trail(
+    BossUiBarTrailState *s,
+    float ratio
+) {
     if (!s) return;
 
     ratio = boss_ui_clampf(ratio, 0.0f, 1.0f);
@@ -97,8 +106,10 @@ static void boss_ui_reset_bar_trail(BossUiBarTrailState *s, float ratio)
     s->gainHold = 0.0f;
 }
 
-static void boss_ui_update_bar_trails(float ratio, BossUiBarTrailState *s)
-{
+static void boss_ui_update_bar_trails(
+    float ratio,
+    BossUiBarTrailState *s
+) {
     if (!s) return;
 
     ratio = boss_ui_clampf(ratio, 0.0f, 1.0f);
@@ -158,8 +169,11 @@ static void boss_ui_update_bar_trails(float ratio, BossUiBarTrailState *s)
     }
 }
 
-static void boss_ui_load_sprite(sprite_t **sprite, surface_t *surface, const char *path)
-{
+static void boss_ui_load_sprite(
+    sprite_t **sprite,
+    surface_t *surface,
+    const char *path
+) {
     if (!sprite || !surface || !path) return;
     if (*sprite) return;
 
@@ -172,8 +186,10 @@ static void boss_ui_load_sprite(sprite_t **sprite, surface_t *surface, const cha
     }
 }
 
-static void boss_ui_free_sprite(sprite_t **sprite, surface_t *surface)
-{
+static void boss_ui_free_sprite(
+    sprite_t **sprite,
+    surface_t *surface
+) {
     if (!sprite || !surface) return;
 
     if (*sprite) {
@@ -192,7 +208,11 @@ static bool boss_ui_world_to_screen(
 ) {
     if (!viewport || !worldPos || !outScreenPos) return false;
 
-    t3d_viewport_calc_viewspace_pos(viewport, outScreenPos, worldPos);
+    t3d_viewport_calc_viewspace_pos(
+        viewport,
+        outScreenPos,
+        worldPos
+    );
 
     // Tiny3D viewspace depth: >= 1.0f means behind/outside usable view.
     if (outScreenPos->v[2] >= 1.0f) {
@@ -219,11 +239,17 @@ static int boss_ui_health_frame_height(void)
     int midH = 0;
 
     if (s_bossHealthBarEndSurf.height > 0) {
-        endH = boss_ui_scaled_int((float)s_bossHealthBarEndSurf.height * BOSS_UI_HEALTH_FRAME_SCALE);
+        endH = boss_ui_scaled_int(
+            (float)s_bossHealthBarEndSurf.height
+            * BOSS_UI_HEALTH_FRAME_SCALE_Y
+        );
     }
 
     if (s_bossHealthBarMidSurf.height > 0) {
-        midH = boss_ui_scaled_int((float)s_bossHealthBarMidSurf.height * BOSS_UI_HEALTH_FRAME_SCALE);
+        midH = boss_ui_scaled_int(
+            (float)s_bossHealthBarMidSurf.height
+            * BOSS_UI_HEALTH_FRAME_SCALE_Y
+        );
     }
 
     int h = boss_ui_max_int(endH, midH);
@@ -237,20 +263,32 @@ static int boss_ui_health_frame_height(void)
 
 static int boss_ui_health_name_width(void)
 {
-    if (!s_bossHealthBarNameSprite || s_bossHealthBarNameSurf.width <= 0) {
+    if (
+        !s_bossHealthBarNameSprite
+        || s_bossHealthBarNameSurf.width <= 0
+    ) {
         return 0;
     }
 
-    return boss_ui_scaled_int((float)s_bossHealthBarNameSurf.width * BOSS_UI_NAME_SCALE);
+    return boss_ui_scaled_int(
+        (float)s_bossHealthBarNameSurf.width
+        * BOSS_UI_NAME_SCALE
+    );
 }
 
 static int boss_ui_health_name_height(void)
 {
-    if (!s_bossHealthBarNameSprite || s_bossHealthBarNameSurf.height <= 0) {
+    if (
+        !s_bossHealthBarNameSprite
+        || s_bossHealthBarNameSurf.height <= 0
+    ) {
         return 0;
     }
 
-    return boss_ui_scaled_int((float)s_bossHealthBarNameSurf.height * BOSS_UI_NAME_SCALE);
+    return boss_ui_scaled_int(
+        (float)s_bossHealthBarNameSurf.height
+        * BOSS_UI_NAME_SCALE
+    );
 }
 
 static BossUiHealthLayout boss_ui_make_health_layout(void)
@@ -264,14 +302,24 @@ static BossUiHealthLayout boss_ui_make_health_layout(void)
 
     // Anchor the decorative frame to the bottom safe area.
     // video_layout owns this safe/overdraw margin.
-    layout.frameY = SCREEN_HEIGHT - ui_safe_margin_y() - layout.frameH;
+    layout.frameY =
+        SCREEN_HEIGHT
+        - ui_safe_margin_y()
+        - layout.frameH;
 
     // The actual health fill width is independent from the frame width.
-    // This lets the decorative overlay be tuned without shrinking/stretching HP.
+    // This lets the decorative overlay be tuned without shrinking HP.
     layout.fillW = BOSS_UI_HEALTH_FILL_WIDTH;
     layout.fillH = BOSS_UI_HEALTH_FILL_HEIGHT;
-    layout.fillX = layout.frameX + ((layout.frameW - layout.fillW) / 2) + BOSS_UI_HEALTH_FILL_X_OFFSET;
-    layout.fillY = layout.frameY + BOSS_UI_HEALTH_FILL_Y_OFFSET;
+
+    layout.fillX =
+        layout.frameX
+        + ((layout.frameW - layout.fillW) / 2)
+        + BOSS_UI_HEALTH_FILL_X_OFFSET;
+
+    layout.fillY =
+        layout.frameY
+        + BOSS_UI_HEALTH_FILL_Y_OFFSET;
 
     if (layout.fillW < 1) {
         layout.fillW = 1;
@@ -280,8 +328,15 @@ static BossUiHealthLayout boss_ui_make_health_layout(void)
     int nameWidth = boss_ui_health_name_width();
     int nameHeight = boss_ui_health_name_height();
 
-    layout.nameX = layout.frameX + ((layout.frameW - nameWidth) / 2) + BOSS_UI_NAME_X_OFFSET;
-    layout.nameY = layout.frameY - nameHeight - BOSS_UI_NAME_GAP;
+    layout.nameX =
+        layout.frameX
+        + ((layout.frameW - nameWidth) / 2)
+        + BOSS_UI_NAME_X_OFFSET;
+
+    layout.nameY =
+        layout.frameY
+        - nameHeight
+        - BOSS_UI_NAME_GAP;
 
     return layout;
 }
@@ -297,7 +352,14 @@ static void boss_ui_prepare_flat_ui_pipe(void)
 #endif
 
     rdpq_mode_combiner(RDPQ_COMBINER_FLAT);
-    rdpq_mode_blender(RDPQ_BLENDER_MULTIPLY);
+    rdpq_mode_alphacompare(0);
+
+    /*
+     * Do not enable the blender here. Standard mode begins with blending
+     * disabled, so the rectangle overwrites the framebuffer instead of
+     * being composited with the existing scene.
+     */
+    rdpq_mode_filter(FILTER_POINT);
 }
 
 static void boss_ui_prepare_sprite_ui_pipe(bool alphaCompare)
@@ -315,53 +377,69 @@ static void boss_ui_prepare_sprite_ui_pipe(bool alphaCompare)
     rdpq_mode_filter(FILTER_POINT);
 }
 
-static void boss_ui_draw_health_frame(const BossUiHealthLayout *layout)
-{
+static void boss_ui_draw_health_frame(
+    const BossUiHealthLayout *layout
+) {
     if (!layout) return;
     if (layout->frameW <= 0 || layout->frameH <= 0) return;
 
     const bool hasEnd =
-        s_bossHealthBarEndSprite &&
-        s_bossHealthBarEndSurf.width > 0 &&
-        s_bossHealthBarEndSurf.height > 0;
+        s_bossHealthBarEndSprite
+        && s_bossHealthBarEndSurf.width > 0
+        && s_bossHealthBarEndSurf.height > 0;
 
     const bool hasMid =
-        s_bossHealthBarMidSprite &&
-        s_bossHealthBarMidSurf.width > 0 &&
-        s_bossHealthBarMidSurf.height > 0;
+        s_bossHealthBarMidSprite
+        && s_bossHealthBarMidSurf.width > 0
+        && s_bossHealthBarMidSurf.height > 0;
 
     if (!hasEnd && !hasMid) {
         return;
     }
 
-    boss_ui_prepare_sprite_ui_pipe(true);
-
-    int frameRight = layout->frameX + layout->frameW;
+    int frameRight =
+        layout->frameX + layout->frameW;
 
     int endW = hasEnd
-        ? boss_ui_scaled_int((float)s_bossHealthBarEndSurf.width * BOSS_UI_HEALTH_FRAME_SCALE)
+        ? boss_ui_scaled_int(
+            (float)s_bossHealthBarEndSurf.width
+            * BOSS_UI_HEALTH_FRAME_SCALE_X
+        )
         : 0;
 
     int endH = hasEnd
-        ? boss_ui_scaled_int((float)s_bossHealthBarEndSurf.height * BOSS_UI_HEALTH_FRAME_SCALE)
+        ? boss_ui_scaled_int(
+            (float)s_bossHealthBarEndSurf.height
+            * BOSS_UI_HEALTH_FRAME_SCALE_Y
+        )
         : 0;
 
-    int midSrcW = hasMid ? s_bossHealthBarMidSurf.width : 1;
-    int midSrcH = hasMid ? s_bossHealthBarMidSurf.height : 1;
+    int midSrcW =
+        hasMid ? s_bossHealthBarMidSurf.width : 1;
+
+    int midSrcH =
+        hasMid ? s_bossHealthBarMidSurf.height : 1;
 
     int midH = hasMid
-        ? boss_ui_scaled_int((float)midSrcH * BOSS_UI_HEALTH_FRAME_SCALE)
+        ? boss_ui_scaled_int(
+            (float)midSrcH
+            * BOSS_UI_HEALTH_FRAME_SCALE_Y
+        )
         : endH;
 
     int endY = layout->frameY;
     int midY = layout->frameY;
 
     if (hasEnd && endH < layout->frameH) {
-        endY = layout->frameY + ((layout->frameH - endH) / 2);
+        endY =
+            layout->frameY
+            + ((layout->frameH - endH) / 2);
     }
 
     if (hasMid && midH < layout->frameH) {
-        midY = layout->frameY + ((layout->frameH - midH) / 2);
+        midY =
+            layout->frameY
+            + ((layout->frameH - midH) / 2);
     }
 
     int midLeft = layout->frameX + endW;
@@ -369,28 +447,44 @@ static void boss_ui_draw_health_frame(const BossUiHealthLayout *layout)
     int midDrawW = midRight - midLeft;
 
     if (hasEnd) {
-        rdpq_sprite_blit(s_bossHealthBarEndSprite, layout->frameX, endY, &(rdpq_blitparms_t){
-            .scale_x = BOSS_UI_HEALTH_FRAME_SCALE,
-            .scale_y = BOSS_UI_HEALTH_FRAME_SCALE,
-        });
+        rdpq_sprite_blit(
+            s_bossHealthBarEndSprite,
+            layout->frameX,
+            endY,
+            &(rdpq_blitparms_t){
+                .scale_x = BOSS_UI_HEALTH_FRAME_SCALE_X,
+                .scale_y = BOSS_UI_HEALTH_FRAME_SCALE_Y,
+            }
+        );
     }
 
     if (hasMid && midDrawW > 0) {
-        float midScaleX = (float)midDrawW / (float)midSrcW;
+        float midScaleX =
+            (float)midDrawW / (float)midSrcW;
 
-        rdpq_sprite_blit(s_bossHealthBarMidSprite, midLeft, midY, &(rdpq_blitparms_t){
-            .scale_x = midScaleX,
-            .scale_y = BOSS_UI_HEALTH_FRAME_SCALE,
-        });
+        rdpq_sprite_blit(
+            s_bossHealthBarMidSprite,
+            midLeft,
+            midY,
+            &(rdpq_blitparms_t){
+                .scale_x = midScaleX,
+                .scale_y = BOSS_UI_HEALTH_FRAME_SCALE_Y,
+            }
+        );
     }
 
     if (hasEnd) {
-        // Reuse the same end-cap sprite, mirrored horizontally for the right side.
-        rdpq_sprite_blit(s_bossHealthBarEndSprite, frameRight - endW, endY, &(rdpq_blitparms_t){
-            .scale_x = BOSS_UI_HEALTH_FRAME_SCALE,
-            .scale_y = BOSS_UI_HEALTH_FRAME_SCALE,
-            .flip_x = true,
-        });
+        // Mirror the same end cap for the right side.
+        rdpq_sprite_blit(
+            s_bossHealthBarEndSprite,
+            frameRight - endW,
+            endY,
+            &(rdpq_blitparms_t){
+                .scale_x = BOSS_UI_HEALTH_FRAME_SCALE_X,
+                .scale_y = BOSS_UI_HEALTH_FRAME_SCALE_Y,
+                .flip_x = true,
+            }
+        );
     }
 }
 
@@ -403,8 +497,6 @@ static void boss_ui_draw_health_fill(
     if (!layout) return;
     if (layout->fillW <= 0 || layout->fillH <= 0) return;
 
-    boss_ui_prepare_flat_ui_pipe();
-
     int barLeft = layout->fillX;
     int barRight = layout->fillX + layout->fillW;
     int top = layout->fillY;
@@ -413,75 +505,93 @@ static void boss_ui_draw_health_fill(
     int center = (barLeft + barRight) / 2;
     int halfWidth = (barRight - barLeft) / 2;
 
-    int revealLeft = center - (int)((float)halfWidth * introProgress);
-    int revealRight = center + (int)((float)halfWidth * introProgress);
+    // Preserve the existing center-out boss-bar reveal.
+    int revealLeft =
+        center
+        - (int)((float)halfWidth * introProgress);
 
-    if (revealRight > revealLeft) {
-        rdpq_set_prim_color(RGBA32(50, 50, 50, 130));
-        rdpq_fill_rectangle(revealLeft, top, revealRight, bottom);
-    }
+    int revealRight =
+        center
+        + (int)((float)halfWidth * introProgress);
 
-    int fillEnd = barLeft + (int)((float)(barRight - barLeft) * ratio);
-    int lossEnd = barLeft + (int)((float)(barRight - barLeft) * s_bossHealthBarState.lossTrail);
-    int gainEnd = barLeft + (int)((float)(barRight - barLeft) * s_bossHealthBarState.gainTrail);
+    int fillEnd =
+        barLeft
+        + (int)(
+            (float)(barRight - barLeft)
+            * ratio
+        );
 
-    int clipLeft = (revealLeft > barLeft) ? revealLeft : barLeft;
-    int clipRight = (revealRight < barRight) ? revealRight : barRight;
+    int clipLeft =
+        (revealLeft > barLeft)
+        ? revealLeft
+        : barLeft;
 
-    int alpha = 170;
+    int clipRight =
+        (revealRight < barRight)
+        ? revealRight
+        : barRight;
 
-    // Recent-damage segment.
-    int lossClipLeft = (fillEnd > clipLeft) ? fillEnd : clipLeft;
-    int lossClipRight = (lossEnd < clipRight) ? lossEnd : clipRight;
+    int fillClipRight =
+        (fillEnd < clipRight)
+        ? fillEnd
+        : clipRight;
 
-    if (lossClipRight > lossClipLeft) {
-        rdpq_set_prim_color(RGBA32(230, 200, 60, alpha));
-        rdpq_fill_rectangle(lossClipLeft, top, lossClipRight, bottom);
-    }
-
-    // Health fill.
-    int red = 200 + (int)(55.0f * flash);
-    int green = 30 + (int)(20.0f * flash);
-    int blue = 30 + (int)(20.0f * flash);
-
-    rdpq_set_prim_color(RGBA32(red, green, blue, alpha));
-
-    int fillClipRight = (fillEnd < clipRight) ? fillEnd : clipRight;
-
-    if (fillClipRight > clipLeft) {
-        rdpq_fill_rectangle(clipLeft, top, fillClipRight, bottom);
-    }
-
-    // Recent-heal segment.
-    int gainClipLeft = (gainEnd > clipLeft) ? gainEnd : clipLeft;
-    int gainClipRight = (fillEnd < clipRight) ? fillEnd : clipRight;
-
-    if (gainClipRight > gainClipLeft) {
-        rdpq_set_prim_color(RGBA32(240, 240, 240, alpha));
-        rdpq_fill_rectangle(gainClipLeft, top, gainClipRight, bottom);
-    }
-}
-
-static void boss_ui_draw_health_name(const BossUiHealthLayout *layout)
-{
-    if (!layout) return;
-
-    if (!s_bossHealthBarNameSprite || s_bossHealthBarNameSurf.width <= 0) {
+    if (fillClipRight <= clipLeft) {
         return;
     }
 
-    boss_ui_prepare_sprite_ui_pipe(true);
+    int red =
+        200 + (int)(55.0f * flash);
 
-    rdpq_sprite_blit(s_bossHealthBarNameSprite, layout->nameX, layout->nameY, &(rdpq_blitparms_t){
-        .scale_x = BOSS_UI_NAME_SCALE,
-        .scale_y = BOSS_UI_NAME_SCALE,
-    });
+    int green =
+        30 + (int)(20.0f * flash);
+
+    int blue =
+        30 + (int)(20.0f * flash);
+
+    rdpq_set_prim_color(
+        RGBA32(red, green, blue, 255)
+    );
+
+    rdpq_fill_rectangle(
+        clipLeft,
+        top,
+        fillClipRight,
+        bottom
+    );
+}
+
+static void boss_ui_draw_health_name(
+    const BossUiHealthLayout *layout
+) {
+    if (!layout) return;
+
+    if (
+        !s_bossHealthBarNameSprite
+        || s_bossHealthBarNameSurf.width <= 0
+    ) {
+        return;
+    }
+
+    rdpq_sprite_blit(
+        s_bossHealthBarNameSprite,
+        layout->nameX,
+        layout->nameY,
+        &(rdpq_blitparms_t){
+            .scale_x = BOSS_UI_NAME_SCALE,
+            .scale_y = BOSS_UI_NAME_SCALE,
+        }
+    );
 }
 
 void boss_ui_init(void)
 {
     s_bossUiIntro = 1.0f;
-    boss_ui_reset_bar_trail(&s_bossHealthBarState, 1.0f);
+
+    boss_ui_reset_bar_trail(
+        &s_bossHealthBarState,
+        1.0f
+    );
 
     // IA8 lock-on icon so the alpha gradient is preserved.
     boss_ui_load_sprite(
@@ -494,66 +604,110 @@ void boss_ui_init(void)
     boss_ui_load_sprite(
         &s_bossHealthBarEndSprite,
         &s_bossHealthBarEndSurf,
-        "rom:/ui/healthbars/boss/boss_background_healthbar_end.ia8.sprite"
+        "rom:/ui/healthbars/boss/"
+        "boss_background_healthbar_end.ia8.sprite"
     );
 
     boss_ui_load_sprite(
         &s_bossHealthBarMidSprite,
         &s_bossHealthBarMidSurf,
-        "rom:/ui/healthbars/boss/boss_background_healthbar_mid.ia8.sprite"
+        "rom:/ui/healthbars/boss/"
+        "boss_background_healthbar_mid.ia8.sprite"
     );
 
     // Boss name plate.
     boss_ui_load_sprite(
         &s_bossHealthBarNameSprite,
         &s_bossHealthBarNameSurf,
-        "rom:/ui/healthbars/boss/guardian_of_the_shackled_sun.ia4.sprite"
+        "rom:/ui/healthbars/boss/"
+        "guardian_of_the_shackled_sun.ia4.sprite"
     );
 }
 
 void boss_ui_cleanup(void)
 {
-    boss_ui_free_sprite(&s_zTargetIconSprite, &s_zTargetIconSurf);
-    boss_ui_free_sprite(&s_bossHealthBarEndSprite, &s_bossHealthBarEndSurf);
-    boss_ui_free_sprite(&s_bossHealthBarMidSprite, &s_bossHealthBarMidSurf);
-    boss_ui_free_sprite(&s_bossHealthBarNameSprite, &s_bossHealthBarNameSurf);
+    boss_ui_free_sprite(
+        &s_zTargetIconSprite,
+        &s_zTargetIconSurf
+    );
+
+    boss_ui_free_sprite(
+        &s_bossHealthBarEndSprite,
+        &s_bossHealthBarEndSurf
+    );
+
+    boss_ui_free_sprite(
+        &s_bossHealthBarMidSprite,
+        &s_bossHealthBarMidSurf
+    );
+
+    boss_ui_free_sprite(
+        &s_bossHealthBarNameSprite,
+        &s_bossHealthBarNameSurf
+    );
 
     s_bossUiIntro = 1.0f;
-    boss_ui_reset_bar_trail(&s_bossHealthBarState, 1.0f);
+
+    boss_ui_reset_bar_trail(
+        &s_bossHealthBarState,
+        1.0f
+    );
 }
 
 void boss_ui_reset(void)
 {
     s_bossUiIntro = 1.0f;
-    boss_ui_reset_bar_trail(&s_bossHealthBarState, 1.0f);
+
+    boss_ui_reset_bar_trail(
+        &s_bossHealthBarState,
+        1.0f
+    );
 }
 
 void boss_ui_set_intro(float progress)
 {
-    s_bossUiIntro = boss_ui_clampf(progress, 0.0f, 1.0f);
+    s_bossUiIntro =
+        boss_ui_clampf(progress, 0.0f, 1.0f);
 }
 
 void boss_ui_snap_health_trail(float ratio)
 {
-    boss_ui_reset_bar_trail(&s_bossHealthBarState, ratio);
+    boss_ui_reset_bar_trail(
+        &s_bossHealthBarState,
+        ratio
+    );
 }
 
-void boss_ui_draw_health_bar(const char *name, float ratio, float flash)
-{
+void boss_ui_draw_health_bar(
+    const char *name,
+    float ratio,
+    float flash
+) {
     (void)name;
 
     ratio = boss_ui_clampf(ratio, 0.0f, 1.0f);
     flash = boss_ui_clampf(flash, 0.0f, 1.0f);
 
-    BossUiHealthLayout layout = boss_ui_make_health_layout();
+    BossUiHealthLayout layout =
+        boss_ui_make_health_layout();
 
-    boss_ui_update_bar_trails(ratio, &s_bossHealthBarState);
+    boss_ui_update_bar_trails(
+        ratio,
+        &s_bossHealthBarState
+    );
 
-    // Draw order:
-    // 1. Health fill/trails.
-    // 2. Decorative frame overlay.
-    // 3. Boss name above the frame.
-    boss_ui_draw_health_fill(&layout, ratio, flash, s_bossUiIntro);
+    boss_ui_prepare_flat_ui_pipe();
+
+    boss_ui_draw_health_fill(
+        &layout,
+        ratio,
+        flash,
+        s_bossUiIntro
+    );
+
+    // Restore sprite blending for the decorative frame and boss name.
+    boss_ui_prepare_sprite_ui_pipe(true);
+
     boss_ui_draw_health_frame(&layout);
     boss_ui_draw_health_name(&layout);
 }
@@ -567,7 +721,15 @@ void boss_ui_draw_lockon_marker(
     if (!viewport || !worldPos) return;
 
     T3DVec3 screenPos;
-    if (!boss_ui_world_to_screen(viewport, worldPos, &screenPos, 8)) {
+
+    if (
+        !boss_ui_world_to_screen(
+            viewport,
+            worldPos,
+            &screenPos,
+            8
+        )
+    ) {
         return;
     }
 
@@ -576,12 +738,16 @@ void boss_ui_draw_lockon_marker(
 
     rdpq_set_mode_standard();
 
-    if (s_zTargetIconSprite && s_zTargetIconSurf.width > 0 && s_zTargetIconSurf.height > 0) {
-        // Avoid alpha-compare clipping; rely on IA8 sprite alpha.
+    if (
+        s_zTargetIconSprite
+        && s_zTargetIconSurf.width > 0
+        && s_zTargetIconSurf.height > 0
+    ) {
+        // Avoid alpha-compare clipping; use IA8 sprite alpha.
         rdpq_mode_alphacompare(0);
         rdpq_mode_blender(RDPQ_BLENDER_MULTIPLY);
 
-        // Scale with depth so the marker behaves like a world-space attachment.
+        // Scale with depth like a world-space attachment.
         float z01 = screenPos.v[2];
 
         if (z01 < 0.0f) {
@@ -594,18 +760,21 @@ void boss_ui_draw_lockon_marker(
 
         // Keep these in sync with camera projection.
         const float nearClip = 4.0f;
-        const float farClip  = 2000.0f;
+        const float farClip = 2000.0f;
 
-        float z = nearClip + z01 * (farClip - nearClip);
+        float z =
+            nearClip
+            + z01 * (farClip - nearClip);
 
         if (z < nearClip) {
             z = nearClip;
         }
 
-        // Reference distance where the icon is about 8x8 on screen.
+        // Reference distance where the icon is about 8x8.
         const float zRef = 300.0f;
 
-        float scale = 0.125f * (zRef / z);
+        float scale =
+            0.125f * (zRef / z);
 
         if (scale < 0.05f) {
             scale = 0.05f;
@@ -615,17 +784,25 @@ void boss_ui_draw_lockon_marker(
             scale = 0.275f;
         }
 
-        rdpq_sprite_blit(s_zTargetIconSprite, px, py, &(rdpq_blitparms_t){
-            .scale_x = scale,
-            .scale_y = scale,
-            .cx = s_zTargetIconSurf.width / 2,
-            .cy = s_zTargetIconSurf.height / 2,
-        });
+        rdpq_sprite_blit(
+            s_zTargetIconSprite,
+            px,
+            py,
+            &(rdpq_blitparms_t){
+                .scale_x = scale,
+                .scale_y = scale,
+                .cx = s_zTargetIconSurf.width / 2,
+                .cy = s_zTargetIconSurf.height / 2,
+            }
+        );
     } else {
         // Fallback marker if the sprite failed to load.
         rdpq_mode_combiner(RDPQ_COMBINER_FLAT);
         rdpq_mode_blender(RDPQ_BLENDER_MULTIPLY);
-        rdpq_set_prim_color(RGBA32(255, 255, 255, 255));
+
+        rdpq_set_prim_color(
+            RGBA32(255, 255, 255, 255)
+        );
 
         const int halfSize = 3;
 
@@ -649,16 +826,28 @@ void boss_ui_draw_post_boss_a_prompt(
 
     T3DVec3 promptWorldPos = *worldPos;
 
-    // Small lift so the prompt does not intersect the head/target point.
+    // Small lift so the prompt does not intersect the head.
     promptWorldPos.v[1] += 12.0f;
 
     T3DVec3 screenPos;
-    if (!boss_ui_world_to_screen(viewport, &promptWorldPos, &screenPos, 16)) {
+
+    if (
+        !boss_ui_world_to_screen(
+            viewport,
+            &promptWorldPos,
+            &screenPos,
+            16
+        )
+    ) {
         return;
     }
 
     int px = (int)screenPos.v[0];
     int py = (int)screenPos.v[1];
 
-    button_prompt_draw_a_icon_centered(px, py, 20.0f);
+    button_prompt_draw_a_icon_centered(
+        px,
+        py,
+        20.0f
+    );
 }

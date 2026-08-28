@@ -3,46 +3,58 @@
 #include <libdragon.h>
 
 #include "character.h"
-#include "../utilities/game_time.h"
 #include "../utilities/globals.h"
 
 #include "../utilities/video_layout.h"
 
-#define CHARACTER_UI_TRAIL_HOLD_TIME 0.35f
-#define CHARACTER_UI_TRAIL_DECAY_RATE 0.6f
+/*
+ * Solid bar dimensions. A one-pixel opaque frame surrounds each fill.
+ */
+#define CHARACTER_UI_HEALTH_FILL_WIDTH 116
+#define CHARACTER_UI_HEALTH_FILL_HEIGHT 6
+#define CHARACTER_UI_HEALTH_FRAME_WIDTH \
+    (CHARACTER_UI_HEALTH_FILL_WIDTH + 2)
+#define CHARACTER_UI_HEALTH_FRAME_HEIGHT \
+    (CHARACTER_UI_HEALTH_FILL_HEIGHT + 2)
+
+#define CHARACTER_UI_STAMINA_FILL_WIDTH 86
+#define CHARACTER_UI_STAMINA_FILL_HEIGHT 2
+#define CHARACTER_UI_STAMINA_FRAME_WIDTH \
+    (CHARACTER_UI_STAMINA_FILL_WIDTH + 2)
+#define CHARACTER_UI_STAMINA_FRAME_HEIGHT \
+    (CHARACTER_UI_STAMINA_FILL_HEIGHT + 2)
 
 /*
- * Profiling toggle:
- * 1 = draw the C-button diamond, potion icon and potion count.
- * 0 = draw only health and stamina.
+ * One baked-color down-facing C-button is loaded from ROM. At initialization,
+ * it is rotated into a 2x2 RGBA16 atlas:
+ *
+ *   Down | Right
+ *   Up   | Left
+ *
+ * The atlas is uploaded once per HUD draw, then all four directions are drawn
+ * from sub-regions already resident in TMEM.
  */
-#define CHARACTER_UI_DRAW_C_BUTTONS 1
+static sprite_t* s_cButtonSprite = NULL;
+static surface_t s_cButtonSurf = {0};
+static surface_t s_cButtonAtlasSurf = {0};
 
-typedef struct {
-    float lossTrail;
-    float gainTrail;
-    float lastRatio;
-    float lossHold;
-    float gainHold;
-} CharacterUiBarTrailState;
-
-static sprite_t* s_cUpSprite = NULL;
-static sprite_t* s_cDownSprite = NULL;
-static sprite_t* s_cLeftSprite = NULL;
-static sprite_t* s_cRightSprite = NULL;
-
-static surface_t s_cUpSurf = {0};
-static surface_t s_cDownSurf = {0};
-static surface_t s_cLeftSurf = {0};
-static surface_t s_cRightSurf = {0};
-
-static sprite_t* s_healthBottleSprite = NULL;
-static surface_t s_healthBottleSurf = {0};
+static sprite_t* s_flaskSprite = NULL;
+static surface_t s_flaskSurf = {0};
 
 static float s_playerUiIntro = 1.0f;
 
-static CharacterUiBarTrailState s_playerHealthBarState  = {1.0f, 1.0f, 1.0f, 0.0f, 0.0f};
-static CharacterUiBarTrailState s_playerStaminaBarState = {1.0f, 1.0f, 1.0f, 0.0f, 0.0f};
+typedef struct {
+    int frameLeft;
+    int frameTop;
+    int frameWidth;
+    int frameHeight;
+
+    int fillLeft;
+    int fillTop;
+    int maxFillWidth;
+    int fillHeight;
+    int drawWidth;
+} CharacterUiBarLayout;
 
 static float character_ui_clampf(float x, float lo, float hi)
 {
@@ -50,7 +62,6 @@ static float character_ui_clampf(float x, float lo, float hi)
     if (x > hi) return hi;
     return x;
 }
-
 
 static void character_ui_begin(void)
 {
@@ -72,82 +83,19 @@ static void character_ui_begin(void)
     rdpq_mode_filter(FILTER_BILINEAR);
 }
 
-static void character_ui_reset_bar_trail(CharacterUiBarTrailState *s, float ratio)
+static void character_ui_prepare_baked_sprite_pipe(void)
 {
-    if (!s) return;
-
-    ratio = character_ui_clampf(ratio, 0.0f, 1.0f);
-
-    s->lossTrail = ratio;
-    s->gainTrail = ratio;
-    s->lastRatio = ratio;
-    s->lossHold = 0.0f;
-    s->gainHold = 0.0f;
-}
-
-static void character_ui_update_bar_trails(float ratio, CharacterUiBarTrailState *s)
-{
-    if (!s) return;
-
-    ratio = character_ui_clampf(ratio, 0.0f, 1.0f);
-
-    if (ratio < s->lastRatio) {
-        // Just lost health/stamina.
-        // Refresh loss hold and snap gain trail forward so stale healing
-        // highlight does not reappear behind new damage/use.
-        s->lossHold = CHARACTER_UI_TRAIL_HOLD_TIME;
-
-        if (s->gainTrail < ratio) {
-            s->gainTrail = ratio;
-        }
-    } else if (ratio > s->lastRatio) {
-        // Just gained health/stamina.
-        // Refresh gain hold and snap loss trail up to current.
-        s->gainHold = CHARACTER_UI_TRAIL_HOLD_TIME;
-
-        if (s->lossTrail < ratio) {
-            s->lossTrail = ratio;
-        }
-    }
-
-    s->lastRatio = ratio;
-
-    // Clamp trails to valid sides of the current ratio.
-    if (s->lossTrail < ratio) {
-        s->lossTrail = ratio;
-    }
-
-    if (s->gainTrail > ratio) {
-        s->gainTrail = ratio;
-    }
-
-    if (s->lossHold > 0.0f) {
-        s->lossHold -= deltaTime;
-
-        if (s->lossHold < 0.0f) {
-            s->lossHold = 0.0f;
-        }
-    } else if (s->lossTrail > ratio) {
-        s->lossTrail -= CHARACTER_UI_TRAIL_DECAY_RATE * deltaTime;
-
-        if (s->lossTrail < ratio) {
-            s->lossTrail = ratio;
-        }
-    }
-
-    if (s->gainHold > 0.0f) {
-        s->gainHold -= deltaTime;
-
-        if (s->gainHold < 0.0f) {
-            s->gainHold = 0.0f;
-        }
-    } else if (s->gainTrail < ratio) {
-        s->gainTrail += CHARACTER_UI_TRAIL_DECAY_RATE * deltaTime;
-
-        if (s->gainTrail > ratio) {
-            s->gainTrail = ratio;
-        }
-    }
+    /*
+     * Direct baked-color RGBA16 path:
+     * - texture color is used as authored
+     * - transparent texels are discarded
+     * - no framebuffer blending
+     * - point filtering avoids unnecessary filtering on pixel-art UI
+     */
+    rdpq_mode_combiner(RDPQ_COMBINER_TEX);
+    rdpq_mode_alphacompare(1);
+    rdpq_mode_blender(0);
+    rdpq_mode_filter(FILTER_POINT);
 }
 
 static void character_ui_load_sprite(sprite_t **sprite, surface_t *surface, const char *path)
@@ -176,45 +124,247 @@ static void character_ui_free_sprite(sprite_t **sprite, surface_t *surface)
     *surface = (surface_t){0};
 }
 
+static void character_ui_copy_rgba16_pixel(
+    surface_t *dst,
+    int dstX,
+    int dstY,
+    const surface_t *src,
+    int srcX,
+    int srcY
+) {
+    uint8_t *dstPixel =
+        (uint8_t *)dst->buffer
+        + (size_t)dstY * (size_t)dst->stride
+        + (size_t)dstX * 2U;
+
+    const uint8_t *srcPixel =
+        (const uint8_t *)src->buffer
+        + (size_t)srcY * (size_t)src->stride
+        + (size_t)srcX * 2U;
+
+    /*
+     * Copy the packed RGBA5551 value byte-for-byte. Its byte order does not
+     * matter here because rotation only relocates complete pixels.
+     */
+    dstPixel[0] = srcPixel[0];
+    dstPixel[1] = srcPixel[1];
+}
+
+static bool character_ui_build_c_button_atlas(void)
+{
+    if (!s_cButtonSprite || !s_cButtonSurf.buffer) {
+        return false;
+    }
+
+    if (sprite_get_format(s_cButtonSprite) != FMT_RGBA16) {
+        debugf("character_ui: cbutton sprite must be RGBA16\n");
+        return false;
+    }
+
+    const int buttonW = s_cButtonSurf.width;
+    const int buttonH = s_cButtonSurf.height;
+
+    if (buttonW <= 0 || buttonH <= 0) {
+        debugf("character_ui: cbutton sprite has invalid dimensions\n");
+        return false;
+    }
+
+    /*
+     * Ninety-degree rotations keep the same atlas cell dimensions only for a
+     * square source. The supplied C-button is expected to be square.
+     */
+    if (buttonW != buttonH) {
+        debugf(
+            "character_ui: cbutton sprite must be square; got %dx%d\n",
+            buttonW,
+            buttonH
+        );
+        return false;
+    }
+
+    const int atlasW = buttonW * 2;
+    const int atlasH = buttonH * 2;
+    const size_t atlasTexelBytes =
+        (size_t)atlasW * (size_t)atlasH * 2U;
+
+    /*
+     * RGBA16 has two bytes per texel. Keep the complete atlas within the RDP's
+     * 4 KiB TMEM so it can be uploaded once without splitting.
+     */
+    if (atlasTexelBytes > 4096U) {
+        debugf(
+            "character_ui: cbutton atlas is too large for TMEM "
+            "(%dx%d RGBA16 = %lu bytes)\n",
+            atlasW,
+            atlasH,
+            (unsigned long)atlasTexelBytes
+        );
+        return false;
+    }
+
+    s_cButtonAtlasSurf = surface_alloc(
+        FMT_RGBA16,
+        (uint16_t)atlasW,
+        (uint16_t)atlasH
+    );
+
+    if (!s_cButtonAtlasSurf.buffer) {
+        debugf("character_ui: failed to allocate cbutton atlas\n");
+        s_cButtonAtlasSurf = (surface_t){0};
+        return false;
+    }
+
+    /*
+     * Transparent black for any alignment/padding bytes and any source pixels
+     * outside the four copied cells.
+     */
+    const size_t atlasBufferBytes =
+        (size_t)s_cButtonAtlasSurf.stride
+        * (size_t)s_cButtonAtlasSurf.height;
+
+    memset(s_cButtonAtlasSurf.buffer, 0, atlasBufferBytes);
+
+    for (int srcY = 0; srcY < buttonH; ++srcY) {
+        for (int srcX = 0; srcX < buttonW; ++srcX) {
+            /*
+             * Down: source copied directly into the top-left cell.
+             */
+            character_ui_copy_rgba16_pixel(
+                &s_cButtonAtlasSurf,
+                srcX,
+                srcY,
+                &s_cButtonSurf,
+                srcX,
+                srcY
+            );
+
+            /*
+             * Right: visually rotate the down arrow 90 degrees
+             * counter-clockwise in screen coordinates.
+             */
+            character_ui_copy_rgba16_pixel(
+                &s_cButtonAtlasSurf,
+                buttonW + srcY,
+                buttonW - 1 - srcX,
+                &s_cButtonSurf,
+                srcX,
+                srcY
+            );
+
+            /*
+             * Up: rotate 180 degrees.
+             */
+            character_ui_copy_rgba16_pixel(
+                &s_cButtonAtlasSurf,
+                buttonW - 1 - srcX,
+                buttonH + buttonH - 1 - srcY,
+                &s_cButtonSurf,
+                srcX,
+                srcY
+            );
+
+            /*
+             * Left: visually rotate the down arrow 90 degrees clockwise.
+             */
+            character_ui_copy_rgba16_pixel(
+                &s_cButtonAtlasSurf,
+                buttonW + buttonW - 1 - srcY,
+                buttonH + srcX,
+                &s_cButtonSurf,
+                srcX,
+                srcY
+            );
+        }
+    }
+
+    data_cache_hit_writeback(
+        s_cButtonAtlasSurf.buffer,
+        atlasBufferBytes
+    );
+
+    return true;
+}
+
+static void character_ui_free_c_button_atlas(void)
+{
+    if (s_cButtonAtlasSurf.buffer) {
+        surface_free(&s_cButtonAtlasSurf);
+    }
+
+    s_cButtonAtlasSurf = (surface_t){0};
+}
+
+static void character_ui_draw_atlas_region_centered(
+    int centerX,
+    int centerY,
+    int drawW,
+    int drawH,
+    int sourceX,
+    int sourceY,
+    int sourceW,
+    int sourceH
+) {
+    if (drawW <= 0 || drawH <= 0) return;
+    if (sourceW <= 0 || sourceH <= 0) return;
+
+    float left = (float)centerX - (float)drawW * 0.5f;
+    float top = (float)centerY - (float)drawH * 0.5f;
+
+    rdpq_texture_rectangle_scaled(
+        TILE0,
+        left,
+        top,
+        left + (float)drawW,
+        top + (float)drawH,
+        sourceX,
+        sourceY,
+        sourceX + sourceW,
+        sourceY + sourceH
+    );
+}
+
 void character_ui_init(void)
 {
     s_playerUiIntro = 1.0f;
 
-    character_ui_reset_bar_trail(&s_playerHealthBarState, 1.0f);
-    character_ui_reset_bar_trail(&s_playerStaminaBarState, 1.0f);
+    /*
+     * One baked-color down-facing button. The other directions are generated
+     * once into an atlas, not rotated or re-uploaded independently per frame.
+     */
+    character_ui_load_sprite(
+        &s_cButtonSprite,
+        &s_cButtonSurf,
+        "rom:/buttons/cbutton.rgba16.sprite"
+    );
 
-    // C-left uses the empty variant because the health potion graphic is drawn
-    // over it. The other three show their arrow icon/unassigned slot.
-    character_ui_load_sprite(&s_cUpSprite,    &s_cUpSurf,    "rom:/buttons/CUp.sprite");
-    character_ui_load_sprite(&s_cDownSprite,  &s_cDownSurf,  "rom:/buttons/CDown.sprite");
-    character_ui_load_sprite(&s_cLeftSprite,  &s_cLeftSurf,  "rom:/buttons/CButton_empty.sprite");
-    character_ui_load_sprite(&s_cRightSprite, &s_cRightSurf, "rom:/buttons/CRight.sprite");
+    if (!character_ui_build_c_button_atlas()) {
+        debugf("character_ui: C-button atlas unavailable\n");
+    }
 
-    // Health potion bottle icon.
-    character_ui_load_sprite(&s_healthBottleSprite, &s_healthBottleSurf, "rom:/healthBottle.ia8.sprite");
+    // Baked-color potion flask; no runtime tinting.
+    character_ui_load_sprite(
+        &s_flaskSprite,
+        &s_flaskSurf,
+        "rom:/flask.rgba16.sprite"
+    );
 }
 
 void character_ui_cleanup(void)
 {
-    character_ui_free_sprite(&s_cUpSprite,    &s_cUpSurf);
-    character_ui_free_sprite(&s_cDownSprite,  &s_cDownSurf);
-    character_ui_free_sprite(&s_cLeftSprite,  &s_cLeftSurf);
-    character_ui_free_sprite(&s_cRightSprite, &s_cRightSurf);
-
-    character_ui_free_sprite(&s_healthBottleSprite, &s_healthBottleSurf);
+    /*
+     * The atlas contains copies of the source pixels, so it can be freed
+     * independently of the source sprite.
+     */
+    character_ui_free_c_button_atlas();
+    character_ui_free_sprite(&s_cButtonSprite, &s_cButtonSurf);
+    character_ui_free_sprite(&s_flaskSprite, &s_flaskSurf);
 
     s_playerUiIntro = 1.0f;
-
-    character_ui_reset_bar_trail(&s_playerHealthBarState, 1.0f);
-    character_ui_reset_bar_trail(&s_playerStaminaBarState, 1.0f);
 }
 
 void character_ui_reset(void)
 {
     s_playerUiIntro = 1.0f;
-
-    character_ui_reset_bar_trail(&s_playerHealthBarState, 1.0f);
-    character_ui_reset_bar_trail(&s_playerStaminaBarState, 1.0f);
 }
 
 void character_ui_set_intro(float progress)
@@ -222,263 +372,364 @@ void character_ui_set_intro(float progress)
     s_playerUiIntro = character_ui_clampf(progress, 0.0f, 1.0f);
 }
 
-static void character_ui_draw_health_bar_impl(const char *name, float ratio, float flash)
+static CharacterUiBarLayout character_ui_get_health_bar_layout(float ratio)
 {
-    (void)name;
-
     ratio = character_ui_clampf(ratio, 0.0f, 1.0f);
-    flash = character_ui_clampf(flash, 0.0f, 1.0f);
 
     const int marginX = ui_safe_margin_x();
     const int marginY = ui_safe_margin_y();
 
-    const int barWidth = 120;
-    const int barHeight = 10;
-
     float p = s_playerUiIntro;
-    int slideDist = 40;
+    const int slideDist = 40;
     int yOffset = (int)((1.0f - p) * (float)slideDist);
 
-    int left = marginX;
-    int top = marginY + 4 - yOffset;
-    int bottom = top + barHeight;
-    int right = left + barWidth;
+    /*
+     * Preserve the existing bar position:
+     * fill begins at marginX + 2, marginY + 6.
+     * The new frame sits exactly one pixel around it.
+     */
+    CharacterUiBarLayout layout = {
+        .frameLeft = marginX + 1,
+        .frameTop = marginY + 5 - yOffset,
+        .frameWidth = CHARACTER_UI_HEALTH_FRAME_WIDTH,
+        .frameHeight = CHARACTER_UI_HEALTH_FRAME_HEIGHT,
 
-    // Background.
-    rdpq_set_prim_color(RGBA32(35, 35, 35, 160));
-    rdpq_fill_rectangle(left, top, right, bottom);
+        .fillLeft = marginX + 2,
+        .fillTop = marginY + 6 - yOffset,
+        .maxFillWidth = CHARACTER_UI_HEALTH_FILL_WIDTH,
+        .fillHeight = CHARACTER_UI_HEALTH_FILL_HEIGHT,
+        .drawWidth =
+            (int)((float)CHARACTER_UI_HEALTH_FILL_WIDTH * ratio),
+    };
 
-    // Inner empty region.
-    rdpq_set_prim_color(RGBA32(10, 10, 10, 190));
-    rdpq_fill_rectangle(left + 1, top + 1, right - 1, bottom - 1);
+    return layout;
+}
 
-    character_ui_update_bar_trails(ratio, &s_playerHealthBarState);
+static CharacterUiBarLayout character_ui_get_stamina_bar_layout(float ratio)
+{
+    ratio = character_ui_clampf(ratio, 0.0f, 1.0f);
 
-    int red = 200 + (int)(55.0f * flash);
-    int green = 35 + (int)(45.0f * flash);
-    int blue = 35 + (int)(45.0f * flash);
+    const int marginX = ui_safe_margin_x();
+    const int marginY = ui_safe_margin_y();
 
-    int fillRight = left + 2 + (int)((float)(barWidth - 4) * ratio);
-    int lossRight = left + 2 + (int)((float)(barWidth - 4) * s_playerHealthBarState.lossTrail);
-    int gainLeft = left + 2 + (int)((float)(barWidth - 4) * s_playerHealthBarState.gainTrail);
+    float p = s_playerUiIntro;
+    const int slideDist = 40;
+    int yOffset = (int)((1.0f - p) * (float)slideDist);
 
-    // Recent-damage segment.
-    if (lossRight > fillRight) {
-        rdpq_set_prim_color(RGBA32(230, 200, 60, 220));
-        rdpq_fill_rectangle(fillRight, top + 2, lossRight, bottom - 2);
+    /*
+     * The stamina fill is exactly two pixels high.
+     */
+    int healthBarBottom = marginY + 14 - yOffset;
+
+    CharacterUiBarLayout layout = {
+        .frameLeft = marginX + 1,
+        .frameTop = healthBarBottom + 1,
+        .frameWidth = CHARACTER_UI_STAMINA_FRAME_WIDTH,
+        .frameHeight = CHARACTER_UI_STAMINA_FRAME_HEIGHT,
+
+        .fillLeft = marginX + 2,
+        .fillTop = healthBarBottom + 2,
+        .maxFillWidth = CHARACTER_UI_STAMINA_FILL_WIDTH,
+        .fillHeight = CHARACTER_UI_STAMINA_FILL_HEIGHT,
+        .drawWidth =
+            (int)((float)CHARACTER_UI_STAMINA_FILL_WIDTH * ratio),
+    };
+
+    return layout;
+}
+
+static void character_ui_draw_bar_rectangles(
+    const CharacterUiBarLayout *healthLayout,
+    const CharacterUiBarLayout *staminaLayout,
+    float healthFlash
+) {
+    if (!healthLayout && !staminaLayout) {
+        return;
     }
 
-    // Health fill.
-    if (fillRight > left + 2) {
-        rdpq_set_prim_color(RGBA32(red, green, blue, 220));
-        rdpq_fill_rectangle(left + 2, top + 2, fillRight, bottom - 2);
+    /*
+     * Draw both HUD bars entirely with opaque fill rectangles:
+     *
+     *   1. grey one-pixel outer frames
+     *   2. dark empty-bar interiors
+     *   3. red health fill
+     *   4. green stamina fill
+     *
+     * No bar textures, texture uploads, alpha blending, or alpha compare are
+     * involved.
+     */
+    rdpq_set_mode_fill(RGBA32(128, 128, 128, 255));
+
+    if (healthLayout) {
+        rdpq_fill_rectangle(
+            healthLayout->frameLeft,
+            healthLayout->frameTop,
+            healthLayout->frameLeft + healthLayout->frameWidth,
+            healthLayout->frameTop + healthLayout->frameHeight
+        );
     }
 
-    // Recent-heal highlight.
-    if (gainLeft < fillRight) {
-        rdpq_set_prim_color(RGBA32(240, 240, 240, 220));
-        rdpq_fill_rectangle(gainLeft, top + 2, fillRight, bottom - 2);
+    if (staminaLayout) {
+        rdpq_fill_rectangle(
+            staminaLayout->frameLeft,
+            staminaLayout->frameTop,
+            staminaLayout->frameLeft + staminaLayout->frameWidth,
+            staminaLayout->frameTop + staminaLayout->frameHeight
+        );
     }
 
-    // Light frame.
-    rdpq_set_prim_color(RGBA32(210, 210, 210, 180));
-    rdpq_fill_rectangle(left, top, right, top + 1);
-    rdpq_fill_rectangle(left, bottom - 1, right, bottom);
-    rdpq_fill_rectangle(left, top, left + 1, bottom);
-    rdpq_fill_rectangle(right - 1, top, right, bottom);
+    rdpq_set_mode_fill(RGBA32(10, 10, 10, 255));
+
+    if (healthLayout) {
+        rdpq_fill_rectangle(
+            healthLayout->frameLeft + 1,
+            healthLayout->frameTop + 1,
+            healthLayout->frameLeft + healthLayout->frameWidth - 1,
+            healthLayout->frameTop + healthLayout->frameHeight - 1
+        );
+    }
+
+    if (staminaLayout) {
+        rdpq_fill_rectangle(
+            staminaLayout->frameLeft + 1,
+            staminaLayout->frameTop + 1,
+            staminaLayout->frameLeft + staminaLayout->frameWidth - 1,
+            staminaLayout->frameTop + staminaLayout->frameHeight - 1
+        );
+    }
+
+    if (healthLayout && healthLayout->drawWidth > 0) {
+        healthFlash = character_ui_clampf(healthFlash, 0.0f, 1.0f);
+
+        int red = 200 + (int)(55.0f * healthFlash);
+        int green = 30 + (int)(20.0f * healthFlash);
+        int blue = 30 + (int)(20.0f * healthFlash);
+
+        rdpq_set_mode_fill(RGBA32(red, green, blue, 255));
+        rdpq_fill_rectangle(
+            healthLayout->fillLeft,
+            healthLayout->fillTop,
+            healthLayout->fillLeft + healthLayout->drawWidth,
+            healthLayout->fillTop + healthLayout->fillHeight
+        );
+    }
+
+    if (staminaLayout && staminaLayout->drawWidth > 0) {
+        rdpq_set_mode_fill(RGBA32(30, 190, 50, 255));
+        rdpq_fill_rectangle(
+            staminaLayout->fillLeft,
+            staminaLayout->fillTop,
+            staminaLayout->fillLeft + staminaLayout->drawWidth,
+            staminaLayout->fillTop + staminaLayout->fillHeight
+        );
+    }
+}
+
+static void character_ui_restore_baked_sprite_pipe(void)
+{
+    /*
+     * rdpq_set_mode_fill changes the RDP cycle type. Restore the standard
+     * opaque textured path before drawing the C-buttons, flask, or text.
+     */
+    character_ui_begin();
+    character_ui_prepare_baked_sprite_pipe();
+}
+
+static void character_ui_draw_health_bar_impl(
+    const char *name,
+    float ratio,
+    float flash
+) {
+    (void)name;
+
+    CharacterUiBarLayout layout =
+        character_ui_get_health_bar_layout(ratio);
+
+    character_ui_draw_bar_rectangles(
+        &layout,
+        NULL,
+        flash
+    );
+
+    character_ui_restore_baked_sprite_pipe();
 }
 
 static void character_ui_draw_stamina_bar_impl(float ratio)
 {
-    ratio = character_ui_clampf(ratio, 0.0f, 1.0f);
+    CharacterUiBarLayout layout =
+        character_ui_get_stamina_bar_layout(ratio);
 
-    const int marginX = ui_safe_margin_x();
-    const int marginY = ui_safe_margin_y();
+    character_ui_draw_bar_rectangles(
+        NULL,
+        &layout,
+        0.0f
+    );
 
-    const int healthBarWidth = 120;
-    const int healthBarHeight = 10;
-
-    const int barWidth = (healthBarWidth * 3) / 4;
-    const int barHeight = 6;
-
-    float p = s_playerUiIntro;
-    int slideDist = 40;
-    int yOffset = (int)((1.0f - p) * (float)slideDist);
-
-    // Sit flush against the bottom of the health bar so the borders share a line.
-    int healthBarBottom = marginY + 4 + healthBarHeight - yOffset;
-
-    int left = marginX;
-    int top = healthBarBottom;
-    int bottom = top + barHeight;
-    int right = left + barWidth;
-
-    // Background.
-    rdpq_set_prim_color(RGBA32(35, 35, 35, 160));
-    rdpq_fill_rectangle(left, top, right, bottom);
-
-    // Inner empty region.
-    rdpq_set_prim_color(RGBA32(10, 10, 10, 190));
-    rdpq_fill_rectangle(left + 1, top + 1, right - 1, bottom - 1);
-
-    character_ui_update_bar_trails(ratio, &s_playerStaminaBarState);
-
-    int fillWidth = (int)((float)(barWidth - 4) * ratio);
-    int lossWidth = (int)((float)(barWidth - 4) * s_playerStaminaBarState.lossTrail);
-    int gainWidth = (int)((float)(barWidth - 4) * s_playerStaminaBarState.gainTrail);
-
-    // Recently-used segment.
-    if (lossWidth > fillWidth) {
-        rdpq_set_prim_color(RGBA32(230, 200, 60, 220));
-        rdpq_fill_rectangle(left + 2 + fillWidth, top + 2, left + 2 + lossWidth, bottom - 2);
-    }
-
-    // Stamina fill.
-    // Require at least 2px before rendering so sub-pixel residue does not leave
-    // a sliver when the bar is empty.
-    if (fillWidth >= 2) {
-        rdpq_set_prim_color(RGBA32(60, 200, 80, 220));
-        rdpq_fill_rectangle(left + 2, top + 2, left + 2 + fillWidth, bottom - 2);
-    }
-
-    // Recently-regenerated highlight.
-    if (gainWidth < fillWidth) {
-        rdpq_set_prim_color(RGBA32(240, 240, 240, 220));
-        rdpq_fill_rectangle(left + 2 + gainWidth, top + 2, left + 2 + fillWidth, bottom - 2);
-    }
-
-    // Light frame.
-    rdpq_set_prim_color(RGBA32(210, 210, 210, 180));
-    rdpq_fill_rectangle(left, top, right, top + 1);
-    rdpq_fill_rectangle(left, bottom - 1, right, bottom);
-    rdpq_fill_rectangle(left, top, left + 1, bottom);
-    rdpq_fill_rectangle(right - 1, top, right, bottom);
+    character_ui_restore_baked_sprite_pipe();
 }
 
 static void character_ui_draw_c_buttons_impl(void)
 {
-    // Bottom-left C-button diamond.
-    // This should be called by scene after the 3D/world pass, with the rest of
-    // the 2D UI.
-    if (!s_cLeftSprite) return;
+    if (!s_cButtonAtlasSurf.buffer) {
+        return;
+    }
 
-    int w = (s_cLeftSurf.width > 0) ? s_cLeftSurf.width : 24;
-    int h = (s_cLeftSurf.height > 0) ? s_cLeftSurf.height : 24;
+    const int sourceW = s_cButtonSurf.width;
+    const int sourceH = s_cButtonSurf.height;
 
-    // Target on-screen button size. Source sprites are currently 64x64.
-    const float targetButtonPx = 20.0f;
-    int srcMax = (w > h) ? w : h;
+    if (sourceW <= 0 || sourceH <= 0) {
+        return;
+    }
 
-    float cScale = (srcMax > 0)
-        ? (targetButtonPx / (float)srcMax)
+    /*
+     * Keep the existing approximate 20x20 onscreen size. The source is expected
+     * to already be close to this size, so scaling should be small or absent.
+     */
+    const int targetButtonPx = 20;
+    int sourceMax = (sourceW > sourceH) ? sourceW : sourceH;
+
+    float scale = (sourceMax > 0)
+        ? ((float)targetButtonPx / (float)sourceMax)
         : 1.0f;
 
-    int drawW = (int)((float)w * cScale);
-    int drawH = (int)((float)h * cScale);
+    int drawW = (int)((float)sourceW * scale + 0.5f);
+    int drawH = (int)((float)sourceH * scale + 0.5f);
 
     const int marginX = ui_safe_margin_x();
     const int marginY = ui_safe_margin_y();
 
-    // Diamond spacing. The source sprites have transparent padding, so this
-    // keeps the visible button edges closer together.
     const float spacingFrac = 0.7f;
     int spacingX = (int)((float)drawW * spacingFrac);
     int spacingY = (int)((float)drawH * spacingFrac);
 
-    // Diamond center. Enough room from safe bounds that C-left and C-down sit
-    // near the bottom-left corner.
     int centerX = marginX + spacingX + (drawW / 2);
-    int centerY = SCREEN_HEIGHT - marginY - spacingY - (drawH / 2);
+    int centerY =
+        SCREEN_HEIGHT - marginY - spacingY - (drawH / 2);
 
-    int leftX  = centerX - spacingX;
-    int leftY  = centerY;
+    int leftX = centerX - spacingX;
+    int leftY = centerY;
 
     int rightX = centerX + spacingX;
     int rightY = centerY;
 
-    int upX    = centerX;
-    int upY    = centerY - spacingY;
+    int upX = centerX;
+    int upY = centerY - spacingY;
 
-    int downX  = centerX;
-    int downY  = centerY + spacingY;
+    int downX = centerX;
+    int downY = centerY + spacingY;
 
     /*
-     * Switch only the combiner needed for sprite drawing. The rest of the
-     * pipeline was configured once by character_ui_begin().
+     * RGBA16 uses baked color and binary alpha. No tint combiner or framebuffer
+     * blending is needed. Alpha compare discards transparent atlas pixels.
      */
-    rdpq_mode_alphacompare(0);
-    rdpq_mode_combiner(RDPQ_COMBINER_TEX);
+    character_ui_prepare_baked_sprite_pipe();
 
-    if (s_cUpSprite && s_cUpSurf.width > 0 && s_cUpSurf.height > 0) {
-        rdpq_sprite_blit(s_cUpSprite, upX, upY, &(rdpq_blitparms_t){
-            .scale_x = cScale,
-            .scale_y = cScale,
-            .cx = s_cUpSurf.width / 2,
-            .cy = s_cUpSurf.height / 2,
-        });
-    }
+    rdpq_texparms_t atlasParams = (rdpq_texparms_t){};
+    atlasParams.s.repeats = 1;
+    atlasParams.t.repeats = 1;
 
-    if (s_cDownSprite && s_cDownSurf.width > 0 && s_cDownSurf.height > 0) {
-        rdpq_sprite_blit(s_cDownSprite, downX, downY, &(rdpq_blitparms_t){
-            .scale_x = cScale,
-            .scale_y = cScale,
-            .cx = s_cDownSurf.width / 2,
-            .cy = s_cDownSurf.height / 2,
-        });
-    }
+    /*
+     * Upload all four directions once.
+     */
+    rdpq_tex_upload(
+        TILE0,
+        &s_cButtonAtlasSurf,
+        &atlasParams
+    );
 
-    if (s_cRightSprite && s_cRightSurf.width > 0 && s_cRightSurf.height > 0) {
-        rdpq_sprite_blit(s_cRightSprite, rightX, rightY, &(rdpq_blitparms_t){
-            .scale_x = cScale,
-            .scale_y = cScale,
-            .cx = s_cRightSurf.width / 2,
-            .cy = s_cRightSurf.height / 2,
-        });
-    }
+    /*
+     * Atlas layout:
+     *
+     *   Down | Right
+     *   Up   | Left
+     */
+    character_ui_draw_atlas_region_centered(
+        downX,
+        downY,
+        drawW,
+        drawH,
+        0,
+        0,
+        sourceW,
+        sourceH
+    );
 
-    if (s_cLeftSprite && s_cLeftSurf.width > 0 && s_cLeftSurf.height > 0) {
-        rdpq_sprite_blit(s_cLeftSprite, leftX, leftY, &(rdpq_blitparms_t){
-            .scale_x = cScale,
-            .scale_y = cScale,
-            .cx = s_cLeftSurf.width / 2,
-            .cy = s_cLeftSurf.height / 2,
-        });
-    }
+    character_ui_draw_atlas_region_centered(
+        rightX,
+        rightY,
+        drawW,
+        drawH,
+        sourceW,
+        0,
+        sourceW,
+        sourceH
+    );
 
-    // Only show the potion bottle + count while the player has potions.
+    character_ui_draw_atlas_region_centered(
+        upX,
+        upY,
+        drawW,
+        drawH,
+        0,
+        sourceH,
+        sourceW,
+        sourceH
+    );
+
+    character_ui_draw_atlas_region_centered(
+        leftX,
+        leftY,
+        drawW,
+        drawH,
+        sourceW,
+        sourceH,
+        sourceW,
+        sourceH
+    );
+
     int potionCount = character_get_health_potion_count();
 
     if (potionCount <= 0) {
         return;
     }
 
-    if (s_healthBottleSprite && s_healthBottleSurf.width > 0 && s_healthBottleSurf.height > 0) {
-        float target = (float)((drawW < drawH) ? drawW : drawH) * 0.80f;
-        float denom = (float)(
-            (s_healthBottleSurf.width > s_healthBottleSurf.height)
-                ? s_healthBottleSurf.width
-                : s_healthBottleSurf.height
+    if (s_flaskSprite
+        && s_flaskSurf.width > 0
+        && s_flaskSurf.height > 0
+    ) {
+        float target =
+            (float)((drawW < drawH) ? drawW : drawH) * 0.80f;
+
+        float sourceMaxFlask = (float)(
+            (s_flaskSurf.width > s_flaskSurf.height)
+                ? s_flaskSurf.width
+                : s_flaskSurf.height
         );
 
-        float bottleScale = (denom > 0.0f)
-            ? (target / denom)
+        float flaskScale = (sourceMaxFlask > 0.0f)
+            ? (target / sourceMaxFlask)
             : 1.0f;
 
-        if (bottleScale < 0.05f) bottleScale = 0.05f;
-        if (bottleScale > 4.0f)  bottleScale = 4.0f;
+        if (flaskScale < 0.05f) flaskScale = 0.05f;
+        if (flaskScale > 4.0f) flaskScale = 4.0f;
 
-        // Tint the IA8 bottle sprite dark red so it contrasts against the
-        // yellow button.
-        rdpq_mode_alphacompare(1);
-        rdpq_mode_combiner(RDPQ_COMBINER_TEX_FLAT);
-        rdpq_set_prim_color(RGBA32(180, 30, 30, 255));
+        /*
+         * The flask is baked RGBA16, so draw it directly without TEX_FLAT or a
+         * red primitive-color tint.
+         */
+        character_ui_prepare_baked_sprite_pipe();
 
-        rdpq_sprite_blit(s_healthBottleSprite, leftX, leftY, &(rdpq_blitparms_t){
-            .scale_x = bottleScale,
-            .scale_y = bottleScale,
-            .cx = s_healthBottleSurf.width / 2,
-            .cy = s_healthBottleSurf.height / 2,
-        });
+        rdpq_sprite_blit(
+            s_flaskSprite,
+            leftX,
+            leftY,
+            &(rdpq_blitparms_t){
+                .scale_x = flaskScale,
+                .scale_y = flaskScale,
+                .cx = s_flaskSurf.width / 2,
+                .cy = s_flaskSurf.height / 2,
+            }
+        );
     }
 
     // Potion count.
@@ -486,25 +737,34 @@ static void character_ui_draw_c_buttons_impl(void)
         const int textX = leftX + (drawW / 2) + 2;
         const int textY = leftY + 4;
 
+        /*
+         * Restore the blended flat path expected by the font renderer.
+         */
         rdpq_mode_alphacompare(0);
+        rdpq_mode_blender(RDPQ_BLENDER_MULTIPLY);
         rdpq_mode_combiner(RDPQ_COMBINER_FLAT);
         rdpq_set_prim_color(RGBA32(0, 0, 0, 255));
 
-        rdpq_text_printf(NULL, FONT_UNBALANCED, textX, textY, "%d", potionCount);
+        rdpq_text_printf(
+            NULL,
+            FONT_UNBALANCED,
+            textX,
+            textY,
+            "%d",
+            potionCount
+        );
     }
 }
 
 void character_ui_draw_health_bar(const char *name, float ratio, float flash)
 {
     character_ui_begin();
-    rdpq_mode_combiner(RDPQ_COMBINER_FLAT);
     character_ui_draw_health_bar_impl(name, ratio, flash);
 }
 
 void character_ui_draw_stamina_bar(float ratio)
 {
     character_ui_begin();
-    rdpq_mode_combiner(RDPQ_COMBINER_FLAT);
     character_ui_draw_stamina_bar_impl(ratio);
 }
 
@@ -516,26 +776,30 @@ void character_ui_draw_c_buttons(void)
 
 void character_ui_draw(void)
 {
-    float hp = character_get_health();
-    float maxHp = character_get_max_health();
-    float stamina = character_get_stamina();
-    float maxStamina = character_get_max_stamina();
-
-    float hpRatio = (maxHp > 0.0f) ? (hp / maxHp) : 0.0f;
-    float staminaRatio = (maxStamina > 0.0f) ? (stamina / maxStamina) : 0.0f;
-    float damageFlash = character_get_damage_flash_ratio();
-
-    /*
-     * One standard-mode setup for the complete character HUD.
-     * Subsequent sections change only combiner/alpha state as needed.
-     */
     character_ui_begin();
 
-    rdpq_mode_combiner(RDPQ_COMBINER_FLAT);
-    character_ui_draw_health_bar_impl("Player", hpRatio, damageFlash);
-    character_ui_draw_stamina_bar_impl(staminaRatio);
+    float hp = character_get_health();
+    float maxHp = character_get_max_health();
+    float hpRatio = (maxHp > 0.0f) ? (hp / maxHp) : 0.0f;
 
-#if CHARACTER_UI_DRAW_C_BUTTONS
+    float stamina = character_get_stamina();
+    float maxStamina = character_get_max_stamina();
+    float staminaRatio = (maxStamina > 0.0f)
+        ? (stamina / maxStamina)
+        : 0.0f;
+
+    CharacterUiBarLayout healthLayout =
+        character_ui_get_health_bar_layout(hpRatio);
+
+    CharacterUiBarLayout staminaLayout =
+        character_ui_get_stamina_bar_layout(staminaRatio);
+
+    character_ui_draw_bar_rectangles(
+        &healthLayout,
+        &staminaLayout,
+        0.0f
+    );
+
+    character_ui_restore_baked_sprite_pipe();
     character_ui_draw_c_buttons_impl();
-#endif
 }

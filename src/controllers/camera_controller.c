@@ -22,8 +22,8 @@ T3DVec3 cameraLockOnTarget = {{0.0f, 0.0f, 0.0f}};
 float cameraLockBlend = 0.0f; // 0: follow character, 1: lock onto target
 
 // Third-person camera variables
-float cameraDistance = 1200.0f;      // Distance behind character (zoomed back)
-float cameraHeight = 1200.0f;        // Height offset above character
+float cameraDistance = 900.0f;      // Distance behind character (zoomed back)
+float cameraHeight = 1400.0f;        // Height offset above character
 float cameraAngleX = 0.0f;           // Horizontal rotation around character
 float cameraAngleY = -0.5f;          // Vertical rotation (pitch) - slightly downward
 float cameraMinY = -1.4f;            // Minimum pitch angle (about -80 degrees)

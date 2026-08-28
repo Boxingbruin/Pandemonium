@@ -43,9 +43,6 @@
 #include "../../fx/sword_trail.h"
 #include "../../fx/screen_shake.h"
 
-/* Loaded and owned by character.c; used only to record a material-free shadow DPL. */
-extern T3DModel *characterModel;
-
 // TODO: This should not be declared in the header file, as it is only used externally (temp)
 #include "dev.h"
 #include "debug_draw.h"
@@ -331,7 +328,6 @@ static GuardianEnvironmentMipChain s_environmentWallsMipChains[
 static const rdpq_mipmap_t GUARDIAN_ENVIRONMENT_OPTIMIZED_MIP_MODE = MIPMAP_NEAREST;
 
 
-
 static ScrollParams s_environmentFogScrollParams = {
     .xSpeed = 0.0f,
     .ySpeed = 10.0f,
@@ -481,13 +477,39 @@ static GuardianEnvironmentObject s_environmentSunshafts;
 #define GUARDIAN_ACTOR_DIRECTIONAL_LIGHT_LEVEL 255
 
 /*
- * Actors use 65% of the scene ambient while the directional light is
- * active. This gives the maximum-strength directional light enough contrast
- * without making the actors dramatically darker than the environment.
+ * Hard-coded actor-only room-light falloff.
+ *
+ * The middle of the room is treated as the brightest area. Each animated actor
+ * independently becomes darker when moving toward either Z direction or toward
+ * positive X. Moving toward negative X alone does not darken the actor.
+ *
+ *   directional distance <= FULL_RADIUS -> CENTER_SCALE
+ *   directional distance >= DARK_RADIUS -> EDGE_SCALE
+ *
+ * Between those distances, a smoothstep curve prevents a visible lighting seam.
+ * Actor ambient and directional intensity both fade, but directional light begins fading farther from the center. The room, fog, particles,
+ * projections, shadows, and UI keep their existing lighting.
  */
-#define GUARDIAN_ACTOR_AMBIENT_SCALE 0.65f
+#define GUARDIAN_ACTOR_LIGHT_ROOM_CENTER_X 0.0f
+#define GUARDIAN_ACTOR_LIGHT_ROOM_CENTER_Z 0.0f
 
-static const uint8_t s_actorDirectionalLightColor[4] = {
+#define GUARDIAN_ACTOR_AMBIENT_FULL_RADIUS 80.0f
+#define GUARDIAN_ACTOR_AMBIENT_DARK_RADIUS 385.0f
+
+#define GUARDIAN_ACTOR_AMBIENT_CENTER_SCALE 0.55f
+#define GUARDIAN_ACTOR_AMBIENT_EDGE_SCALE 0.235f
+
+/*
+ * Directional light holds its strength farther from the room center than the
+ * ambient component, then fades over a wider range.
+ */
+#define GUARDIAN_ACTOR_DIRECTIONAL_FULL_RADIUS 140.0f
+#define GUARDIAN_ACTOR_DIRECTIONAL_DARK_RADIUS 520.0f
+
+#define GUARDIAN_ACTOR_DIRECTIONAL_CENTER_LEVEL 255.0f
+#define GUARDIAN_ACTOR_DIRECTIONAL_EDGE_LEVEL 150.0f
+
+static uint8_t s_actorDirectionalLightColor[4] = {
     GUARDIAN_ACTOR_DIRECTIONAL_LIGHT_LEVEL,
     GUARDIAN_ACTOR_DIRECTIONAL_LIGHT_LEVEL,
     GUARDIAN_ACTOR_DIRECTIONAL_LIGHT_LEVEL,
@@ -509,19 +531,85 @@ static const T3DVec3 s_rtShadowLightSource = {{
     GUARDIAN_ACTOR_LIGHT_SOURCE_Z,
 }};
 
+static float guardian_actor_light_distance_at(
+    float actorX,
+    float actorZ
+) {
+    /*
+     * Lighting darkens in both Z directions and toward positive X.
+     * Negative X alone does not contribute to the falloff.
+     */
+    float positiveXDistance =
+        actorX - GUARDIAN_ACTOR_LIGHT_ROOM_CENTER_X;
+
+    if (positiveXDistance < 0.0f) {
+        positiveXDistance = 0.0f;
+    }
+
+    float zDistance =
+        actorZ - GUARDIAN_ACTOR_LIGHT_ROOM_CENTER_Z;
+
+    return sqrtf(
+        positiveXDistance * positiveXDistance
+        + zDistance * zDistance
+    );
+}
+
+static float guardian_actor_smooth_falloff(
+    float distance,
+    float fullRadius,
+    float darkRadius
+) {
+    float t =
+        (distance - fullRadius)
+        / (darkRadius - fullRadius);
+
+    if (t < 0.0f) t = 0.0f;
+    if (t > 1.0f) t = 1.0f;
+
+    return t * t * (3.0f - 2.0f * t);
+}
+
 /*
  * Call only after the onscreen viewport has been attached. Tiny3D transforms
  * directional lights into the current viewport's view space when configured.
  */
-static void guardian_actor_directional_light_enable(void)
-{
+static void guardian_actor_directional_light_enable(
+    float actorX,
+    float actorZ
+) {
+    float distance =
+        guardian_actor_light_distance_at(actorX, actorZ);
+
+    float ambientFalloff =
+        guardian_actor_smooth_falloff(
+            distance,
+            GUARDIAN_ACTOR_AMBIENT_FULL_RADIUS,
+            GUARDIAN_ACTOR_AMBIENT_DARK_RADIUS
+        );
+
+    float directionalFalloff =
+        guardian_actor_smooth_falloff(
+            distance,
+            GUARDIAN_ACTOR_DIRECTIONAL_FULL_RADIUS,
+            GUARDIAN_ACTOR_DIRECTIONAL_DARK_RADIUS
+        );
+
+    float ambientScale =
+        GUARDIAN_ACTOR_AMBIENT_CENTER_SCALE
+        + (
+            GUARDIAN_ACTOR_AMBIENT_EDGE_SCALE
+            - GUARDIAN_ACTOR_AMBIENT_CENTER_SCALE
+        ) * ambientFalloff;
+
     /*
      * Derive actor ambient from the current scene ambient so cutscene or room
-     * lighting changes are preserved, only reduced in strength.
+     * lighting changes are preserved, then apply the actor's positional
+     * falloff.
      */
     for (int channel = 0; channel < 3; ++channel) {
         float scaled =
-            (float)colorAmbient[channel] * GUARDIAN_ACTOR_AMBIENT_SCALE;
+            (float)colorAmbient[channel] * ambientScale;
 
         if (scaled < 0.0f) scaled = 0.0f;
         if (scaled > 255.0f) scaled = 255.0f;
@@ -529,6 +617,29 @@ static void guardian_actor_directional_light_enable(void)
         s_actorAmbientColor[channel] = (uint8_t)lroundf(scaled);
     }
     s_actorAmbientColor[3] = colorAmbient[3];
+
+    /*
+     * Reduce the directional source at the same time. This prevents actors at
+     * the darker sides of the room from retaining a full-strength highlight
+     * while only their ambient component changes.
+     */
+    float directionalLevel =
+        GUARDIAN_ACTOR_DIRECTIONAL_CENTER_LEVEL
+        + (
+            GUARDIAN_ACTOR_DIRECTIONAL_EDGE_LEVEL
+            - GUARDIAN_ACTOR_DIRECTIONAL_CENTER_LEVEL
+        ) * directionalFalloff;
+
+    if (directionalLevel < 0.0f) directionalLevel = 0.0f;
+    if (directionalLevel > 255.0f) directionalLevel = 255.0f;
+
+    uint8_t directionalByte =
+        (uint8_t)lroundf(directionalLevel);
+
+    s_actorDirectionalLightColor[0] = directionalByte;
+    s_actorDirectionalLightColor[1] = directionalByte;
+    s_actorDirectionalLightColor[2] = directionalByte;
+    s_actorDirectionalLightColor[3] = 255;
 
     t3d_light_set_ambient(s_actorAmbientColor);
     t3d_light_set_directional(
@@ -549,6 +660,15 @@ static void guardian_actor_directional_light_disable(void)
     t3d_light_set_ambient(colorAmbient);
 }
 
+/* Dedicated low-poly skinned caster models used only by the realtime pass. */
+#define GUARDIAN_CHARACTER_RT_SHADOW_MODEL_PATH \
+    "rom:/knight/knight_shadow.t3dm"
+#define GUARDIAN_BOSS_RT_SHADOW_MODEL_PATH \
+    "rom:/boss/boss_anim_shadow.t3dm"
+
+static T3DModel *s_characterRtShadowModel = NULL;
+static T3DModel *s_bossRtShadowModel = NULL;
+
 /* One owned capture buffer and two non-owning 64x64 texture views. */
 static surface_t s_rtShadowAtlas;
 static surface_t s_characterRtShadowTexture;
@@ -564,8 +684,9 @@ static T3DVertPacked *s_bossRtShadowVertices = NULL;
 static T3DMat4FP *s_rtShadowIdentityMatrix = NULL;
 
 /*
- * Geometry-only command blocks. They reference the actors' existing live
- * skeleton matrices and intentionally contain no materials or textures.
+ * Geometry-only command blocks for the dedicated low-poly caster models.
+ * They reference the actors' existing live skeleton matrices and intentionally
+ * contain no materials or textures.
  */
 static rspq_block_t *s_characterRtShadowGeometryDpl = NULL;
 static rspq_block_t *s_bossRtShadowGeometryDpl = NULL;
@@ -643,8 +764,7 @@ static bool guardian_rt_shadows_init(Boss *boss)
 {
     if (s_rtShadowsInitialized) return true;
 
-    if (!characterModel
-        || !character.skeleton
+    if (!character.skeleton
         || !character.skeleton->boneMatricesFP
     ) {
         debugf("guardian realtime shadows: character model/skeleton unavailable\n");
@@ -652,12 +772,25 @@ static bool guardian_rt_shadows_init(Boss *boss)
     }
 
     if (!boss
-        || !boss->model
         || !boss->skeleton
         || !((T3DSkeleton *)boss->skeleton)->boneMatricesFP
     ) {
         debugf("guardian realtime shadows: boss model/skeleton unavailable\n");
         return false;
+    }
+
+    s_characterRtShadowModel = t3d_model_load(
+        GUARDIAN_CHARACTER_RT_SHADOW_MODEL_PATH
+    );
+    s_bossRtShadowModel = t3d_model_load(
+        GUARDIAN_BOSS_RT_SHADOW_MODEL_PATH
+    );
+
+    if (!s_characterRtShadowModel || !s_bossRtShadowModel) {
+        debugf(
+            "guardian realtime shadows: failed to load dedicated caster models\n"
+        );
+        goto fail;
     }
 
     memset(&s_rtShadowAtlas, 0, sizeof(s_rtShadowAtlas));
@@ -729,19 +862,20 @@ static bool guardian_rt_shadows_init(Boss *boss)
     );
     t3d_mat4fp_identity(s_rtShadowIdentityMatrix);
 
-    s_characterRtShadowGeometryDpl = guardian_rt_shadow_record_geometry(
-        characterModel,
-        character.skeleton->boneMatricesFP
-    );
-
     T3DSkeleton *bossSkeleton = (T3DSkeleton *)boss->skeleton;
 
+    s_characterRtShadowGeometryDpl = guardian_rt_shadow_record_geometry(
+        s_characterRtShadowModel,
+        character.skeleton->boneMatricesFP
+    );
     s_bossRtShadowGeometryDpl = guardian_rt_shadow_record_geometry(
-        (const T3DModel *)boss->model,
+        s_bossRtShadowModel,
         bossSkeleton->boneMatricesFP
     );
 
-    if (!s_characterRtShadowGeometryDpl || !s_bossRtShadowGeometryDpl) {
+    if (!s_characterRtShadowGeometryDpl
+        || !s_bossRtShadowGeometryDpl
+    ) {
         debugf("guardian realtime shadows: failed to record actor geometry blocks\n");
         goto fail;
     }
@@ -802,6 +936,20 @@ static void guardian_rt_shadows_cleanup(void)
     if (s_bossRtShadowGeometryDpl) {
         rspq_block_free(s_bossRtShadowGeometryDpl);
         s_bossRtShadowGeometryDpl = NULL;
+    }
+
+    /*
+     * The recorded blocks reference object data from these models, so free the
+     * blocks first and then release the dedicated caster assets.
+     */
+    if (s_characterRtShadowModel) {
+        t3d_model_free(s_characterRtShadowModel);
+        s_characterRtShadowModel = NULL;
+    }
+
+    if (s_bossRtShadowModel) {
+        t3d_model_free(s_bossRtShadowModel);
+        s_bossRtShadowModel = NULL;
     }
 
     if (s_characterRtShadowVertices) {
@@ -902,6 +1050,7 @@ static void guardian_rt_shadow_position_camera(
 
     t3d_viewport_look_at(viewport, &eye, &target, &worldUp);
 }
+
 
 static void guardian_rt_shadows_capture(Boss *boss)
 {
@@ -1219,6 +1368,11 @@ static void guardian_rt_shadows_draw(Boss *boss)
 
     rdpq_mode_begin();
         rdpq_set_mode_standard();
+
+        if (!DITHER_ENABLED && !debugDraw) {
+            rdpq_mode_dithering(DITHER_NONE_BAYER);
+        }
+
         rdpq_mode_persp(true);
         rdpq_mode_fog(0);
         rdpq_mode_zbuf(true, false);
@@ -2328,12 +2482,52 @@ static void guardian_environment_delete(void)
 }
 
 
+/*
+ * Guardian scene dither policy
+ * ----------------------------
+ *
+ * In the non-dithered display path:
+ *
+ * - Tiny3D distance fog on opaque geometry uses DITHER_NONE_NONE so the fog
+ *   gradient is not converted into a Bayer transparency pattern.
+ * - Explicit transparent effects use DITHER_NONE_BAYER, preserving Bayer
+ *   alpha dithering for decals, fog-door geometry, sunshafts, floor effects,
+ *   projected shadows, trails, particles and UI.
+ *
+ * These modes are established per pass, after viewport attachment. Each frozen
+ * environment object is therefore always recorded and replayed under the same
+ * dither state.
+ */
+static void guardian_scene_use_undithered_fog(void)
+{
+    if (DITHER_ENABLED || debugDraw) {
+        return;
+    }
+
+    rdpq_mode_begin();
+        rdpq_mode_dithering(DITHER_NONE_NONE);
+    rdpq_mode_end();
+}
+
+static void guardian_scene_use_dithered_transparency(void)
+{
+    if (DITHER_ENABLED || debugDraw) {
+        return;
+    }
+
+    rdpq_mode_begin();
+        rdpq_mode_dithering(DITHER_NONE_BAYER);
+    rdpq_mode_end();
+}
+
+
 // ------------------------------------------------------------
 // Optimized environment draw passes
 // ------------------------------------------------------------
 
 void scene_draw_environment_walls(void)
 {
+    guardian_scene_use_undithered_fog();
     rdpq_mode_zbuf(false, false);
 
     t3d_matrix_push_pos(1);
@@ -2346,6 +2540,7 @@ void scene_draw_environment_walls(void)
 
 void scene_draw_environment_floor(void)
 {
+    guardian_scene_use_undithered_fog();
     rdpq_mode_zbuf(true, true);
 
     t3d_matrix_push_pos(1);
@@ -2355,6 +2550,7 @@ void scene_draw_environment_floor(void)
 
 void scene_draw_environment_niches_windows(void)
 {
+    guardian_scene_use_undithered_fog();
     rdpq_mode_zbuf(true, true);
 
     t3d_matrix_push_pos(1);
@@ -2364,6 +2560,7 @@ void scene_draw_environment_niches_windows(void)
 
 void scene_draw_environment_decals(void)
 {
+    guardian_scene_use_dithered_transparency();
     rdpq_mode_zbuf(false, false);
 
     t3d_matrix_push_pos(1);
@@ -2372,10 +2569,12 @@ void scene_draw_environment_decals(void)
     t3d_matrix_pop(1);
 
     rdpq_mode_zbuf(true, true);
+    guardian_scene_use_undithered_fog();
 }
 
 void scene_draw_environment_pillars_statue(void)
 {
+    guardian_scene_use_undithered_fog();
     rdpq_mode_zbuf(true, true);
 
     t3d_matrix_push_pos(1);
@@ -2386,6 +2585,7 @@ void scene_draw_environment_pillars_statue(void)
 
 void scene_draw_environment_sunshafts(void)
 {
+    guardian_scene_use_dithered_transparency();
     rdpq_mode_zbuf(false, false);
 
     t3d_matrix_push_pos(1);
@@ -2393,10 +2593,12 @@ void scene_draw_environment_sunshafts(void)
     t3d_matrix_pop(1);
 
     rdpq_mode_zbuf(true, true);
+    guardian_scene_use_undithered_fog();
 }
 
 void scene_draw_environment_fog_door(void)
 {
+    guardian_scene_use_dithered_transparency();
     rdpq_mode_zbuf(true, false);
 
     t3d_matrix_push_pos(1);
@@ -2404,6 +2606,7 @@ void scene_draw_environment_fog_door(void)
     t3d_matrix_pop(1);
 
     rdpq_mode_zbuf(true, true);
+    guardian_scene_use_undithered_fog();
 }
 
 // Cutscene/screen transition state shared with Guardian cutscene context.
@@ -3475,6 +3678,7 @@ void scene_update(void) {
         return;
     }
 
+
     // Debug hotkey: L-trigger skips to boss defeated (dead + fully stopped)
     // if (DEV_MODE)
     // {
@@ -3539,7 +3743,6 @@ void scene_update(void) {
         }
 
         collision_update();
-
 
         //dialog_controller_update();
 
@@ -3719,26 +3922,35 @@ void scene_draw_cutscene(T3DViewport *viewport)
             scene_draw_environment_sunshafts();
             scene_draw_environment_floor();
 
+            guardian_scene_use_dithered_transparency();
             rdpq_mode_zbuf(false, false);
             t3d_matrix_push_pos(1);
-                /* character blob shadow disabled while profiling realtime projection */
+                /* Character blob shadow is replaced by the realtime projection. */
 
                 if (g_boss) {
                     boss_draw_shadow(g_boss);
                 }
             t3d_matrix_pop(1);
+            guardian_scene_use_undithered_fog();
 
             scene_draw_environment_niches_windows();
             scene_draw_environment_decals();
             scene_draw_environment_pillars_statue();
 
             rdpq_mode_zbuf(true, true);
-            guardian_actor_directional_light_enable();
 
             t3d_matrix_push_pos(1);
+                guardian_actor_directional_light_enable(
+                    character.pos[0],
+                    character.pos[2]
+                );
                 character_draw();
 
                 if (g_boss) {
+                    guardian_actor_directional_light_enable(
+                        g_boss->pos[0],
+                        g_boss->pos[2]
+                    );
                     boss_draw(g_boss);
                 }
             t3d_matrix_pop(1);
@@ -3756,6 +3968,8 @@ void scene_draw_cutscene(T3DViewport *viewport)
             t3d_matrix_pop(1);
 
             if (cutsceneDialogActive) {
+                guardian_scene_use_dithered_transparency();
+
                 int height = 70;
                 int width = 220;
                 int x = (SCREEN_WIDTH - width) / 2;
@@ -3826,6 +4040,12 @@ void scene_draw(T3DViewport *viewport)
     }
     t3d_fog_set_enabled(true);
 
+    /*
+     * Tiny3D distance fog begins with both RGB and alpha dithering disabled.
+     * Explicit transparent passes opt back into Bayer alpha dithering locally.
+     */
+    guardian_scene_use_undithered_fog();
+
     // Lighting: environment remains ambient-only.
     t3d_light_set_ambient(colorAmbient);
     t3d_light_set_count(0);
@@ -3846,11 +4066,13 @@ void scene_draw(T3DViewport *viewport)
     scene_draw_environment_floor();
 
     // Projection effects remain between the floor and room details.
+    guardian_scene_use_dithered_transparency();
     rdpq_mode_zbuf(false, false);
     t3d_matrix_push_pos(1);
         boss_ground_crush_draw();
         /* Character and boss blob shadows are replaced by realtime projections. */
     t3d_matrix_pop(1);
+    guardian_scene_use_undithered_fog();
 
     scene_draw_environment_niches_windows();
     scene_draw_environment_decals();
@@ -3858,6 +4080,7 @@ void scene_draw(T3DViewport *viewport)
 
     // Existing death-state floor glow remains separate from the room replacement.
     if (g_boss && g_boss->health <= 0 && floorGlowMatrix && floorGlowModel) {
+        guardian_scene_use_dithered_transparency();
         rdpq_mode_zbuf(false, false);
         t3d_matrix_push_pos(1);
             t3d_matrix_set(floorGlowMatrix, true);
@@ -3866,19 +4089,28 @@ void scene_draw(T3DViewport *viewport)
                 .tileCb = tile_scroll,
             });
         t3d_matrix_pop(1);
+        guardian_scene_use_undithered_fog();
     }
 
     /*
      * Enable the directional light only while drawing the two animated actors.
      * Environment, projection effects, particles and UI remain ambient-only.
      */
+    guardian_scene_use_undithered_fog();
     rdpq_mode_zbuf(true, true);
-    guardian_actor_directional_light_enable();
 
     t3d_matrix_push_pos(1);
+        guardian_actor_directional_light_enable(
+            character.pos[0],
+            character.pos[2]
+        );
         character_draw();
 
         if (g_boss) {
+            guardian_actor_directional_light_enable(
+                g_boss->pos[0],
+                g_boss->pos[2]
+            );
             boss_draw(g_boss);
         }
     t3d_matrix_pop(1);
@@ -3887,6 +4119,7 @@ void scene_draw(T3DViewport *viewport)
 
     scene_draw_environment_fog_door();
 
+    guardian_scene_use_undithered_fog();
     t3d_matrix_push_pos(1);
         if (chainsMatrix && chainsDpl) {
             t3d_matrix_set(chainsMatrix, true);
@@ -3895,10 +4128,15 @@ void scene_draw(T3DViewport *viewport)
     t3d_matrix_pop(1);
 
     /*
-     * Draw both realtime floor projections after all normal actor/environment
+     * Draw the realtime floor projections after all normal actor/environment
      * models. They depth-test against the completed scene without writing depth.
      */
     guardian_rt_shadows_draw(g_boss);
+
+    /*
+     * These are explicit transparent effects rather than Tiny3D distance fog.
+     */
+    guardian_scene_use_dithered_transparency();
 
     // Screen-space ribbon trails, drawn right after 3D so they feel "in world"
     sword_trail_draw_all(viewport);
@@ -3910,6 +4148,11 @@ void scene_draw(T3DViewport *viewport)
     // Blood splatters from boss hits (drawn after dust so red reads on top of puffs)
     blood_particles_fx_update(deltaTime);
     blood_particles_fx_draw(viewport);
+
+    /*
+     * UI and overlays also use transparent sprites and rectangles, so Bayer
+     * alpha dithering remains selected for the rest of the frame.
+     */
 
     // ===== DRAW 2D =====
     // Post-boss interaction prompt ("A") above the defeated boss when close enough to interact
@@ -3945,7 +4188,7 @@ void scene_draw(T3DViewport *viewport)
     // Draw UI elements after 3D rendering is complete.
     // Keep player UI visible during victory; hide it during death and cutscenes.
     if (!cutsceneActive && !isDead) {
-        // Boss UI/debug is owned by boss_render/boss_ui now.
+        // Boss UI is owned by boss_render/boss_ui.
         // Keep scene responsible only for draw order and visibility gating.
         if (!isVictory && boss_is_active(g_boss) && bossTitleFade <= 0.0f && g_boss->maxHealth > 0.0f) {
             boss_draw_ui(g_boss, viewport);

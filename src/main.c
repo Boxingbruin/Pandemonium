@@ -42,10 +42,22 @@ int main(void)
     display_close();
 
     if (DITHER_ENABLED) {
-        display_init(RESOLUTION_320x240, DEPTH_16_BPP, FRAME_BUFFER_COUNT, GAMMA_NONE, FILTERS_RESAMPLE_ANTIALIAS);
+        display_init(
+            RESOLUTION_320x240,
+            DEPTH_16_BPP,
+            FRAME_BUFFER_COUNT,
+            GAMMA_NONE,
+            FILTERS_RESAMPLE_ANTIALIAS
+        );
     } else {
         if (ARES_AA_ENABLED) {
-            display_init(RESOLUTION_320x240, DEPTH_32_BPP, FRAME_BUFFER_COUNT, GAMMA_NONE, FILTERS_RESAMPLE_ANTIALIAS);
+            display_init(
+                RESOLUTION_320x240,
+                DEPTH_32_BPP,
+                FRAME_BUFFER_COUNT,
+                GAMMA_NONE,
+                FILTERS_RESAMPLE_ANTIALIAS
+            );
         } else {
             display_init(
                 RESOLUTION_320x240,
@@ -66,7 +78,6 @@ int main(void)
     //  * normal (non-frozen) blocks are unaffected by this flag.
     //  */
     // rdpq_config_enable(RDPQ_CFG_FROZEN_BLOCKS);
-
 
     audio_initialize();
 
@@ -128,7 +139,8 @@ int main(void)
          * Keep this RGBA32 if cheap bloom can run while debugDraw is active.
          * The cheap bloom path assumes the scene framebuffer is 32-bit.
          */
-        offscreenBuffer = surface_alloc(FMT_RGBA32, SCREEN_WIDTH, SCREEN_HEIGHT);
+        offscreenBuffer =
+            surface_alloc(FMT_RGBA32, SCREEN_WIDTH, SCREEN_HEIGHT);
 
         if (!offscreenBuffer.buffer) {
             debugf("[FATAL] failed to allocate offscreenBuffer\n");
@@ -138,12 +150,11 @@ int main(void)
 
     for (uint64_t frame = 0;; ++frame)
     {
-        // Update time + input first.
-        game_time_update();
+        /*
+         * Read input before the video pump so video controls receive the
+         * current controller state.
+         */
         joypad_update();
-
-        // Debounced EEPROM save flush.
-        save_controller_update();
 
         // ------------------------------------------------------------
         // VIDEO PUMP
@@ -154,21 +165,47 @@ int main(void)
             continue;
         }
 
-        SceneControllerSceneId activeScene = scene_controller_get_active_scene();
-        bool isOpeningCredits = activeScene == SCENE_CONTROLLER_SCENE_OPENING_CREDITS;
-        bool isTitle = activeScene == SCENE_CONTROLLER_SCENE_TITLE;
-        bool isGuardian = activeScene == SCENE_CONTROLLER_SCENE_GUARDIAN;
+        /*
+         * Acquire the framebuffer before measuring deltaTime.
+         *
+         * display_get() is the frame-pacing point and may wait until a display
+         * buffer becomes available. Measuring time after that wait prevents
+         * alternating tiny/large simulation steps caused by framebuffer
+         * availability.
+         *
+         * Always acquire this framebuffer, including when the scene itself is
+         * rendered through offscreenBuffer for debug drawing.
+         */
+        surface_t *displayFramebuffer = display_get();
+
+        // Update time after the framebuffer wait.
+        game_time_update();
+
+        // Debounced EEPROM save flush.
+        save_controller_update();
+
+        SceneControllerSceneId activeScene =
+            scene_controller_get_active_scene();
+
+        bool isOpeningCredits =
+            activeScene == SCENE_CONTROLLER_SCENE_OPENING_CREDITS;
+
+        bool isTitle =
+            activeScene == SCENE_CONTROLLER_SCENE_TITLE;
+
+        bool isGuardian =
+            activeScene == SCENE_CONTROLLER_SCENE_GUARDIAN;
 
         surface_t *framebuffer = NULL;
 
-        // Attach render target for the frame.
+        // Attach the render target for the frame.
         if (DEV_MODE && debugDraw) {
             framebuffer = &offscreenBuffer;
-            rdpq_attach(framebuffer, display_get_zbuf());
         } else {
-            framebuffer = display_get();
-            rdpq_attach(framebuffer, display_get_zbuf());
+            framebuffer = displayFramebuffer;
         }
+
+        rdpq_attach(framebuffer, display_get_zbuf());
 
         // ===== UPDATE LOOP =====
         mixer_try_play();
@@ -220,9 +257,15 @@ int main(void)
 
         // Refresh active scene after update in case the scene controller switched scenes.
         activeScene = scene_controller_get_active_scene();
-        isOpeningCredits = activeScene == SCENE_CONTROLLER_SCENE_OPENING_CREDITS;
-        isTitle = activeScene == SCENE_CONTROLLER_SCENE_TITLE;
-        isGuardian = activeScene == SCENE_CONTROLLER_SCENE_GUARDIAN;
+
+        isOpeningCredits =
+            activeScene == SCENE_CONTROLLER_SCENE_OPENING_CREDITS;
+
+        isTitle =
+            activeScene == SCENE_CONTROLLER_SCENE_TITLE;
+
+        isGuardian =
+            activeScene == SCENE_CONTROLLER_SCENE_GUARDIAN;
 
         // ===== DRAW LOOP =====
         if (!devMenuOpen || cameraNeedsUpdate || isOpeningCredits) {
@@ -298,12 +341,19 @@ int main(void)
         {
             rdpq_detach();
 
-            rdpq_attach(display_get(), display_get_zbuf());
+            /*
+             * Present through the display framebuffer acquired at the beginning
+             * of this frame. Do not call display_get() a second time here.
+             */
+            rdpq_attach(displayFramebuffer, display_get_zbuf());
             rdpq_set_mode_standard();
             rdpq_tex_blit(&offscreenBuffer, 0, 0, NULL);
 
             if (debugDraw && DRAW_CRT_SAFE_AREA) {
-                DrawCrtSafeAreaOverlay(display_get_width(), display_get_height());
+                DrawCrtSafeAreaOverlay(
+                    display_get_width(),
+                    display_get_height()
+                );
             }
 
             rdpq_detach_show();
@@ -311,7 +361,10 @@ int main(void)
         else
         {
             if (debugDraw && DRAW_CRT_SAFE_AREA) {
-                DrawCrtSafeAreaOverlay(display_get_width(), display_get_height());
+                DrawCrtSafeAreaOverlay(
+                    display_get_width(),
+                    display_get_height()
+                );
             }
 
             rdpq_detach_show();
